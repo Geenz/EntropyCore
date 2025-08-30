@@ -44,6 +44,8 @@ set(ENTROPY_CORE_HEADERS
         src/EntropyCore.h
         src/ServiceLocator.h
         src/TypeSystem/GenericHandle.h
+        src/TypeSystem/TypeID.h
+        src/TypeSystem/Reflection.h
         src/Graph/DirectedAcyclicGraph.h
         src/Graph/AcyclicNodeHandle.h
         src/Debug/INamed.h

@@ -14,6 +14,11 @@
 #include <algorithm>
 #include <format>
 
+#ifdef EntropyDarwin
+using std::min;
+using std::max;
+#endif
+
 namespace EntropyEngine {
 namespace Core {
 namespace Concurrency {
@@ -110,7 +115,7 @@ bool NodeScheduler::deferNode(NodeHandle node) {
     // Track peak deferred count
     {
         std::lock_guard<std::mutex> statsLock(_statsMutex);
-        _stats.peakDeferred = std::max(_stats.peakDeferred, _deferredQueue.size());
+        _stats.peakDeferred = max(_stats.peakDeferred, _deferredQueue.size());
     }
     
     // Publish event
@@ -144,7 +149,7 @@ size_t NodeScheduler::processDeferredNodes(size_t maxToSchedule) {
     {
         std::lock_guard<std::shared_mutex> lock(_deferredMutex);  // Exclusive lock for modifying queue
         
-        size_t count = std::min(toProcess, _deferredQueue.size());
+        size_t count = min(toProcess, _deferredQueue.size());
         nodesToSchedule.reserve(count);
         
         for (size_t i = 0; i < count; ++i) {
@@ -174,7 +179,7 @@ size_t NodeScheduler::scheduleReadyNodes(const std::vector<NodeHandle>& nodes) {
     if (_config.enableBatchScheduling && nodes.size() > 1) {
         // Schedule in batches for better efficiency
         for (size_t i = 0; i < nodes.size(); i += _config.batchSize) {
-            size_t batchEnd = std::min(i + _config.batchSize, nodes.size());
+            size_t batchEnd = min(i + _config.batchSize, nodes.size());
             
             for (size_t j = i; j < batchEnd; ++j) {
                 if (scheduleNode(nodes[j])) {
