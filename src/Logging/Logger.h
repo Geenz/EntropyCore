@@ -24,6 +24,7 @@
 #include <shared_mutex>
 #include <format>
 #include <source_location>
+#include <unordered_set>
 
 namespace EntropyEngine {
 namespace Core {
@@ -55,6 +56,10 @@ namespace Logging {
         mutable std::shared_mutex _sinkMutex;
         LogLevel _minLevel = LogLevel::Trace;
         
+        // Category filtering
+        std::unordered_set<std::string> _disabledCategories;
+        mutable std::shared_mutex _categoryMutex;
+
         // Global logger instance
         static Logger* s_globalLogger;
         static std::mutex s_globalMutex;
@@ -135,6 +140,54 @@ namespace Logging {
          * @return The current minimum log level
          */
         LogLevel getMinLevel() const { return _minLevel; }
+
+        /**
+         * @brief Disable logging for a specific category
+         *
+         * Messages from this category will be filtered out regardless of level.
+         *
+         * @param category The category name to disable
+         *
+         * @code
+         * Logger::global().disableCategory("ShaderAsset");
+         * Logger::global().disableCategory("ShaderService");
+         * @endcode
+         */
+        void disableCategory(const std::string& category) {
+            std::unique_lock<std::shared_mutex> lock(_categoryMutex);
+            _disabledCategories.insert(category);
+        }
+
+        /**
+         * @brief Re-enable logging for a specific category
+         *
+         * @param category The category name to enable
+         */
+        void enableCategory(const std::string& category) {
+            std::unique_lock<std::shared_mutex> lock(_categoryMutex);
+            _disabledCategories.erase(category);
+        }
+
+        /**
+         * @brief Check if a category is enabled for logging
+         *
+         * @param category The category to check
+         * @return true if the category is enabled, false if disabled
+         */
+        bool isCategoryEnabled(std::string_view category) const {
+            std::shared_lock<std::shared_mutex> lock(_categoryMutex);
+            return _disabledCategories.find(std::string(category)) == _disabledCategories.end();
+        }
+
+        /**
+         * @brief Clear all disabled categories
+         *
+         * Re-enables all previously disabled categories.
+         */
+        void clearDisabledCategories() {
+            std::unique_lock<std::shared_mutex> lock(_categoryMutex);
+            _disabledCategories.clear();
+        }
         
         /**
          * @brief Core logging function with pre-formatted message
@@ -154,6 +207,9 @@ namespace Logging {
             // Early exit if level is too low
             if (level < _minLevel) return;
             
+            // Early exit if category is disabled
+            if (!isCategoryEnabled(category)) return;
+
             // Create log entry
             LogEntry entry(level, category, message, location);
             
@@ -188,6 +244,9 @@ namespace Logging {
             // Early exit if level is too low
             if (level < _minLevel) return;
             
+            // Early exit if category is disabled
+            if (!isCategoryEnabled(category)) return;
+
             // Format the message
             std::string message = std::format(fmt, std::forward<Args>(args)...);
             

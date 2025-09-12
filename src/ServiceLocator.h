@@ -160,6 +160,10 @@ namespace EntropyEngine {
              * Unregisters service but doesn't destroy it immediately - shared_ptr
              * keeps it alive while references exist. Used during shutdown.
              * 
+             * IMPORTANT: Uses shared lock for lookup, then upgrades to unique lock
+             * for removal. Service is extracted under lock but destroyed outside
+             * to prevent deadlocks if destructor calls removeService().
+             * 
              * @tparam T The service type to remove
              * 
              * @code
@@ -171,8 +175,30 @@ namespace EntropyEngine {
              */
             template<typename T>
             void removeService() {
-                std::unique_lock lock(_mutex);
-                _services.erase(TypeSystem::createTypeId<T>());
+                auto typeId = TypeSystem::createTypeId<T>();
+                std::shared_ptr<void> serviceToDestroy;
+                
+                // First check if service exists with shared lock
+                {
+                    std::shared_lock readLock(_mutex);
+                    auto it = _services.find(typeId);
+                    if (it == _services.end()) {
+                        return; // Service not found, nothing to do
+                    }
+                }
+                
+                // Service exists, now take exclusive lock to remove it
+                {
+                    std::unique_lock writeLock(_mutex);
+                    auto it = _services.find(typeId);
+                    if (it != _services.end()) {
+                        // Extract the service but keep it alive via shared_ptr
+                        serviceToDestroy = std::move(it->second);
+                        _services.erase(it);
+                    }
+                }
+                // Lock is released here - service destruction happens outside the lock
+                // This prevents deadlocks if the destructor calls removeService() for other services
             }
 
         private:
