@@ -122,6 +122,7 @@ public:
         std::function<void(NodeHandle)> onNodeCompleted;     ///< Node finished successfully
         std::function<void(NodeHandle, std::exception_ptr)> onNodeFailed;  ///< Node threw an exception
         std::function<void(NodeHandle)> onNodeDropped;       ///< Node dropped (deferred queue overflow)
+        std::function<void(NodeHandle)> onNodeYielded;       ///< Node yielded execution (will reschedule)
     };
     
     /**

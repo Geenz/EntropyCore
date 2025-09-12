@@ -1,4 +1,11 @@
 cmake_minimum_required(VERSION 3.28)
+
+# Set vcpkg triplet for macOS universal binaries
+if(APPLE AND NOT DEFINED VCPKG_TARGET_TRIPLET)
+    set(VCPKG_TARGET_TRIPLET "universal-osx" CACHE STRING "")
+    set(VCPKG_OVERLAY_TRIPLETS "${CMAKE_CURRENT_SOURCE_DIR}/triplets" CACHE STRING "")
+endif()
+
 project(EntropyCore 
     VERSION 1.0.0
     DESCRIPTION "Core utilities and concurrency primitives for Entropy Engine"
@@ -103,8 +110,10 @@ target_link_libraries(EntropyCore
 )
 
 add_executable(WorkContractExample Examples/WorkContractExample.cpp)
+target_link_libraries(WorkContractExample EntropyCore Tracy::TracyClient)
 
-target_link_libraries(WorkContractExample EntropyCore)
+add_executable(WorkGraphYieldableExample Examples/WorkGraphYieldableExample.cpp)
+target_link_libraries(WorkGraphYieldableExample EntropyCore Tracy::TracyClient)
 
 # Platform and compiler-specific settings
 if(WIN32)
@@ -112,6 +121,10 @@ if(WIN32)
     target_compile_definitions(EntropyCore PUBLIC WIN32_LEAN_AND_MEAN EntropyWindows)
     if(MSVC)
         target_compile_options(EntropyCore PRIVATE /W4)
+        # Use static runtime library to match vcpkg dependencies
+        set_property(TARGET EntropyCore PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+        set_property(TARGET WorkContractExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+        set_property(TARGET WorkGraphYieldableExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     endif()
 else()
     # Settings for non-Windows platforms (macOS, Linux)

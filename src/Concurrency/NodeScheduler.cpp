@@ -232,13 +232,25 @@ std::function<void()> NodeScheduler::createWorkWrapper(NodeHandle node) {
             _eventBus->publish(NodeExecutingEvent(_graph, node));
         }
         
-        // Execute the work
+        // Execute the work based on variant type
         bool failed = false;
+        bool yielded = false;
         std::exception_ptr exception;
         
         try {
-            if (nodeData->work) {
-                nodeData->work();
+            if (nodeData->isYieldable) {
+                // Handle yieldable work function
+                if (auto* yieldableWork = std::get_if<YieldableWorkFunction>(&nodeData->work)) {
+                    WorkResult result = (*yieldableWork)();
+                    if (result == WorkResult::Yield) {
+                        yielded = true;
+                    }
+                }
+            } else {
+                // Handle legacy void work function
+                if (auto* voidWork = std::get_if<std::function<void()>>(&nodeData->work)) {
+                    (*voidWork)();
+                }
             }
         } catch (...) {
             failed = true;
@@ -250,10 +262,15 @@ std::function<void()> NodeScheduler::createWorkWrapper(NodeHandle node) {
             return;  // Scheduler is gone, skip cleanup
         }
         
-        // Notify completion or failure
+        // Notify completion, failure, or yield
         if (failed) {
             if (_callbacks.onNodeFailed) {
                 _callbacks.onNodeFailed(node, exception);
+            }
+        } else if (yielded) {
+            // Notify via callback
+            if (_callbacks.onNodeYielded) {
+                _callbacks.onNodeYielded(node);
             }
         } else {
             if (_callbacks.onNodeCompleted) {

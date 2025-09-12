@@ -73,7 +73,8 @@ namespace Concurrency {
      * - Pending → Ready (when all dependencies complete)
      * - Ready → Scheduled (when submitted to thread pool)
      * - Scheduled → Executing (when thread picks it up)
-     * - Executing → Completed/Failed (based on exception handling)
+     * - Executing → Completed/Failed/Yielded (based on return value or exceptions)
+     * - Yielded → Ready (for rescheduling)
      * - Any state → Cancelled (if parent fails)
      * 
      * Terminal states (Completed, Failed, Cancelled) are final - no further transitions.
@@ -85,7 +86,30 @@ namespace Concurrency {
         Executing = 3,  ///< Currently running on a worker thread
         Completed = 4,  ///< Finished successfully - triggered children
         Failed    = 5,  ///< Exception thrown - children will be cancelled
-        Cancelled = 6   ///< Skipped due to parent failure - never ran
+        Cancelled = 6,  ///< Skipped due to parent failure - never ran
+        Yielded   = 7   ///< Suspended execution, will be rescheduled
+    };
+    
+    /**
+     * @brief Return value from yieldable work functions
+     * 
+     * Work functions can now return a status to control their execution flow.
+     * Complete means the work is done, Yield means suspend and reschedule later.
+     * This enables coroutine-like behavior without actual C++ coroutines.
+     * 
+     * @code
+     * auto node = graph.addYieldableNode([]() -> WorkResult {
+     *     if (!dataReady()) {
+     *         return WorkResult::Yield;  // Try again later
+     *     }
+     *     processData();
+     *     return WorkResult::Complete;
+     * });
+     * @endcode
+     */
+    enum class WorkResult : uint8_t {
+        Complete = 0,   ///< Work is done, proceed to completion
+        Yield = 1       ///< Suspend and reschedule for later execution
     };
     
     /**
@@ -232,13 +256,15 @@ namespace Concurrency {
     // Type aliases for clarity - the common types you'll use everywhere
     using NodeHandle = Graph::AcyclicNodeHandle<WorkGraphNode>;          ///< How you reference nodes
     using NodeCallback = std::function<void(NodeHandle)>;                ///< Callbacks that receive nodes
-    using WorkFunction = std::function<void()>;                          ///< The actual work to execute
+    using WorkFunction = std::function<void()>;                          ///< The actual work to execute (legacy)
+    using YieldableWorkFunction = std::function<WorkResult()>;           ///< Work that can yield/suspend
     using CompletionCallback = std::function<void(ExecutionResult)>;     ///< Notified when work completes
     
     /**
      * @brief Check if a node has reached the end of its journey
      * 
      * Terminal states (Completed, Failed, Cancelled) are final.
+     * Yielded is NOT terminal - the node will resume execution.
      * 
      * @param state The state to check
      * @return true if this is a final state
@@ -256,7 +282,8 @@ namespace Concurrency {
      * - Pending → Ready or Cancelled
      * - Ready → Scheduled or Cancelled
      * - Scheduled → Executing or Cancelled
-     * - Executing → Completed or Failed
+     * - Executing → Completed, Failed, or Yielded
+     * - Yielded → Ready (for rescheduling)
      * - Terminal states → Nothing
      * 
      * @param from Current state
@@ -281,7 +308,10 @@ namespace Concurrency {
                 return to == NodeState::Executing || to == NodeState::Cancelled;
                 
             case NodeState::Executing:
-                return to == NodeState::Completed || to == NodeState::Failed;
+                return to == NodeState::Completed || to == NodeState::Failed || to == NodeState::Yielded;
+                
+            case NodeState::Yielded:
+                return to == NodeState::Ready || to == NodeState::Cancelled;
                 
             default:
                 return false;
@@ -309,6 +339,7 @@ namespace Concurrency {
             case NodeState::Completed: return "Completed";
             case NodeState::Failed:    return "Failed";
             case NodeState::Cancelled: return "Cancelled";
+            case NodeState::Yielded:   return "Yielded";
             default:                   return "Unknown";
         }
     }

@@ -26,6 +26,8 @@
 #include <mutex>
 #include <shared_mutex>
 #include <condition_variable>
+#include <variant>
+#include <optional>
 #include "WorkContractGroup.h"
 #include "WorkContractHandle.h"
 #include "../Graph/DirectedAcyclicGraph.h"
@@ -52,10 +54,11 @@ namespace Concurrency {
      * of its position within the execution hierarchy.
      * 
      * The node tracks:
-     * - Its current state (pending, executing, completed, etc.)
+     * - Its current state (pending, executing, completed, yielded, etc.)
      * - How many parents need to finish before it can run
      * - Whether any parent failed (so it should be cancelled)
      * - Its work contract handle for execution
+     * - Reschedule count for yieldable nodes
      * 
      * All state transitions use atomic operations to ensure thread-safe updates when multiple
      * parent nodes complete concurrently. This design enables safe concurrent dependency
@@ -67,14 +70,21 @@ namespace Concurrency {
      * auto node = graph.addNode([]{ 
      *     processData(); 
      * }, "data-processor");
+     * 
+     * // Or create a yieldable node
+     * auto yieldNode = graph.addYieldableNode([]() -> WorkResult {
+     *     if (!ready()) return WorkResult::Yield;
+     *     process();
+     *     return WorkResult::Complete;
+     * }, "yielder");
      * @endcode
      */
     struct WorkGraphNode {
         /// Atomic state management (replaces completed/cancelled flags)
         std::atomic<NodeState> state{NodeState::Pending};
         
-        /// Work function to execute
-        std::function<void()> work;
+        /// Work function to execute - now supports both void and WorkResult returns
+        std::variant<std::function<void()>, YieldableWorkFunction> work;
         
         /// Handle to the work contract (when scheduled)
         WorkContractHandle handle;
@@ -97,9 +107,24 @@ namespace Concurrency {
         /// Execution type for this node (main thread or any thread)
         ExecutionType executionType = ExecutionType::AnyThread;
         
+        /// Reschedule tracking for yieldable nodes
+        std::atomic<uint32_t> rescheduleCount{0};
+        
+        /// Optional maximum reschedule limit
+        std::optional<uint32_t> maxReschedules;
+        
+        /// Is this a yieldable node?
+        bool isYieldable = false;
+        
         WorkGraphNode() = default;
+        
+        // Constructor for legacy void() work functions
         WorkGraphNode(std::function<void()> w, const std::string& n, ExecutionType execType = ExecutionType::AnyThread) 
-            : work(std::move(w)), name(n), executionType(execType) {}
+            : work(std::move(w)), name(n), executionType(execType), isYieldable(false) {}
+        
+        // Constructor for yieldable work functions
+        WorkGraphNode(YieldableWorkFunction w, const std::string& n, ExecutionType execType = ExecutionType::AnyThread) 
+            : work(std::move(w)), name(n), executionType(execType), isYieldable(true) {}
         
         // Move constructor
         WorkGraphNode(WorkGraphNode&& other) noexcept
@@ -111,7 +136,10 @@ namespace Concurrency {
             , completionProcessed(other.completionProcessed.load())
             , name(std::move(other.name))
             , userData(other.userData)
-            , executionType(other.executionType) {
+            , executionType(other.executionType)
+            , rescheduleCount(other.rescheduleCount.load())
+            , maxReschedules(other.maxReschedules)
+            , isYieldable(other.isYieldable) {
             other.userData = nullptr;
         }
         
@@ -127,6 +155,9 @@ namespace Concurrency {
                 name = std::move(other.name);
                 userData = other.userData;
                 executionType = other.executionType;
+                rescheduleCount.store(other.rescheduleCount.load());
+                maxReschedules = other.maxReschedules;
+                isYieldable = other.isYieldable;
                 other.userData = nullptr;
             }
             return *this;
@@ -271,6 +302,9 @@ namespace Concurrency {
         /// Condition variable for waiting on active callbacks
         mutable std::condition_variable _shutdownCondition;                 ///< Destructor waits on this
         
+        /// Suspension state - prevents scheduling new nodes
+        std::atomic<bool> _suspended{false};                                ///< True when graph is suspended
+        
     public:
         using NodeHandle = Graph::AcyclicNodeHandle<WorkGraphNode>;
         
@@ -350,6 +384,48 @@ namespace Concurrency {
          * work - it continues executing in the WorkContractGroup.
          */
         ~WorkGraph();
+        
+        /**
+         * @brief Adds a yieldable task that can suspend and resume execution
+         * 
+         * Creates a node that can yield control back to the scheduler and be
+         * rescheduled later. Perfect for polling operations, staged processing,
+         * or any task that needs to wait without blocking a thread.
+         * 
+         * @param work Yieldable function returning WorkResult
+         * @param name Human-readable name for debugging
+         * @param userData Your own context pointer
+         * @param executionType Where to run: AnyThread or MainThread
+         * @param maxReschedules Optional limit on reschedules (prevent infinite loops)
+         * @return Handle to reference this node
+         * 
+         * @code
+         * // Polling task that yields until ready
+         * auto poller = graph.addYieldableNode([]() -> WorkResult {
+         *     if (!dataReady()) {
+         *         return WorkResult::Yield;  // Try again later
+         *     }
+         *     processData();
+         *     return WorkResult::Complete;
+         * }, "data-poller");
+         * 
+         * // Staged processing with yield between stages
+         * int stage = 0;
+         * auto staged = graph.addYieldableNode([&stage]() -> WorkResult {
+         *     switch (stage++) {
+         *         case 0: doStage1(); return WorkResult::Yield;
+         *         case 1: doStage2(); return WorkResult::Yield;
+         *         case 2: doStage3(); return WorkResult::Complete;
+         *         default: return WorkResult::Complete;
+         *     }
+         * }, "staged-processor", nullptr, ExecutionType::AnyThread, 10);
+         * @endcode
+         */
+        NodeHandle addYieldableNode(YieldableWorkFunction work,
+                                   const std::string& name = "",
+                                   void* userData = nullptr,
+                                   ExecutionType executionType = ExecutionType::AnyThread,
+                                   std::optional<uint32_t> maxReschedules = std::nullopt);
         
         /**
          * @brief Adds a task to your workflow - it won't run until its time comes
@@ -469,6 +545,51 @@ namespace Concurrency {
          * @endcode
          */
         void execute();
+        
+        /**
+         * @brief Suspends graph execution - no new nodes will be scheduled
+         * 
+         * Currently executing nodes will complete, but no new nodes will be
+         * scheduled (including yielded nodes trying to reschedule). The graph
+         * remains suspended until resume() is called.
+         * 
+         * Thread-safe. Can be called while graph is executing.
+         * 
+         * @code
+         * graph.execute();
+         * // ... some time later
+         * graph.suspend();  // Pause execution
+         * // ... do something else
+         * graph.resume();   // Continue where we left off
+         * @endcode
+         */
+        void suspend();
+        
+        /**
+         * @brief Resumes graph execution after suspension
+         * 
+         * Allows scheduling to continue. Any nodes that became ready while
+         * suspended will be scheduled. Yielded nodes waiting to reschedule
+         * will also continue.
+         * 
+         * Thread-safe. Safe to call even if not suspended.
+         * 
+         * @code
+         * if (needToPause) {
+         *     graph.suspend();
+         *     handleHighPriorityWork();
+         *     graph.resume();
+         * }
+         * @endcode
+         */
+        void resume();
+        
+        /**
+         * @brief Checks if the graph is currently suspended
+         * 
+         * @return true if suspend() was called and resume() hasn't been called yet
+         */
+        bool isSuspended() const noexcept { return _suspended.load(std::memory_order_acquire); }
         
         /**
          * @brief Blocks until your entire workflow finishes - success or failure
@@ -764,6 +885,26 @@ namespace Concurrency {
          * @param node The node whose work function threw an exception
          */
         void onNodeFailed(NodeHandle node);
+        
+        /**
+         * @brief Handles a node that has yielded execution
+         * 
+         * Transitions the node from Executing to Yielded state and reschedules it
+         * for later execution. Checks reschedule limits to prevent infinite loops.
+         * 
+         * @param node The node that yielded
+         */
+        void onNodeYielded(NodeHandle node);
+        
+        /**
+         * @brief Reschedules a yielded node for execution
+         * 
+         * Transitions the node from Yielded to Ready state and schedules it
+         * again. Called after a node yields to give it another chance to run.
+         * 
+         * @param node The yielded node to reschedule
+         */
+        void rescheduleYieldedNode(NodeHandle node);
         
     };
 

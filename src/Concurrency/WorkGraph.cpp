@@ -143,6 +143,15 @@ WorkGraph::WorkGraph(WorkContractGroup* workContractGroup, const WorkGraphConfig
             }
         }
     };
+    callbacks.onNodeYielded = [this](NodeHandle node) {
+        CallbackGuard guard(this);
+        if (!_destroyed.load(std::memory_order_acquire)) {
+            if (_config.enableDebugLogging) {
+                ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph: Node yielded");
+            }
+            onNodeYielded(node);
+        }
+    };
     _scheduler->setCallbacks(callbacks);
     
     // Register callback for when contract capacity becomes available
@@ -254,6 +263,59 @@ WorkGraph::NodeHandle WorkGraph::addNode(std::function<void()> work,
     return handle;
 }
 
+WorkGraph::NodeHandle WorkGraph::addYieldableNode(YieldableWorkFunction work,
+                                                  const std::string& name,
+                                                  void* userData,
+                                                  ExecutionType executionType,
+                                                  std::optional<uint32_t> maxReschedules) {
+    ENTROPY_PROFILE_ZONE();
+    std::unique_lock<std::shared_mutex> lock(_graphMutex);
+    
+    // Create node with yieldable work function
+    WorkGraphNode node(std::move(work), name, executionType);
+    node.userData = userData;
+    node.maxReschedules = maxReschedules;
+    
+    // Add to graph and track as pending
+    auto handle = _graph.addNode(std::move(node));
+    _pendingNodes.fetch_add(1, std::memory_order_relaxed);
+    
+    // Cache the handle for access later
+    _nodeHandles.push_back(handle);
+    
+    // Register with state manager
+    _stateManager->registerNode(handle, NodeState::Pending);
+    
+    // Publish event if enabled
+    if (auto* eventBus = getEventBus()) {
+        eventBus->publish(NodeAddedEvent(this, handle));
+    }
+    
+    if (_config.enableDebugLogging) {
+        auto msg = std::format("Added yieldable node '{}' with max reschedules: {}", 
+                              name, 
+                              maxReschedules.has_value() ? std::to_string(*maxReschedules) : "unlimited");
+        ENTROPY_LOG_DEBUG_CAT("WorkGraph", msg);
+    }
+    
+    // If execution has already started, check if this node can execute immediately
+    if (_executionStarted.load(std::memory_order_acquire)) {
+        auto* nodeData = handle.getData();
+        if (nodeData && nodeData->pendingDependencies.load() == 0) {
+            // Try to transition to ready state
+            if (_stateManager->transitionState(handle, NodeState::Pending, NodeState::Ready)) {
+                // Transition to scheduled before actually scheduling
+                if (_stateManager->transitionState(handle, NodeState::Ready, NodeState::Scheduled)) {
+                    // Schedule the node
+                    _scheduler->scheduleNode(handle);
+                }
+            }
+        }
+    }
+    
+    return handle;
+}
+
 void WorkGraph::addDependency(NodeHandle from, NodeHandle to) {
     ENTROPY_PROFILE_ZONE();
     std::unique_lock<std::shared_mutex> lock(_graphMutex);
@@ -341,6 +403,44 @@ size_t WorkGraph::scheduleRootsLocked() {
     return rootCount;
 }
 
+void WorkGraph::suspend() {
+    _suspended.store(true, std::memory_order_release);
+    
+    if (_config.enableDebugLogging) {
+        ENTROPY_LOG_DEBUG_CAT("WorkGraph", "Graph suspended - no new nodes will be scheduled");
+    }
+}
+
+void WorkGraph::resume() {
+    bool wasSuspended = _suspended.exchange(false, std::memory_order_acq_rel);
+    
+    if (wasSuspended) {
+        if (_config.enableDebugLogging) {
+            ENTROPY_LOG_DEBUG_CAT("WorkGraph", "Graph resumed - checking for ready nodes");
+        }
+        
+        // Process any deferred nodes that accumulated while suspended
+        if (_scheduler) {
+            size_t processed = _scheduler->processDeferredNodes();
+            if (processed > 0 && _config.enableDebugLogging) {
+                ENTROPY_LOG_DEBUG_CAT("WorkGraph", "Processed " + std::to_string(processed) + " deferred nodes after resume");
+            }
+        }
+        
+        // Check if any nodes became ready while we were suspended and schedule them
+        std::shared_lock<std::shared_mutex> lock(_graphMutex);
+        for (const auto& handle : _nodeHandles) {
+            auto* nodeData = handle.getData();
+            if (nodeData && nodeData->state.load() == NodeState::Ready) {
+                // Try to transition to scheduled
+                if (_stateManager->transitionState(handle, NodeState::Ready, NodeState::Scheduled)) {
+                    _scheduler->scheduleNode(handle);
+                }
+            }
+        }
+    }
+}
+
 void WorkGraph::execute() {
     ENTROPY_PROFILE_ZONE();
     
@@ -403,6 +503,15 @@ void WorkGraph::execute() {
 }
 
 bool WorkGraph::scheduleNode(NodeHandle node) {
+    // Check if suspended
+    if (_suspended.load(std::memory_order_acquire)) {
+        if (_config.enableDebugLogging) {
+            ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph::scheduleNode() - graph suspended, deferring node");
+        }
+        // Don't schedule while suspended
+        return false;
+    }
+    
     if (_config.enableDebugLogging) {
         auto* nodeData = node.getData();
         ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph::scheduleNode() called");
@@ -616,6 +725,78 @@ void WorkGraph::onNodeFailed(NodeHandle node) {
     // Cancel all dependent nodes
     cancelDependents(node);
     
+}
+
+void WorkGraph::onNodeYielded(NodeHandle node) {
+    auto* nodeData = node.getData();
+    if (!nodeData) return;
+    
+    // Increment reschedule count
+    uint32_t rescheduleCount = nodeData->rescheduleCount.fetch_add(1, std::memory_order_relaxed);
+    
+    if (_config.enableDebugLogging) {
+        auto msg = std::format("Node '{}' yielded (reschedule count: {})", 
+                              nodeData->name, rescheduleCount + 1);
+        ENTROPY_LOG_DEBUG_CAT("WorkGraph", msg);
+    }
+    
+    // Check reschedule limit
+    if (nodeData->maxReschedules && rescheduleCount >= *nodeData->maxReschedules) {
+        if (_config.enableDebugLogging) {
+            auto msg = std::format("Node '{}' reached max reschedule limit ({}), completing", 
+                                  nodeData->name, *nodeData->maxReschedules);
+            ENTROPY_LOG_WARNING_CAT("WorkGraph", msg);
+        }
+        
+        // Hit limit - treat as completed
+        onNodeComplete(node);
+        return;
+    }
+    
+    // Transition to Yielded state
+    if (_stateManager) {
+        _stateManager->transitionState(node, NodeState::Executing, NodeState::Yielded);
+    }
+    
+    // Reschedule the node
+    rescheduleYieldedNode(node);
+}
+
+void WorkGraph::rescheduleYieldedNode(NodeHandle node) {
+    auto* nodeData = node.getData();
+    if (!nodeData) return;
+    
+    if (_config.enableDebugLogging) {
+        auto msg = std::format("Rescheduling yielded node '{}'", nodeData->name);
+        ENTROPY_LOG_DEBUG_CAT("WorkGraph", msg);
+    }
+    
+    // Clear the completion processed flag so it can run again
+    nodeData->completionProcessed.store(false, std::memory_order_release);
+    
+    // Transition from Yielded to Ready
+    if (_stateManager) {
+        if (_stateManager->transitionState(node, NodeState::Yielded, NodeState::Ready)) {
+            // If suspended, don't try to schedule - leave in Ready state
+            if (_suspended.load(std::memory_order_acquire)) {
+                if (_config.enableDebugLogging) {
+                    ENTROPY_LOG_DEBUG_CAT("WorkGraph", "Graph suspended - yielded node left in Ready state");
+                }
+                return;
+            }
+            
+            // Transition to scheduled
+            if (_stateManager->transitionState(node, NodeState::Ready, NodeState::Scheduled)) {
+                // Schedule with the scheduler
+                if (!_scheduler->scheduleNode(node)) {
+                    // Failed to schedule - might be deferred
+                    if (_config.enableDebugLogging) {
+                        ENTROPY_LOG_WARNING_CAT("WorkGraph", "Failed to reschedule yielded node");
+                    }
+                }
+            }
+        }
+    }
 }
 
 void WorkGraph::onNodeCancelled(NodeHandle node) {
