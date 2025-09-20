@@ -60,6 +60,42 @@ public:
         }
         return *this;
     }
+
+    // Converting copy ctor from RefObject<U> where U derives from T (upcast)
+    template<class U, class = std::enable_if_t<std::is_base_of_v<U, T> == false && std::is_base_of_v<T, U>>> 
+    RefObject(const RefObject<U>& other) noexcept : _ptr(static_cast<T*>(other.get())) {
+        if (_ptr) _ptr->retain();
+    }
+
+    // Converting move ctor from RefObject<U> where U derives from T (upcast)
+    template<class U, class = std::enable_if_t<std::is_base_of_v<U, T> == false && std::is_base_of_v<T, U>>> 
+    RefObject(RefObject<U>&& other) noexcept : _ptr(static_cast<T*>(other.detach())) {}
+
+    // Converting copy assignment
+    template<class U, class = std::enable_if_t<std::is_base_of_v<U, T> == false && std::is_base_of_v<T, U>>> 
+    RefObject& operator=(const RefObject<U>& other) noexcept {
+        T* newPtr = static_cast<T*>(other.get());
+        if (_ptr != newPtr) {
+            if (newPtr) newPtr->retain();
+            T* old = _ptr;
+            _ptr = newPtr;
+            if (old) old->release();
+        }
+        return *this;
+    }
+
+    // Converting move assignment
+    template<class U, class = std::enable_if_t<std::is_base_of_v<U, T> == false && std::is_base_of_v<T, U>>> 
+    RefObject& operator=(RefObject<U>&& other) noexcept {
+        if (reinterpret_cast<void*>(_ptr) != reinterpret_cast<void*>(other.get())) {
+            if (_ptr) _ptr->release();
+            _ptr = static_cast<T*>(other.detach());
+        } else {
+            // Same underlying pointer, just detach source
+            (void)other.detach();
+        }
+        return *this;
+    }
     
     T* get() const noexcept { return _ptr; }
     T* operator->() const noexcept { return _ptr; }

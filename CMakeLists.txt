@@ -242,6 +242,7 @@ if(ENTROPY_BUILD_TESTS)
             Tests/WorkGraphMainThreadTest.cpp
             Tests/SignalTreeTests.cpp
             Tests/WorkContractGroupAccountingTests.cpp
+            Tests/EntropyObjectTests.cpp
     )
 
     target_link_libraries(EntropyCoreTests 

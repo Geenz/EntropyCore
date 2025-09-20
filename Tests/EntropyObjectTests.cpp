@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include "Core/EntropyObject.h"
 #include "Core/RefObject.h"
+#include "Core/EntropyClass.h"
 #include <thread>
 #include <vector>
 
@@ -13,8 +14,7 @@ class TestObject : public EntropyObject
 public:
     int value;
     explicit TestObject(int v = 0) : value(v) {}
-    
-    int };
+};
 
 class DerivedTestObject : public TestObject
 {
@@ -24,8 +24,7 @@ public:
     float extra;
     DerivedTestObject(int v = 0, float e = 0.0f) 
         : TestObject(v), extra(e) {}
-    
-    float };
+};
 
 TEST_CASE("EntropyObject Basic Functionality", "[EntropyObject]")
 {
