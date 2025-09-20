@@ -29,7 +29,7 @@ ENTROPY_API void* entropy_alloc(size_t size) {
 }
 
 ENTROPY_API void entropy_free(void* p) {
-    ::operator delete(p, std::nothrow);
+    ::operator delete(p);
 }
 
 static inline EntropyObject* to_cpp(EntropyObjectRef* o) {
