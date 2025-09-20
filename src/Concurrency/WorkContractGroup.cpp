@@ -195,15 +195,17 @@ namespace Concurrency {
         releaseAllContracts();
 
         // Validate that all contracts have been properly cleaned up
-        size_t activeCount = _activeCount.load(std::memory_order_acquire);
-        ENTROPY_ASSERT(activeCount == 0, "WorkContractGroup destroyed with active contracts still allocated");
+        ENTROPY_DEBUG_BLOCK(
+            size_t activeCount = _activeCount.load(std::memory_order_acquire);
+            ENTROPY_ASSERT(activeCount == 0, "WorkContractGroup destroyed with active contracts still allocated");
 
-        // Double-check that no threads are still selecting
-        size_t selectingCount = _selectingCount.load(std::memory_order_acquire);
-        ENTROPY_ASSERT(selectingCount == 0, "WorkContractGroup destroyed with threads still in selectForExecution");
-        
-        size_t mainThreadSelectingCount = _mainThreadSelectingCount.load(std::memory_order_acquire);
-        ENTROPY_ASSERT(mainThreadSelectingCount == 0, "WorkContractGroup destroyed with threads still in selectForMainThreadExecution");
+            // Double-check that no threads are still selecting
+            size_t selectingCount = _selectingCount.load(std::memory_order_acquire);
+            ENTROPY_ASSERT(selectingCount == 0, "WorkContractGroup destroyed with threads still in selectForExecution");
+            
+            size_t mainThreadSelectingCount = _mainThreadSelectingCount.load(std::memory_order_acquire);
+            ENTROPY_ASSERT(mainThreadSelectingCount == 0, "WorkContractGroup destroyed with threads still in selectForMainThreadExecution");
+        );
 
         // Then notify the concurrency provider to remove us from active groups
         // CRITICAL: Read provider without holding lock to avoid ABBA deadlock

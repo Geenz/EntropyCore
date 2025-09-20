@@ -3,12 +3,13 @@
 //
 
 
+#define NOMINMAX
 #include "WorkContractExample.h"
-#include <iostream>
-#include "../src/Concurrency/WorkContractGroup.h"
-#include "../src/Concurrency/WorkService.h"
+#include <EntropyCore.h>
+#include <format>
 using namespace EntropyEngine;
 using namespace Core;
+using namespace Core::Logging;
 using namespace Concurrency;
 
 int main() {
@@ -18,7 +19,7 @@ int main() {
 
     for (int i = 0; i < 1000; i++) {
         group.createContract([=]() {
-            printf("WorkContractGroup createContract %i\n", i);
+            ENTROPY_LOG_INFO_CAT("WorkContractExample", std::format("WorkContractGroup createContract {}", i));
         }).schedule();
     }
     service.addWorkContractGroup(&group);

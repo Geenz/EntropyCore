@@ -335,7 +335,7 @@ void WorkGraph::addDependency(NodeHandle from, NodeHandle to) {
 
 void WorkGraph::incrementDependencies(NodeHandle node) {
     if (auto* nodeData = node.getData()) {
-        auto newCount = nodeData->pendingDependencies.fetch_add(1, std::memory_order_acq_rel) + 1;
+        nodeData->pendingDependencies.fetch_add(1, std::memory_order_acq_rel);
         if (_config.enableDebugLogging) {
             ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph: Node dependencies incremented");
         }
@@ -513,7 +513,6 @@ bool WorkGraph::scheduleNode(NodeHandle node) {
     }
     
     if (_config.enableDebugLogging) {
-        auto* nodeData = node.getData();
         ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph::scheduleNode() called");
     }
     // Always delegate to the scheduler component
@@ -854,7 +853,6 @@ void WorkGraph::cancelDependents(NodeHandle failedNode) {
     // Cancel nodes outside the lock
     for (auto& node : nodesToCancel) {
         if (_config.enableDebugLogging) {
-            auto* nodeData = node.getData();
             ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph: Cancelling dependent node due to failed parent");
         }
         onNodeCancelled(node);

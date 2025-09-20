@@ -262,9 +262,6 @@ namespace Concurrency {
         }
     }
 
-
-
-
     void WorkService::notifyWorkAvailable(WorkContractGroup* group) {
         // We don't need to track which group has work, just that work is available
         _workAvailable = true;
@@ -274,12 +271,12 @@ namespace Concurrency {
     void WorkService::notifyGroupDestroyed(WorkContractGroup* group) {
         // When a group is destroyed, we should remove it from our list
         // This is important to prevent accessing a destroyed group
-        auto status = removeWorkContractGroup(group);
-        ENTROPY_ASSERT(status != GroupOperationStatus::NotFound,
-                       "Group destruction notification for unknown group");
+        ENTROPY_DEBUG_BLOCK(
+            auto status = removeWorkContractGroup(group);
+            ENTROPY_ASSERT(status != GroupOperationStatus::NotFound,
+                           "Group destruction notification for unknown group");
+        );
     }
-
-
 
     void WorkService::resetThreadLocalState() {
         // This only resets the thread-local state in the calling thread,

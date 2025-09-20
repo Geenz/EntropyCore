@@ -27,8 +27,16 @@ if(DEFINED CMAKE_TOOLCHAIN_FILE)
 endif()
 
 # Find packages
-find_package(Tracy CONFIG REQUIRED)
-find_package(Catch2 3 CONFIG REQUIRED)
+option(ENTROPY_WITH_TRACY "Enable Tracy profiler integration" ON)
+if(ENTROPY_WITH_TRACY)
+    find_package(Tracy CONFIG QUIET)
+endif()
+find_package(Boost REQUIRED COMPONENTS type_index)
+
+# Only require Catch2 when building tests
+if(ENTROPY_BUILD_TESTS)
+    find_package(Catch2 3 CONFIG REQUIRED)
+endif()
 
 # Core library source files
 set(ENTROPY_CORE_SOURCES
@@ -43,11 +51,16 @@ set(ENTROPY_CORE_SOURCES
         src/Concurrency/RoundRobinScheduler.cpp
         src/Concurrency/NodeStateManager.cpp
         src/Concurrency/NodeScheduler.cpp
+        src/Core/EntropyObject.cpp
 )
 
 set(ENTROPY_CORE_HEADERS
         src/CoreCommon.h
         src/Core/EventBus.h
+        src/Core/EntropyClass.h
+        src/Core/EntropyObject.h
+        src/Core/RefObject.h
+        src/Core/EntropyInterop.h
         src/EntropyCore.h
         src/ServiceLocator.h
         src/TypeSystem/GenericHandle.h
@@ -106,14 +119,33 @@ target_include_directories(EntropyCore
 # Link dependencies
 target_link_libraries(EntropyCore 
     PUBLIC
-        Tracy::TracyClient
+        Boost::type_index
 )
 
+# Link Tracy if enabled and available
+if(ENTROPY_WITH_TRACY)
+  if(TARGET Tracy::TracyClient)
+    target_link_libraries(EntropyCore PUBLIC Tracy::TracyClient)
+  endif()
+endif()
+
 add_executable(WorkContractExample Examples/WorkContractExample.cpp)
-target_link_libraries(WorkContractExample EntropyCore Tracy::TracyClient)
+target_link_libraries(WorkContractExample PRIVATE EntropyCore)
 
 add_executable(WorkGraphYieldableExample Examples/WorkGraphYieldableExample.cpp)
-target_link_libraries(WorkGraphYieldableExample EntropyCore Tracy::TracyClient)
+target_link_libraries(WorkGraphYieldableExample PRIVATE EntropyCore)
+
+add_executable(EntropyObjectExample examples/EntropyObjectExample.cpp)
+target_link_libraries(EntropyObjectExample PRIVATE EntropyCore)
+
+# Link Tracy to examples if available
+if(ENTROPY_WITH_TRACY)
+  if(TARGET Tracy::TracyClient)
+    target_link_libraries(WorkContractExample PRIVATE Tracy::TracyClient)
+    target_link_libraries(WorkGraphYieldableExample PRIVATE Tracy::TracyClient)
+    target_link_libraries(EntropyObjectExample PRIVATE Tracy::TracyClient)
+  endif()
+endif()
 
 # Platform and compiler-specific settings
 if(WIN32)
@@ -125,6 +157,7 @@ if(WIN32)
         set_property(TARGET EntropyCore PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
         set_property(TARGET WorkContractExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
         set_property(TARGET WorkGraphYieldableExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+        set_property(TARGET EntropyObjectExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     endif()
 else()
     # Settings for non-Windows platforms (macOS, Linux)
@@ -140,11 +173,13 @@ else()
 endif()
 
 # Define preprocessor macros
-target_compile_definitions(EntropyCore
-    PUBLIC
-        TRACY_ENABLE
-        TRACY_ON_DEMAND
-)
+if(ENTROPY_WITH_TRACY AND TARGET Tracy::TracyClient)
+    target_compile_definitions(EntropyCore
+        PUBLIC
+            TRACY_ENABLE
+            TRACY_ON_DEMAND
+    )
+endif()
 
 # Add EntropyDebug macro for Debug and Release with Debug Info builds.
 if($<OR:$<CONFIG:Debug>,$<CONFIG:RelWithDebInfo>>)

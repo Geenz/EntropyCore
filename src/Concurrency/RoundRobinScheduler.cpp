@@ -30,7 +30,6 @@ IWorkScheduler::ScheduleResult RoundRobinScheduler::selectNextGroup(
     }
     
     // Try each group once, starting from current position
-    size_t startIndex = stCurrentIndex;
     size_t attempts = 0;
     
     while (attempts < groups.size()) {
