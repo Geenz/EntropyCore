@@ -107,6 +107,7 @@ public:
     }
     
     void reset(T* ptr = nullptr) noexcept {
+        if (ptr == _ptr) return; // guard against self-reset which would drop refcount and leave dangling pointer
         T* old = _ptr;
         _ptr = ptr;
         if (old) old->release();
