@@ -21,7 +21,7 @@ ENTROPY_API void entropy_get_version(uint32_t* major, uint32_t* minor, uint32_t*
     if (major) *major = 1;
     if (minor) *minor = 0;
     if (patch) *patch = 0;
-    if (abi)   *abi   = ENTROPY_C_ABI_VERSION;
+    if (abi)   *abi   = 0; // versioning not a concern right now
 }
 
 ENTROPY_API void* entropy_alloc(size_t size) {
@@ -30,6 +30,32 @@ ENTROPY_API void* entropy_alloc(size_t size) {
 
 ENTROPY_API void entropy_free(void* p) {
     ::operator delete(p);
+}
+
+ENTROPY_API const char* entropy_status_to_string(EntropyStatus s) {
+    switch (s) {
+        case ENTROPY_OK: return "ENTROPY_OK";
+        case ENTROPY_ERR_UNKNOWN: return "ENTROPY_ERR_UNKNOWN";
+        case ENTROPY_ERR_INVALID_ARG: return "ENTROPY_ERR_INVALID_ARG";
+        case ENTROPY_ERR_NOT_FOUND: return "ENTROPY_ERR_NOT_FOUND";
+        case ENTROPY_ERR_TYPE_MISMATCH: return "ENTROPY_ERR_TYPE_MISMATCH";
+        case ENTROPY_ERR_BUFFER_TOO_SMALL: return "ENTROPY_ERR_BUFFER_TOO_SMALL";
+        case ENTROPY_ERR_NO_MEMORY: return "ENTROPY_ERR_NO_MEMORY";
+        case ENTROPY_ERR_UNAVAILABLE: return "ENTROPY_ERR_UNAVAILABLE";
+        default: return "ENTROPY_STATUS_UNKNOWN";
+    }
+}
+
+ENTROPY_API void entropy_string_free(const char* s) {
+    entropy_free((void*)s);
+}
+
+ENTROPY_API void entropy_string_dispose(EntropyOwnedString s) {
+    if (s.ptr) entropy_free((void*)s.ptr);
+}
+
+ENTROPY_API void entropy_buffer_dispose(EntropyOwnedBuffer b) {
+    if (b.ptr) entropy_free((void*)b.ptr);
 }
 
 static inline EntropyObject* to_cpp(EntropyObjectRef* o) {
@@ -59,53 +85,63 @@ ENTROPY_API const char* entropy_object_class_name(const EntropyObjectRef* obj) {
     return obj ? to_cpp_c(obj)->className() : "";
 }
 
-static EntropyStatus copy_string_out(const std::string& s, const char** out_str) {
-    if (!out_str) return ENTROPY_ERR_INVALID_ARG;
-    char* mem = static_cast<char*>(entropy_alloc(s.size() + 1));
-    if (!mem) return ENTROPY_ERR_NO_MEMORY;
-    std::memcpy(mem, s.c_str(), s.size() + 1);
-    *out_str = mem;
+static EntropyStatus copy_string_out(const std::string& s, EntropyOwnedString* out) {
+    if (!out) return ENTROPY_ERR_INVALID_ARG;
+    char* mem = static_cast<char*>(entropy_alloc(s.size()));
+    if (!mem && s.size() != 0) return ENTROPY_ERR_NO_MEMORY;
+    if (s.size()) std::memcpy(mem, s.data(), s.size());
+    out->ptr = mem;
+    out->len = static_cast<uint32_t>(s.size());
     return ENTROPY_OK;
 }
 
-ENTROPY_API EntropyStatus entropy_object_to_string(const EntropyObjectRef* obj, const char** out_str) {
+ENTROPY_API EntropyStatus entropy_object_class_name_owned(const EntropyObjectRef* obj, EntropyOwnedString* out) {
     if (!obj) return ENTROPY_ERR_INVALID_ARG;
     try {
-        return copy_string_out(to_cpp_c(obj)->toString(), out_str);
+        return copy_string_out(std::string(to_cpp_c(obj)->className()), out);
     } catch (...) {
         return ENTROPY_ERR_UNKNOWN;
     }
 }
 
-ENTROPY_API EntropyStatus entropy_object_debug_string(const EntropyObjectRef* obj, const char** out_str) {
+ENTROPY_API EntropyStatus entropy_object_to_string(const EntropyObjectRef* obj, EntropyOwnedString* out) {
     if (!obj) return ENTROPY_ERR_INVALID_ARG;
     try {
-        return copy_string_out(to_cpp_c(obj)->debugString(), out_str);
+        return copy_string_out(to_cpp_c(obj)->toString(), out);
     } catch (...) {
         return ENTROPY_ERR_UNKNOWN;
     }
 }
 
-ENTROPY_API EntropyStatus entropy_object_description(const EntropyObjectRef* obj, const char** out_str) {
+ENTROPY_API EntropyStatus entropy_object_debug_string(const EntropyObjectRef* obj, EntropyOwnedString* out) {
     if (!obj) return ENTROPY_ERR_INVALID_ARG;
     try {
-        return copy_string_out(to_cpp_c(obj)->description(), out_str);
+        return copy_string_out(to_cpp_c(obj)->debugString(), out);
     } catch (...) {
         return ENTROPY_ERR_UNKNOWN;
     }
 }
 
-ENTROPY_API int entropy_handle_is_valid(EntropyHandle h) {
-    return h.owner != nullptr; // quick check only
+ENTROPY_API EntropyStatus entropy_object_description(const EntropyObjectRef* obj, EntropyOwnedString* out) {
+    if (!obj) return ENTROPY_ERR_INVALID_ARG;
+    try {
+        return copy_string_out(to_cpp_c(obj)->description(), out);
+    } catch (...) {
+        return ENTROPY_ERR_UNKNOWN;
+    }
 }
 
-ENTROPY_API int entropy_handle_equals(EntropyHandle a, EntropyHandle b) {
-    return (a.owner == b.owner) && (a.index == b.index) && (a.generation == b.generation) && (a.type == b.type);
+ENTROPY_API EntropyBool entropy_handle_is_valid(EntropyHandle h) {
+    return h.owner != nullptr ? ENTROPY_TRUE : ENTROPY_FALSE; // quick check only
 }
 
-ENTROPY_API int entropy_handle_type_matches(EntropyHandle h, EntropyTypeId expected) {
+ENTROPY_API EntropyBool entropy_handle_equals(EntropyHandle a, EntropyHandle b) {
+    return ((a.owner == b.owner) && (a.index == b.index) && (a.generation == b.generation) && (a.type_id == b.type_id)) ? ENTROPY_TRUE : ENTROPY_FALSE;
+}
+
+ENTROPY_API EntropyBool entropy_handle_type_matches(EntropyHandle h, EntropyTypeId expected) {
     // Strict matching: unknown type (0) never matches, and expecting 0 never matches
-    return (expected != 0) && (h.type != 0) && (h.type == expected);
+    return ((expected != 0) && (h.type_id != 0) && (h.type_id == expected)) ? ENTROPY_TRUE : ENTROPY_FALSE;
 }
 
 ENTROPY_API EntropyStatus entropy_object_to_handle(const EntropyObjectRef* obj, EntropyHandle* out_handle) {
@@ -115,9 +151,45 @@ ENTROPY_API EntropyStatus entropy_object_to_handle(const EntropyObjectRef* obj, 
     h.owner = to_cpp_c(obj)->handleOwner();
     h.index = to_cpp_c(obj)->handleIndex();
     h.generation = to_cpp_c(obj)->handleGeneration();
-    h.type = to_cpp_c(obj)->classHash();
+    h.type_id = to_cpp_c(obj)->classHash();
     *out_handle = h;
     return ENTROPY_OK;
+}
+
+// Handle-first operations -----------------------------------------------------
+ENTROPY_API EntropyStatus entropy_handle_retain(EntropyHandle h) {
+    if (!h.owner) return ENTROPY_ERR_INVALID_ARG;
+    EntropyObjectRef* obj = entropy_resolve_handle(h);
+    if (!obj) return ENTROPY_ERR_NOT_FOUND;
+    // resolve returns retained (+1). We need net +1: retain once more, then drop the resolved ref
+    entropy_object_retain(obj);   // +2
+    entropy_object_release(obj);  // back to +1 net
+    return ENTROPY_OK;
+}
+
+ENTROPY_API EntropyStatus entropy_handle_release(EntropyHandle h) {
+    if (!h.owner) return ENTROPY_ERR_INVALID_ARG;
+    EntropyObjectRef* obj = entropy_resolve_handle(h);
+    if (!obj) return ENTROPY_ERR_NOT_FOUND;
+    // Drop the resolved ref and one more to achieve net -1
+    entropy_object_release(obj); // back to 0 net
+    entropy_object_release(obj); // net -1
+    return ENTROPY_OK;
+}
+
+ENTROPY_API EntropyStatus entropy_handle_info(EntropyHandle h,
+                                             EntropyTypeId* out_type_id,
+                                             EntropyOwnedString* out_class_name) {
+    if (!h.owner) return ENTROPY_ERR_INVALID_ARG;
+    EntropyObjectRef* obj = entropy_resolve_handle(h);
+    if (!obj) return ENTROPY_ERR_NOT_FOUND;
+    EntropyStatus st = ENTROPY_OK;
+    if (out_type_id) *out_type_id = entropy_object_type_id(obj);
+    if (out_class_name) {
+        st = entropy_object_class_name_owned(obj, out_class_name);
+    }
+    entropy_object_release(obj);
+    return st;
 }
 
 // Owner vtable registry -------------------------------------------------------
@@ -139,6 +211,27 @@ ENTROPY_API EntropyObjectRef* entropy_resolve_handle(EntropyHandle h) {
     if (!fn) return nullptr;
     // Contract: resolve returns a RETAINED pointer if valid; otherwise NULL
     return fn(h.owner, h.index, h.generation);
+}
+
+// Generic call surfaces (not implemented yet in this upheaval; return UNAVAILABLE)
+ENTROPY_API EntropyStatus entropy_call(EntropyHandle /*h*/,
+                                       uint32_t /*method_id*/,
+                                       const uint8_t* /*req*/, uint32_t /*req_len*/,
+                                       /*out*/ uint8_t** out_resp, /*out*/ uint32_t* out_resp_len) {
+    if (out_resp) *out_resp = nullptr;
+    if (out_resp_len) *out_resp_len = 0;
+    return ENTROPY_ERR_UNAVAILABLE;
+}
+
+ENTROPY_API EntropyStatus entropy_call_buf(EntropyHandle h,
+                                           uint32_t method_id,
+                                           const uint8_t* req, uint32_t req_len,
+                                           /*out*/ EntropyOwnedBuffer* out_resp) {
+    if (out_resp) { out_resp->ptr = nullptr; out_resp->len = 0; }
+    uint8_t* p = nullptr; uint32_t n = 0;
+    EntropyStatus st = entropy_call(h, method_id, req, req_len, &p, &n);
+    if (st == ENTROPY_OK && out_resp) { out_resp->ptr = p; out_resp->len = n; }
+    return st;
 }
 
 // (No demo functionality is provided in the C API implementation. The API is production-only.)

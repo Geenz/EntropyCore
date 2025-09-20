@@ -27,10 +27,10 @@ int main(void) {
     EntropyHandle h = { dummy_owner, 42u, 7u, 0u };
 
     // Basic handle operations
-    printf("Handle valid? %d\n", entropy_handle_is_valid(h));
+    printf("Handle valid? %d\n", (int)entropy_handle_is_valid(h));
     EntropyHandle h2 = h;
-    printf("Handles equal? %d\n", entropy_handle_equals(h, h2));
-    printf("Type matches (expected 0)? %d\n", entropy_handle_type_matches(h, 0));
+    printf("Handles equal? %d\n", (int)entropy_handle_equals(h, h2));
+    printf("Type matches (expected 0)? %d\n", (int)entropy_handle_type_matches(h, 0));
 
     // Attempt to resolve (will be NULL in this minimal example)
     EntropyObjectRef* obj = entropy_resolve_handle(h);
