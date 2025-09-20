@@ -66,7 +66,9 @@ namespace Logging {
         localtime_s(&tm_buf, &time_t);
         stream << "[" << std::put_time(&tm_buf, "%H:%M:%S");
 #else
-        stream << "[" << std::put_time(std::localtime(&time_t), "%H:%M:%S");
+        std::tm tm_buf;
+        localtime_r(&time_t, &tm_buf);
+        stream << "[" << std::put_time(&tm_buf, "%H:%M:%S");
 #endif
         stream << "." << std::setfill('0') << std::setw(3) << ms.count() << "] ";
         
