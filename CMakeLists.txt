@@ -52,6 +52,7 @@ set(ENTROPY_CORE_SOURCES
         src/Concurrency/NodeStateManager.cpp
         src/Concurrency/NodeScheduler.cpp
         src/Core/EntropyObject.cpp
+        src/Core/EntropyCAPI.cpp
 )
 
 set(ENTROPY_CORE_HEADERS
@@ -61,6 +62,7 @@ set(ENTROPY_CORE_HEADERS
         src/Core/EntropyObject.h
         src/Core/RefObject.h
         src/Core/EntropyInterop.h
+        src/Core/entropy_c_api.h
         src/EntropyCore.h
         src/ServiceLocator.h
         src/TypeSystem/GenericHandle.h
@@ -122,6 +124,13 @@ target_link_libraries(EntropyCore
         Boost::type_index
 )
 
+# Define for export macros when building the library
+target_compile_definitions(EntropyCore PRIVATE ENTROPYCORE_BUILDING)
+# Define if building shared library to enable dllexport/dllimport in headers
+if(BUILD_SHARED_LIBS)
+    target_compile_definitions(EntropyCore PUBLIC ENTROPYCORE_SHARED)
+endif()
+
 # Link Tracy if enabled and available
 if(ENTROPY_WITH_TRACY)
   if(TARGET Tracy::TracyClient)
@@ -138,12 +147,25 @@ target_link_libraries(WorkGraphYieldableExample PRIVATE EntropyCore)
 add_executable(EntropyObjectExample examples/EntropyObjectExample.cpp)
 target_link_libraries(EntropyObjectExample PRIVATE EntropyCore)
 
+add_executable(EntropyObjectHandleExample Examples/EntropyObjectHandleExample.cpp)
+target_link_libraries(EntropyObjectHandleExample PRIVATE EntropyCore)
+
+# C ABI example (pure C)
+add_executable(CInteropExample Examples/CInteropExample.c Examples/CInteropExample_linkshim.cpp)
+# Compile the C example with C++ language to satisfy project language constraints
+set_source_files_properties(Examples/CInteropExample.c PROPERTIES LANGUAGE CXX)
+# Link against the C++ library; ensure C++ linker is used on some toolchains
+set_property(TARGET CInteropExample PROPERTY LINKER_LANGUAGE CXX)
+# Link core
+target_link_libraries(CInteropExample PRIVATE EntropyCore)
+
 # Link Tracy to examples if available
 if(ENTROPY_WITH_TRACY)
   if(TARGET Tracy::TracyClient)
     target_link_libraries(WorkContractExample PRIVATE Tracy::TracyClient)
     target_link_libraries(WorkGraphYieldableExample PRIVATE Tracy::TracyClient)
     target_link_libraries(EntropyObjectExample PRIVATE Tracy::TracyClient)
+    target_link_libraries(EntropyObjectHandleExample PRIVATE Tracy::TracyClient)
   endif()
 endif()
 
@@ -158,6 +180,8 @@ if(WIN32)
         set_property(TARGET WorkContractExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
         set_property(TARGET WorkGraphYieldableExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
         set_property(TARGET EntropyObjectExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+        set_property(TARGET EntropyObjectHandleExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+        set_property(TARGET CInteropExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     endif()
 else()
     # Settings for non-Windows platforms (macOS, Linux)

@@ -65,6 +65,9 @@ std::string EntropyObject::toString() const
 std::string EntropyObject::debugString() const
 {
     // Avoid repeating className() since toString() already includes it by default
+    if (hasHandle()) {
+        return std::format("{} [refs:{} handle:{:08X}:{:08X}]", toString(), refCount(), handleIndex(), handleGeneration());
+    }
     return std::format("{} [refs:{}]", toString(), refCount());
 }
         

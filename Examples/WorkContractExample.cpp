@@ -4,7 +4,6 @@
 
 
 #define NOMINMAX
-#include "WorkContractExample.h"
 #include <EntropyCore.h>
 #include <format>
 using namespace EntropyEngine;
