@@ -104,7 +104,8 @@ ENTROPY_API int entropy_handle_equals(EntropyHandle a, EntropyHandle b) {
 }
 
 ENTROPY_API int entropy_handle_type_matches(EntropyHandle h, EntropyTypeId expected) {
-    return (h.type == 0) || (h.type == expected);
+    // Strict matching: unknown type (0) never matches, and expecting 0 never matches
+    return (expected != 0) && (h.type != 0) && (h.type == expected);
 }
 
 ENTROPY_API EntropyStatus entropy_object_to_handle(const EntropyObjectRef* obj, EntropyHandle* out_handle) {
