@@ -62,17 +62,17 @@ public:
     }
 
     // Converting copy ctor from RefObject<U> where U derives from T (upcast)
-    template<class U, class = std::enable_if_t<std::is_base_of_v<U, T> == false && std::is_base_of_v<T, U>>> 
+    template<class U, class = std::enable_if_t<std::is_base_of_v<T, U>>> 
     RefObject(const RefObject<U>& other) noexcept : _ptr(static_cast<T*>(other.get())) {
         if (_ptr) _ptr->retain();
     }
 
     // Converting move ctor from RefObject<U> where U derives from T (upcast)
-    template<class U, class = std::enable_if_t<std::is_base_of_v<U, T> == false && std::is_base_of_v<T, U>>> 
+    template<class U, class = std::enable_if_t<std::is_base_of_v<T, U>>> 
     RefObject(RefObject<U>&& other) noexcept : _ptr(static_cast<T*>(other.detach())) {}
 
     // Converting copy assignment
-    template<class U, class = std::enable_if_t<std::is_base_of_v<U, T> == false && std::is_base_of_v<T, U>>> 
+    template<class U, class = std::enable_if_t<std::is_base_of_v<T, U>>> 
     RefObject& operator=(const RefObject<U>& other) noexcept {
         T* newPtr = static_cast<T*>(other.get());
         if (_ptr != newPtr) {
@@ -85,7 +85,7 @@ public:
     }
 
     // Converting move assignment
-    template<class U, class = std::enable_if_t<std::is_base_of_v<U, T> == false && std::is_base_of_v<T, U>>> 
+    template<class U, class = std::enable_if_t<std::is_base_of_v<T, U>>> 
     RefObject& operator=(RefObject<U>&& other) noexcept {
         if (reinterpret_cast<void*>(_ptr) != reinterpret_cast<void*>(other.get())) {
             if (_ptr) _ptr->release();
