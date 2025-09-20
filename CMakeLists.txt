@@ -144,7 +144,7 @@ target_link_libraries(WorkContractExample PRIVATE EntropyCore)
 add_executable(WorkGraphYieldableExample Examples/WorkGraphYieldableExample.cpp)
 target_link_libraries(WorkGraphYieldableExample PRIVATE EntropyCore)
 
-add_executable(EntropyObjectExample examples/EntropyObjectExample.cpp)
+add_executable(EntropyObjectExample Examples/EntropyObjectExample.cpp)
 target_link_libraries(EntropyObjectExample PRIVATE EntropyCore)
 
 add_executable(EntropyObjectHandleExample Examples/EntropyObjectHandleExample.cpp)
