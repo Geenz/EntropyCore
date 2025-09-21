@@ -161,9 +161,6 @@ ENTROPY_API EntropyStatus entropy_handle_retain(EntropyHandle h) {
     if (!h.owner) return ENTROPY_ERR_INVALID_ARG;
     EntropyObjectRef* obj = entropy_resolve_handle(h);
     if (!obj) return ENTROPY_ERR_NOT_FOUND;
-    // resolve returns retained (+1). We need net +1: retain once more, then drop the resolved ref
-    entropy_object_retain(obj);   // +2
-    entropy_object_release(obj);  // back to +1 net
     return ENTROPY_OK;
 }
 
