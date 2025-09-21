@@ -161,6 +161,9 @@ ENTROPY_API EntropyStatus entropy_handle_retain(EntropyHandle h) {
     if (!h.owner) return ENTROPY_ERR_INVALID_ARG;
     EntropyObjectRef* obj = entropy_resolve_handle(h);
     if (!obj) return ENTROPY_ERR_NOT_FOUND;
+    // resolve returns retained (+1). That is exactly the net +1 we need.
+    // Do NOT retain/release again; just drop the local pointer without releasing
+    // to keep the incremented refcount.
     return ENTROPY_OK;
 }
 

@@ -190,15 +190,24 @@ namespace Concurrency {
                 using Fn = std::decay_t<F>;
                 reset();
 
-                // Decide placement: SBO if it fits, else nothrow heap
+                // Decide placement: SBO if it fits, else nothrow heap. Catch constructor exceptions.
                 if (sizeof(Fn) <= BufferSize && alignof(Fn) <= alignof(std::max_align_t)) {
-                    // In-place construct (noexcept by placement new)
-                    new (static_cast<void*>(_buffer)) Fn(std::forward<F>(f));
-                    _usingHeap = false;
+                    try {
+                        new (static_cast<void*>(_buffer)) Fn(std::forward<F>(f));
+                        _usingHeap = false;
+                    } catch (...) {
+                        // Leave object in reset state and report failure
+                        return false;
+                    }
                 } else {
                     void* p = ::operator new(sizeof(Fn), std::nothrow);
                     if (!p) return false; // allocation failure without exceptions
-                    new (p) Fn(std::forward<F>(f));
+                    try {
+                        new (p) Fn(std::forward<F>(f));
+                    } catch (...) {
+                        ::operator delete(p, std::nothrow);
+                        return false;
+                    }
                     _heapPtr = p;
                     _usingHeap = true;
                 }
