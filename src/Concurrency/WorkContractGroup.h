@@ -253,7 +253,7 @@ namespace Concurrency {
         std::vector<ContractSlot> _contracts;             ///< Contract storage
         std::unique_ptr<SignalTreeBase> _readyContracts;  ///< Ready work queue
         std::unique_ptr<SignalTreeBase> _mainThreadContracts; ///< Main thread work queue
-        std::atomic<uint64_t> _freeListHead{0};           ///< Free list head (packed: [tag:32 | index:32])
+        std::atomic<uint64_t> _freeListHead{0};           ///< Free list head (packed: [tag:32(upper) | index:32(lower)])
 
         std::atomic<size_t> _activeCount{0};              ///< Active contract count
         std::atomic<size_t> _scheduledCount{0};           ///< Scheduled count
