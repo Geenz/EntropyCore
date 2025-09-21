@@ -9,6 +9,8 @@
 
 #include "WorkContractHandle.h"
 #include "WorkContractGroup.h"
+#include "../TypeSystem/TypeID.h"
+#include <format>
 
 namespace EntropyEngine {
 namespace Core {
@@ -35,6 +37,8 @@ namespace Concurrency {
         if (auto* group = handleOwnerAs<WorkContractGroup>()) {
             group->releaseContract(*this);
         }
+        // Clear stamped identity to make subsequent calls fast no-ops
+        HandleAccess::clear(*this);
     }
     
     bool WorkContractHandle::isScheduled() const {
@@ -48,6 +52,19 @@ namespace Concurrency {
         if (!group) return false;
         return group->getContractState(*this) == ContractState::Executing;
     }
+
+uint64_t WorkContractHandle::classHash() const noexcept {
+    static const uint64_t hash = static_cast<uint64_t>(EntropyEngine::Core::TypeSystem::createTypeId<WorkContractHandle>().id);
+    return hash;
+}
+
+std::string WorkContractHandle::toString() const {
+    if (hasHandle()) {
+        return std::format("{}@{}(owner={}, idx={}, gen={})",
+                           className(), static_cast<const void*>(this), handleOwner(), handleIndex(), handleGeneration());
+    }
+    return std::format("{}@{}(invalid)", className(), static_cast<const void*>(this));
+}
 
 } // namespace Concurrency
 } // namespace Core

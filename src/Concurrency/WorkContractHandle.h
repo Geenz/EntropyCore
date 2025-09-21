@@ -187,6 +187,8 @@ namespace Concurrency {
         bool isExecuting() const;
 
         const char* className() const noexcept override { return "WorkContractHandle"; }
+        uint64_t classHash() const noexcept override;
+        std::string toString() const override;
     };
 
 } // namespace Concurrency

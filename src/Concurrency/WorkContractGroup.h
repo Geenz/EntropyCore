@@ -32,6 +32,10 @@
 #include <shared_mutex>
 #include <optional>
 #include <limits>
+#include <new>
+#include <type_traits>
+#include <utility>
+#include "../Core/EntropyObject.h"
 
 namespace EntropyEngine {
 namespace Core {
@@ -105,7 +109,13 @@ namespace Concurrency {
      * service.stop();
      * @endcode
      */
-    class WorkContractGroup {
+    class WorkContractGroup : public EntropyEngine::Core::EntropyObject {
+    public:
+        const char* className() const noexcept override { return "WorkContractGroup"; }
+        uint64_t classHash() const noexcept override;
+        std::string toString() const override;
+        std::string debugString() const override;
+        std::string description() const override;
     private:
         /// Sentinel value indicating end of lock-free linked list or invalid slot
         /// Used in the free list implementation to mark the end of the chain and
@@ -122,10 +132,120 @@ namespace Concurrency {
          * atomic state transitions. The generation counter prevents use-after-free
          * by invalidating old handles when slots are reused.
          */
+        // A small, non-throwing callable wrapper for void() tasks used inside slots
+        // Provides small-buffer optimization and falls back to nothrow heap allocation.
+        // All operations are noexcept; assignment reports success via bool.
+        class SmallTask {
+            static constexpr size_t BufferSize = 64; // tune if needed
+            using InvokeFn = void(*)(void*) noexcept;
+            using MoveFn   = void(*)(void*, void*) noexcept;
+            using DestroyFn= void(*)(void*) noexcept;
+
+            alignas(std::max_align_t) unsigned char _buffer[BufferSize];
+            void*      _heapPtr = nullptr;
+            InvokeFn   _invoke = nullptr;
+            MoveFn     _move = nullptr;
+            DestroyFn  _destroy = nullptr;
+            bool       _usingHeap = false;
+
+            void* storage() noexcept { return _usingHeap ? _heapPtr : static_cast<void*>(_buffer); }
+            const void* storage() const noexcept { return _usingHeap ? _heapPtr : static_cast<const void*>(_buffer); }
+
+        public:
+            SmallTask() noexcept = default;
+            ~SmallTask() { reset(); }
+
+            SmallTask(SmallTask&& other) noexcept { moveFrom(other); }
+            SmallTask& operator=(SmallTask&& other) noexcept {
+                if (this != &other) { reset(); moveFrom(other); }
+                return *this;
+            }
+
+            // Non-copyable to keep semantics simple
+            SmallTask(const SmallTask&) = delete;
+            SmallTask& operator=(const SmallTask&) = delete;
+
+            void reset() noexcept {
+                if (_destroy) {
+                    _destroy(storage());
+                }
+                if (_usingHeap && _heapPtr) {
+                    ::operator delete(_heapPtr, std::nothrow);
+                }
+                _heapPtr = nullptr;
+                _invoke = nullptr;
+                _move = nullptr;
+                _destroy = nullptr;
+                _usingHeap = false;
+            }
+
+            explicit operator bool() const noexcept { return _invoke != nullptr; }
+
+            void operator()() noexcept {
+                if (_invoke) _invoke(storage());
+            }
+
+            template <class F>
+            bool assign(F&& f) noexcept {
+                using Fn = std::decay_t<F>;
+                reset();
+
+                // Decide placement: SBO if it fits, else nothrow heap
+                if (sizeof(Fn) <= BufferSize && alignof(Fn) <= alignof(std::max_align_t)) {
+                    // In-place construct (noexcept by placement new)
+                    new (static_cast<void*>(_buffer)) Fn(std::forward<F>(f));
+                    _usingHeap = false;
+                } else {
+                    void* p = ::operator new(sizeof(Fn), std::nothrow);
+                    if (!p) return false; // allocation failure without exceptions
+                    new (p) Fn(std::forward<F>(f));
+                    _heapPtr = p;
+                    _usingHeap = true;
+                }
+
+                // Set function pointers
+                _invoke = [](void* s) noexcept {
+                    Fn* fn = static_cast<Fn*>(s);
+                    (*fn)();
+                };
+                _move = [](void* dst, void* src) noexcept {
+                    Fn* s = static_cast<Fn*>(src);
+                    new (dst) Fn(std::move(*s));
+                    s->~Fn();
+                };
+                _destroy = [](void* s) noexcept {
+                    Fn* fn = static_cast<Fn*>(s);
+                    fn->~Fn();
+                };
+
+                return true;
+            }
+
+        private:
+            void moveFrom(SmallTask& other) noexcept {
+                if (!other._invoke) return;
+                _invoke = other._invoke;
+                _move = other._move;
+                _destroy = other._destroy;
+                _usingHeap = other._usingHeap;
+                if (other._usingHeap) {
+                    _heapPtr = other._heapPtr;
+                    other._heapPtr = nullptr;
+                } else {
+                    // Use move constructor into our buffer
+                    _move(static_cast<void*>(_buffer), const_cast<void*>(other.storage()));
+                }
+                other._invoke = nullptr;
+                other._move = nullptr;
+                other._destroy = nullptr;
+                other._usingHeap = false;
+            }
+        };
+
         struct ContractSlot {
             std::atomic<uint32_t> generation{1};           ///< Handle validation counter
             std::atomic<ContractState> state{ContractState::Free}; ///< Current lifecycle state
-            std::function<void()> work;                    ///< Work function
+            SmallTask work;                               ///< Work function (non-throwing wrapper)
             std::atomic<uint32_t> nextFree{INVALID_INDEX}; ///< Next free slot
             ExecutionType executionType{ExecutionType::AnyThread}; ///< Execution context (main/any thread)
         };
@@ -133,7 +253,7 @@ namespace Concurrency {
         std::vector<ContractSlot> _contracts;             ///< Contract storage
         std::unique_ptr<SignalTreeBase> _readyContracts;  ///< Ready work queue
         std::unique_ptr<SignalTreeBase> _mainThreadContracts; ///< Main thread work queue
-        std::atomic<uint32_t> _freeListHead{0};           ///< Free list head
+        std::atomic<uint64_t> _freeListHead{0};           ///< Free list head (packed: [tag:32 | index:32])
 
         std::atomic<size_t> _activeCount{0};              ///< Active contract count
         std::atomic<size_t> _scheduledCount{0};           ///< Scheduled count

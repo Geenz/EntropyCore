@@ -8,6 +8,8 @@
  */
 
 #include "WorkContractGroup.h"
+#include "../TypeSystem/TypeID.h"
+#include <format>
 #include "IConcurrencyProvider.h"
 #include <chrono>
 #include <cmath>
@@ -221,55 +223,67 @@ namespace Concurrency {
     }
 
     WorkContractHandle WorkContractGroup::createContract(std::function<void()> work, ExecutionType executionType) {
-        // Pop a free slot from the lock-free stack
-        uint32_t head = _freeListHead.load(std::memory_order_acquire);
-        
-        while (head != INVALID_INDEX) {
-            // Read the next pointer before we try to swing the head
-            uint32_t next = _contracts[head].nextFree.load(std::memory_order_acquire);
-            
-            // Try to swing the head to the next free slot
-            if (_freeListHead.compare_exchange_weak(head, next, 
-                                                   std::memory_order_acq_rel,
-                                                   std::memory_order_acquire)) {
-                // Success! We got this slot
-                break;
+        // Pop a free slot from the lock-free stack (ABA-resistant with tagged head)
+        auto packHead = [](uint32_t idx, uint32_t tag) -> uint64_t {
+            return (static_cast<uint64_t>(tag) << 32) | static_cast<uint64_t>(idx);
+        };
+        auto headIndex = [](uint64_t h) -> uint32_t { return static_cast<uint32_t>(h & 0xFFFFFFFFull); };
+        auto headTag   = [](uint64_t h) -> uint32_t { return static_cast<uint32_t>(h >> 32); };
+
+        uint64_t head = _freeListHead.load(std::memory_order_acquire);
+        for (;;) {
+            uint32_t idx = headIndex(head);
+            if (idx == INVALID_INDEX) {
+                return WorkContractHandle(); // No free slots available
             }
-            // CAS failed, head now contains the current head value, loop will retry
+            uint32_t next = _contracts[idx].nextFree.load(std::memory_order_acquire);
+            uint64_t newHead = packHead(next, headTag(head) + 1);
+            if (_freeListHead.compare_exchange_weak(head, newHead,
+                                                    std::memory_order_acq_rel,
+                                                    std::memory_order_acquire)) {
+                head = newHead; // Not necessary, but keeps head updated
+                // We successfully popped idx
+                uint32_t index = idx;
+                
+                auto& slot = _contracts[index];
+                
+                // Get current generation for handle before any modifications
+                uint32_t generation = slot.generation.load(std::memory_order_acquire);
+                
+                // Assign work into non-throwing wrapper; avoid exceptions entirely.
+                // We wrap the incoming callable to a noexcept thunk.
+                bool ok = slot.work.assign([fn = std::move(work)]() noexcept {
+                    if (fn) fn();
+                });
+                if (!ok) {
+                    // Allocation failed in wrapper; push slot back to free list and return invalid handle
+                    uint64_t old = _freeListHead.load(std::memory_order_acquire);
+                    for (;;) {
+                        uint32_t oldIdx = headIndex(old);
+                        slot.nextFree.store(oldIdx, std::memory_order_release);
+                        uint64_t newH = packHead(index, headTag(old) + 1);
+                        if (_freeListHead.compare_exchange_weak(old, newH,
+                                                                std::memory_order_acq_rel,
+                                                                std::memory_order_acquire)) {
+                            break;
+                        }
+                    }
+                    return WorkContractHandle();
+                }
+                slot.executionType = executionType;
+                
+                // Increment active count BEFORE making the slot visible as allocated.
+                // This ensures that any thread that successfully observes the Allocated state
+                // (via acquire) also observes the increased activeCount due to release/acquire
+                // synchronization on slot.state.
+                _activeCount.fetch_add(1, std::memory_order_acq_rel);
+                // Transition state to allocated
+                slot.state.store(ContractState::Allocated, std::memory_order_release);
+                
+                return WorkContractHandle(this, static_cast<uint32_t>(index), generation);
+            }
+            // CAS failed; head updated; retry
         }
-        
-        if (head == INVALID_INDEX) {
-            return WorkContractHandle();  // No free slots available
-        }
-        
-        uint32_t index = head;
-        
-        auto& slot = _contracts[index];
-        
-        // Get current generation for handle before any modifications
-        uint32_t generation = slot.generation.load(std::memory_order_acquire);
-        
-        try {
-            // Store the work function - this might throw
-            slot.work = std::move(work);
-            slot.executionType = executionType;
-        } catch (...) {
-            // Return slot to free list if work assignment fails
-            uint32_t oldHead = _freeListHead.load(std::memory_order_acquire);
-            do {
-                slot.nextFree.store(oldHead, std::memory_order_release);
-            } while (!_freeListHead.compare_exchange_weak(oldHead, index,
-                                                          std::memory_order_acq_rel,
-                                                          std::memory_order_acquire));
-            throw;  // Re-throw the exception
-        }
-        
-        // Transition state to allocated
-        slot.state.store(ContractState::Allocated, std::memory_order_release);
-        // Increment active count
-        _activeCount.fetch_add(1, std::memory_order_acq_rel);
-        
-        return WorkContractHandle(this, static_cast<uint32_t>(index), generation);
     }
 
     ScheduleResult WorkContractGroup::scheduleContract(const WorkContractHandle& handle) {
@@ -552,11 +566,11 @@ namespace Concurrency {
         if (handle.valid()) {
 
             auto& slot = _contracts[handle.handleIndex()];
-            auto work = std::move(slot.work);
+            auto task = std::move(slot.work);
 
             // Execute the work
-            if (work) {
-                work();
+            if (task) {
+                task();
             }
         }
     }
@@ -701,7 +715,7 @@ namespace Concurrency {
         slot.generation.fetch_add(1, std::memory_order_acq_rel);
         
         // Clear the work function to release resources
-        slot.work = nullptr;
+        slot.work.reset();
         
         // Clear from ready tree if it was scheduled
         if (previousState == ContractState::Scheduled) {
@@ -711,17 +725,6 @@ namespace Concurrency {
                 _readyContracts->clear(index);
             }
         }
-        
-        // Push the slot back onto the free list
-        uint32_t oldHead = _freeListHead.load(std::memory_order_acquire);
-        do {
-            slot.nextFree.store(oldHead, std::memory_order_release);
-            if (_freeListHead.compare_exchange_weak(oldHead, index,
-                                                   std::memory_order_acq_rel,
-                                                   std::memory_order_acquire)) {
-                break;
-            }
-        } while (true);
         
         // Update counters based on previous state
         if (previousState == ContractState::Allocated) {
@@ -757,8 +760,28 @@ namespace Concurrency {
             }
         }
 
-        // Always decrement active count
+        // Always decrement active count BEFORE exposing slot to free list to avoid transient
+        // activeCount > capacity windows under contention.
         auto newActiveCount = _activeCount.fetch_sub(1, std::memory_order_acq_rel) - 1;
+
+        // Now push the slot back onto the free list so new createContract() can reuse it (ABA-resistant)
+        auto packHead = [](uint32_t idx, uint32_t tag) -> uint64_t {
+            return (static_cast<uint64_t>(tag) << 32) | static_cast<uint64_t>(idx);
+        };
+        auto headIndex = [](uint64_t h) -> uint32_t { return static_cast<uint32_t>(h & 0xFFFFFFFFull); };
+        auto headTag   = [](uint64_t h) -> uint32_t { return static_cast<uint32_t>(h >> 32); };
+
+        uint64_t old = _freeListHead.load(std::memory_order_acquire);
+        for (;;) {
+            uint32_t oldIdx = headIndex(old);
+            slot.nextFree.store(oldIdx, std::memory_order_release);
+            uint64_t newH = packHead(index, headTag(old) + 1);
+            if (_freeListHead.compare_exchange_weak(old, newH,
+                                                    std::memory_order_acq_rel,
+                                                    std::memory_order_acquire)) {
+                break;
+            }
+        }
         
         // Notify all registered callbacks that capacity is available
         // This allows WorkGraphs to process deferred nodes
@@ -787,6 +810,40 @@ namespace Concurrency {
         std::lock_guard<std::mutex> lock(_callbackMutex);
         _onCapacityAvailableCallbacks.erase(it);
     }
+
+// Introspection and debug description overrides (EntropyObject)
+uint64_t WorkContractGroup::classHash() const noexcept {
+    static const uint64_t hash = static_cast<uint64_t>(EntropyEngine::Core::TypeSystem::createTypeId<WorkContractGroup>().id);
+    return hash;
+}
+
+std::string WorkContractGroup::toString() const {
+    // Include name and capacity for quick identification
+    return std::format("{}@{}(name=\"{}\", cap={})",
+                       className(), static_cast<const void*>(this), _name, _capacity);
+}
+
+std::string WorkContractGroup::debugString() const {
+    // Summarize key counters and state. Avoid locks; these are atomics/cold-path reads.
+    const auto active = _activeCount.load(std::memory_order_relaxed);
+    const auto sched = _scheduledCount.load(std::memory_order_relaxed);
+    const auto exec = _executingCount.load(std::memory_order_relaxed);
+    const auto sel = _selectingCount.load(std::memory_order_relaxed);
+    const auto mainSched = _mainThreadScheduledCount.load(std::memory_order_relaxed);
+    const auto mainExec = _mainThreadExecutingCount.load(std::memory_order_relaxed);
+    const auto mainSel = _mainThreadSelectingCount.load(std::memory_order_relaxed);
+    const bool stopping = _stopping.load(std::memory_order_relaxed);
+    const bool hasProvider = (_concurrencyProvider != nullptr);
+
+    return std::format(
+        "{} [refs:{} active:{} sched:{} exec:{} sel:{} mainSched:{} mainExec:{} mainSel:{} stopping:{} provider:{}]",
+        toString(), refCount(), active, sched, exec, sel, mainSched, mainExec, mainSel, stopping, hasProvider);
+}
+
+std::string WorkContractGroup::description() const {
+    // For now, same as debugString for richer description
+    return debugString();
+}
 
 } // namespace Concurrency
 } // namespace Core

@@ -19,6 +19,8 @@ int main() {
     
     WorkContractGroup group(1000);
     service.addWorkContractGroup(&group);
+
+    ENTROPY_LOG_INFO_CAT("WorkGraphExample", std::format("Group added to service: {}", group.debugString()));
     
     // Example 1: Basic work graph with dependencies and main thread work
     {
