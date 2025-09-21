@@ -16,7 +16,11 @@ class GameObject : public EntropyObject {
 public:
     explicit GameObject(std::string name) : _name(std::move(name)) {}
     std::string toString() const override {
-        return std::format("GameObject('{}')@{}", _name, static_cast<const void*>(this));
+        if (hasHandle()) {
+            return std::format("GameObject('{}')#({:p}, idx={}, gen={})", _name, handleOwner(), handleIndex(), handleGeneration());
+        } else {
+            return std::format("GameObject('{}')@{:p}", _name, static_cast<const void*>(this));
+        }
     }
     const std::string& name() const { return _name; }
 };
