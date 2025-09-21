@@ -171,9 +171,6 @@ namespace EntropyEngine {
              * 
              * Primary interface for runtime reflection. Features static instance
              * caching, type-safe field access, and automatic offset calculation.
-             * 
-             * Performance: O(1) type lookup, O(n) field collection on first access.
-             * Thread-safe after initialization.
              */
             class TypeInfo {
             private:
@@ -234,11 +231,6 @@ namespace EntropyEngine {
                  * For types registered with ENTROPY_REGISTER_TYPE, this function uses a
                  * compile-time path with static instance caching. Legacy types
                  * fall back to the runtime registration system.
-                 * 
-                 * Performance:
-                 * - Registered types: O(1) static instance access
-                 * - Legacy types: O(log n) map lookup
-                 * - Thread-safe after first access
                  * 
                  * @code
                  * // Get reflection info for a registered type

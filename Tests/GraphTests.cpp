@@ -39,14 +39,14 @@ TEST_CASE("DirectedAcyclicGraph basic operations", "[graph][dag]") {
         auto node2 = graph.addNode(TestNode{"Node2", 20});
         
         // Both nodes were added successfully
-        REQUIRE(node1.isValid());
-        REQUIRE(node2.isValid());
+        REQUIRE(graph.isHandleValid(node1));
+        REQUIRE(graph.isHandleValid(node2));
         
         // Verify node data
-        REQUIRE(node1.getData()->name == "Node1");
-        REQUIRE(node1.getData()->value == 10);
-        REQUIRE(node2.getData()->name == "Node2");
-        REQUIRE(node2.getData()->value == 20);
+        REQUIRE(graph.getNodeData(node1)->name == "Node1");
+        REQUIRE(graph.getNodeData(node1)->value == 10);
+        REQUIRE(graph.getNodeData(node2)->name == "Node2");
+        REQUIRE(graph.getNodeData(node2)->value == 20);
     }
     
     SECTION("Removing nodes") {
@@ -61,22 +61,22 @@ TEST_CASE("DirectedAcyclicGraph basic operations", "[graph][dag]") {
         graph.removeNode(node2);
         
         // node2 removed, node1 and node3 remain
-        REQUIRE(node1.isValid());
+        REQUIRE(graph.isHandleValid(node1));
         // Note: The handle itself is still "valid" as an object, but the node it points to is gone
         // We can verify this by checking if we can still get data
-        REQUIRE(node2.getData() == nullptr);
-        REQUIRE(node3.isValid());
+        REQUIRE(graph.getNodeData(node2) == nullptr);
+        REQUIRE(graph.isHandleValid(node3));
     }
     
     SECTION("Node handle validation") {
         DirectedAcyclicGraph<TestNode> graph;
         
         auto node1 = graph.addNode(TestNode{"Node1", 10});
-        REQUIRE(node1.isValid());
+        REQUIRE(graph.isHandleValid(node1));
         
         graph.removeNode(node1);
         // After removal, getData should return nullptr
-        REQUIRE(node1.getData() == nullptr);
+        REQUIRE(graph.getNodeData(node1) == nullptr);
     }
 }
 
@@ -177,7 +177,7 @@ TEST_CASE("DirectedAcyclicGraph traversal", "[graph][dag]") {
         
         // Find positions in sorted order (sorted contains indices, not handles)
         auto findIndex = [&](const AcyclicNodeHandle<TestNode>& handle) {
-            uint32_t targetIdx = handle.getIndex();
+            uint32_t targetIdx = handle.handleIndex();
             auto it = std::find(sorted.begin(), sorted.end(), targetIdx);
             return it - sorted.begin();
         };
@@ -206,8 +206,8 @@ TEST_CASE("DirectedAcyclicGraph traversal", "[graph][dag]") {
         graph.removeNode(node2);
         
         // After removal, getData should return nullptr
-        REQUIRE(node1.getData() == nullptr);
-        REQUIRE(node2.getData() == nullptr);
+        REQUIRE(graph.getNodeData(node1) == nullptr);
+        REQUIRE(graph.getNodeData(node2) == nullptr);
     }
 }
 
@@ -227,9 +227,10 @@ TEST_CASE("AcyclicNodeHandle operations", "[graph][dag]") {
         DirectedAcyclicGraph<TestNode> graph;
         
         auto parent = graph.addNode(TestNode{"Parent", 0});
-        auto child = parent.addChild(TestNode{"Child", 1});
+        auto child = graph.addNode(TestNode{"Child", 1});
+        graph.addEdge(parent, child);
         
-        REQUIRE(child.isValid());
+        REQUIRE(graph.isHandleValid(child));
         REQUIRE(graph.getChildren(parent).size() == 1);
         REQUIRE(graph.getChildren(parent)[0] == child);
         REQUIRE(graph.getParents(child).size() == 1);
@@ -243,12 +244,12 @@ TEST_CASE("AcyclicNodeHandle operations", "[graph][dag]") {
         const auto& constNode = node;
         
         // Non-const access
-        TestNode* data = node.getData();
+        TestNode* data = graph.getNodeData(node);
         REQUIRE(data != nullptr);
         data->value = 100;
         
         // Const access
-        const TestNode* constData = constNode.getData();
+        const TestNode* constData = graph.getNodeData(constNode);
         REQUIRE(constData != nullptr);
         REQUIRE(constData->value == 100);
     }

@@ -364,8 +364,12 @@ namespace std {
     template<>
     struct hash<EntropyEngine::Core::Concurrency::NodeHandle> {
         size_t operator()(const EntropyEngine::Core::Concurrency::NodeHandle& handle) const {
-            // Use the handle's internal data for hashing
-            return hash<uint64_t>{}(reinterpret_cast<uintptr_t>(handle.getData()));
+            // Combine owner pointer and packed handle id (index:generation) for stable identity
+            auto owner = reinterpret_cast<uintptr_t>(handle.handleOwner());
+            uint64_t id = handle.handleId();
+            // Fowler–Noll–Vo or a simple mix; keep it simple and fast
+            uint64_t mixed = static_cast<uint64_t>(owner) ^ (id + 0x9E3779B97F4A7C15ULL + (static_cast<uint64_t>(owner) << 6) + (static_cast<uint64_t>(owner) >> 2));
+            return std::hash<uint64_t>{}(mixed);
         }
     };
 }

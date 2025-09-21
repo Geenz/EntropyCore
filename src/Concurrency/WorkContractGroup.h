@@ -32,6 +32,10 @@
 #include <shared_mutex>
 #include <optional>
 #include <limits>
+#include <new>
+#include <type_traits>
+#include <utility>
+#include "../Core/EntropyObject.h"
 
 namespace EntropyEngine {
 namespace Core {
@@ -64,6 +68,12 @@ namespace Concurrency {
      * execution directly. External executors such as WorkService are required for
      * concurrent work processing. The class functions as a centralized work registry
      * where tasks are posted and claimed by worker threads.
+     * 
+     * Handle semantics:
+     * - WorkContractHandle derives from EntropyObject and is stamped with (owner + index + generation)
+     * - Copying a handle copies the stamped identity; validation is performed against this group's slots
+     * - The group owns the lifetime; when a slot is released, the object's identity is cleared and the
+     *   generation is incremented to invalidate stale handles
      * 
      * @code
      * // Complete workflow: mixed execution with worker service
@@ -99,7 +109,13 @@ namespace Concurrency {
      * service.stop();
      * @endcode
      */
-    class WorkContractGroup {
+    class WorkContractGroup : public EntropyEngine::Core::EntropyObject {
+    public:
+        const char* className() const noexcept override { return "WorkContractGroup"; }
+        uint64_t classHash() const noexcept override;
+        std::string toString() const override;
+        std::string debugString() const override;
+        std::string description() const override;
     private:
         /// Sentinel value indicating end of lock-free linked list or invalid slot
         /// Used in the free list implementation to mark the end of the chain and
@@ -116,10 +132,132 @@ namespace Concurrency {
          * atomic state transitions. The generation counter prevents use-after-free
          * by invalidating old handles when slots are reused.
          */
+        // A small callable wrapper for void() tasks used inside slots
+        // Provides small-buffer optimization and a nothrow heap fallback.
+        // Exception behavior:
+        // - assign(F&&) is noexcept; it returns false if constructing F throws or allocation fails.
+        // - operator() is noexcept; if the stored callable throws, std::terminate will be invoked.
+        // Callers should supply noexcept callables or catch exceptions within the callable to avoid termination.
+        class SmallTask {
+            static constexpr size_t BufferSize = 64; // tune if needed
+            using InvokeFn = void(*)(void*) noexcept;
+            using MoveFn   = void(*)(void*, void*) noexcept;
+            using DestroyFn= void(*)(void*) noexcept;
+
+            alignas(std::max_align_t) unsigned char _buffer[BufferSize];
+            void*      _heapPtr = nullptr;
+            InvokeFn   _invoke = nullptr;
+            MoveFn     _move = nullptr;
+            DestroyFn  _destroy = nullptr;
+            bool       _usingHeap = false;
+
+            void* storage() noexcept { return _usingHeap ? _heapPtr : static_cast<void*>(_buffer); }
+            const void* storage() const noexcept { return _usingHeap ? _heapPtr : static_cast<const void*>(_buffer); }
+
+        public:
+            SmallTask() noexcept = default;
+            ~SmallTask() { reset(); }
+
+            SmallTask(SmallTask&& other) noexcept { moveFrom(other); }
+            SmallTask& operator=(SmallTask&& other) noexcept {
+                if (this != &other) { reset(); moveFrom(other); }
+                return *this;
+            }
+
+            // Non-copyable to keep semantics simple
+            SmallTask(const SmallTask&) = delete;
+            SmallTask& operator=(const SmallTask&) = delete;
+
+            void reset() noexcept {
+                if (_destroy) {
+                    _destroy(storage());
+                }
+                if (_usingHeap && _heapPtr) {
+                    ::operator delete(_heapPtr, std::nothrow);
+                }
+                _heapPtr = nullptr;
+                _invoke = nullptr;
+                _move = nullptr;
+                _destroy = nullptr;
+                _usingHeap = false;
+            }
+
+            explicit operator bool() const noexcept { return _invoke != nullptr; }
+
+            void operator()() noexcept {
+                if (_invoke) _invoke(storage());
+            }
+
+            template <class F>
+            bool assign(F&& f) noexcept {
+                using Fn = std::decay_t<F>;
+                reset();
+
+                // Decide placement: SBO if it fits, else nothrow heap. Catch constructor exceptions.
+                if (sizeof(Fn) <= BufferSize && alignof(Fn) <= alignof(std::max_align_t)) {
+                    try {
+                        new (static_cast<void*>(_buffer)) Fn(std::forward<F>(f));
+                        _usingHeap = false;
+                    } catch (...) {
+                        // Leave object in reset state and report failure
+                        return false;
+                    }
+                } else {
+                    void* p = ::operator new(sizeof(Fn), std::nothrow);
+                    if (!p) return false; // allocation failure without exceptions
+                    try {
+                        new (p) Fn(std::forward<F>(f));
+                    } catch (...) {
+                        ::operator delete(p, std::nothrow);
+                        return false;
+                    }
+                    _heapPtr = p;
+                    _usingHeap = true;
+                }
+
+                // Set function pointers
+                _invoke = [](void* s) noexcept {
+                    Fn* fn = static_cast<Fn*>(s);
+                    (*fn)();
+                };
+                _move = [](void* dst, void* src) noexcept {
+                    Fn* s = static_cast<Fn*>(src);
+                    new (dst) Fn(std::move(*s));
+                    s->~Fn();
+                };
+                _destroy = [](void* s) noexcept {
+                    Fn* fn = static_cast<Fn*>(s);
+                    fn->~Fn();
+                };
+
+                return true;
+            }
+
+        private:
+            void moveFrom(SmallTask& other) noexcept {
+                if (!other._invoke) return;
+                _invoke = other._invoke;
+                _move = other._move;
+                _destroy = other._destroy;
+                _usingHeap = other._usingHeap;
+                if (other._usingHeap) {
+                    _heapPtr = other._heapPtr;
+                    other._heapPtr = nullptr;
+                } else {
+                    // Use move constructor into our buffer
+                    _move(static_cast<void*>(_buffer), const_cast<void*>(other.storage()));
+                }
+                other._invoke = nullptr;
+                other._move = nullptr;
+                other._destroy = nullptr;
+                other._usingHeap = false;
+            }
+        };
+
         struct ContractSlot {
             std::atomic<uint32_t> generation{1};           ///< Handle validation counter
             std::atomic<ContractState> state{ContractState::Free}; ///< Current lifecycle state
-            std::function<void()> work;                    ///< Work function
+            SmallTask work;                               ///< Work function (non-throwing wrapper)
             std::atomic<uint32_t> nextFree{INVALID_INDEX}; ///< Next free slot
             ExecutionType executionType{ExecutionType::AnyThread}; ///< Execution context (main/any thread)
         };
@@ -127,7 +265,7 @@ namespace Concurrency {
         std::vector<ContractSlot> _contracts;             ///< Contract storage
         std::unique_ptr<SignalTreeBase> _readyContracts;  ///< Ready work queue
         std::unique_ptr<SignalTreeBase> _mainThreadContracts; ///< Main thread work queue
-        std::atomic<uint32_t> _freeListHead{0};           ///< Free list head
+        std::atomic<uint64_t> _freeListHead{0};           ///< Free list head (packed: [tag:32(upper) | index:32(lower)])
 
         std::atomic<size_t> _activeCount{0};              ///< Active contract count
         std::atomic<size_t> _scheduledCount{0};           ///< Scheduled count

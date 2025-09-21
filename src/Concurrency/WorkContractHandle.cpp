@@ -9,44 +9,62 @@
 
 #include "WorkContractHandle.h"
 #include "WorkContractGroup.h"
+#include "../TypeSystem/TypeID.h"
+#include <format>
 
 namespace EntropyEngine {
 namespace Core {
 namespace Concurrency {
 
     ScheduleResult WorkContractHandle::schedule() {
-        if (!getGroup()) return ScheduleResult::Invalid;
-        return getGroup()->scheduleContract(*this);
+        auto* group = handleOwnerAs<WorkContractGroup>();
+        if (!group) return ScheduleResult::Invalid;
+        return group->scheduleContract(*this);
     }
     
     ScheduleResult WorkContractHandle::unschedule() {
-        if (!getGroup()) return ScheduleResult::Invalid;
-        return getGroup()->unscheduleContract(*this);
+        auto* group = handleOwnerAs<WorkContractGroup>();
+        if (!group) return ScheduleResult::Invalid;
+        return group->unscheduleContract(*this);
     }
     
     bool WorkContractHandle::valid() const {
-        return getGroup() && getGroup()->isValidHandle(*this);
+        auto* group = handleOwnerAs<WorkContractGroup>();
+        return group && group->isValidHandle(*this);
     }
     
     void WorkContractHandle::release() {
-        if (getGroup()) {
-            getGroup()->releaseContract(*this);
+        if (auto* group = handleOwnerAs<WorkContractGroup>()) {
+            group->releaseContract(*this);
         }
+        // Clear stamped identity to make subsequent calls fast no-ops
+        HandleAccess::clear(*this);
     }
     
     bool WorkContractHandle::isScheduled() const {
-        if (!getGroup()) return false;
-        
-        ContractState state = getGroup()->getContractState(*this);
-        return state == ContractState::Scheduled;
+        auto* group = handleOwnerAs<WorkContractGroup>();
+        if (!group) return false;
+        return group->getContractState(*this) == ContractState::Scheduled;
     }
     
     bool WorkContractHandle::isExecuting() const {
-        if (!getGroup()) return false;
-        
-        ContractState state = getGroup()->getContractState(*this);
-        return state == ContractState::Executing;
+        auto* group = handleOwnerAs<WorkContractGroup>();
+        if (!group) return false;
+        return group->getContractState(*this) == ContractState::Executing;
     }
+
+uint64_t WorkContractHandle::classHash() const noexcept {
+    static const uint64_t hash = static_cast<uint64_t>(EntropyEngine::Core::TypeSystem::createTypeId<WorkContractHandle>().id);
+    return hash;
+}
+
+std::string WorkContractHandle::toString() const {
+    if (hasHandle()) {
+        return std::format("{}@{}(owner={}, idx={}, gen={})",
+                           className(), static_cast<const void*>(this), handleOwner(), handleIndex(), handleGeneration());
+    }
+    return std::format("{}@{}(invalid)", className(), static_cast<const void*>(this));
+}
 
 } // namespace Concurrency
 } // namespace Core

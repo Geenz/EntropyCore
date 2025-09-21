@@ -92,6 +92,16 @@ namespace Concurrency {
     void WorkService::clear() {
         std::unique_lock<std::shared_mutex> lock(_workContractGroupsMutex);
 
+        // Release and disconnect all groups we retained on add
+        for (auto* group : _workContractGroups) {
+            if (group) {
+                // Clear back-reference so the group won't call back into us during destruction
+                group->setConcurrencyProvider(nullptr);
+                // Release the retain acquired in addWorkContractGroup
+                group->release();
+            }
+        }
+
         _workContractGroups.clear();
         _workContractGroupCount = 0;
 
@@ -114,6 +124,11 @@ namespace Concurrency {
         // Add the group
         _workContractGroups.push_back(contractGroup);
         _workContractGroupCount++;
+
+        // Retain the group while registered with the service (ref-counted semantics)
+        if (contractGroup) {
+            contractGroup->retain();
+        }
 
         // Notify scheduler of group change
         _scheduler->notifyGroupsChanged(_workContractGroups);
@@ -141,6 +156,9 @@ namespace Concurrency {
 
         // Clear the concurrency provider for this group
         contractGroup->setConcurrencyProvider(nullptr);
+
+        // Release the retain taken during add
+        contractGroup->release();
 
         return GroupOperationStatus::Removed;
     }
@@ -262,9 +280,6 @@ namespace Concurrency {
         }
     }
 
-
-
-
     void WorkService::notifyWorkAvailable(WorkContractGroup* group) {
         // We don't need to track which group has work, just that work is available
         _workAvailable = true;
@@ -272,14 +287,22 @@ namespace Concurrency {
     }
 
     void WorkService::notifyGroupDestroyed(WorkContractGroup* group) {
-        // When a group is destroyed, we should remove it from our list
-        // This is important to prevent accessing a destroyed group
-        auto status = removeWorkContractGroup(group);
-        ENTROPY_ASSERT(status != GroupOperationStatus::NotFound,
-                       "Group destruction notification for unknown group");
+        // When a group is destroyed, remove it without touching refcount to avoid
+        // releasing during its destructor.
+        std::unique_lock<std::shared_mutex> lock(_workContractGroupsMutex);
+
+        auto it = std::find(_workContractGroups.begin(), _workContractGroups.end(), group);
+        if (it != _workContractGroups.end()) {
+            _workContractGroups.erase(it);
+            _workContractGroupCount--;
+
+            // Notify scheduler of group change
+            _scheduler->notifyGroupsChanged(_workContractGroups);
+
+            // Clear the concurrency provider for this group (no release here)
+            group->setConcurrencyProvider(nullptr);
+        }
     }
-
-
 
     void WorkService::resetThreadLocalState() {
         // This only resets the thread-local state in the calling thread,

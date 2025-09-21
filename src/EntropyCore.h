@@ -21,6 +21,12 @@
 #include "CoreCommon.h"
 #include "ServiceLocator.h"
 
+// Core object model
+#include "Core/EntropyClass.h"
+#include "Core/EntropyObject.h"
+#include "Core/RefObject.h"
+#include "Core/EntropyInterop.h"
+
 // Type System
 #include "TypeSystem/GenericHandle.h"
 
