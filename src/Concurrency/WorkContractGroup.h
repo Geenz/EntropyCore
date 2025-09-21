@@ -132,9 +132,12 @@ namespace Concurrency {
          * atomic state transitions. The generation counter prevents use-after-free
          * by invalidating old handles when slots are reused.
          */
-        // A small, non-throwing callable wrapper for void() tasks used inside slots
-        // Provides small-buffer optimization and falls back to nothrow heap allocation.
-        // All operations are noexcept; assignment reports success via bool.
+        // A small callable wrapper for void() tasks used inside slots
+        // Provides small-buffer optimization and a nothrow heap fallback.
+        // Exception behavior:
+        // - assign(F&&) is noexcept; it returns false if constructing F throws or allocation fails.
+        // - operator() is noexcept; if the stored callable throws, std::terminate will be invoked.
+        // Callers should supply noexcept callables or catch exceptions within the callable to avoid termination.
         class SmallTask {
             static constexpr size_t BufferSize = 64; // tune if needed
             using InvokeFn = void(*)(void*) noexcept;
