@@ -1,7 +1,18 @@
-//
-// Created by goodh on 9/17/2025.
-//
-
+/**
+ * @file EntropyObject.h
+ * @brief Reference-counted base object with optional stamped handle identity
+ *
+ * EntropyObject provides a lightweight, thread-safe reference counting base for
+ * objects exposed across subsystem boundaries (C/C++/scripting). In addition to
+ * retain/release semantics, an object may be stamped with a handle identity
+ * (owner + index + generation) by a registry/owner to support generation-based
+ * validation and interop with handle-centric APIs.
+ *
+ * Typical usage:
+ * - Derive your public-facing object from EntropyObject
+ * - Let the owning container stamp identity via HandleAccess::set()
+ * - Clear the identity via HandleAccess::clear() when the slot is released
+ */
 #pragma once
 #include <atomic>
 #include <string>
@@ -17,15 +28,30 @@ namespace TypeSystem {
     template<class OwnerType> class GenericHandle; // fwd decl for helpers (optional)
     template<class T, class OwnerType> class TypedHandle; // fwd decl for helpers (optional)
 }
+
+/**
+ * @class EntropyObject
+ * @brief Ref-counted base with optional handle stamping and basic introspection
+ *
+ * Designed for safe sharing across module/language boundaries. Reference count
+ * operations are thread-safe. When stamped with a handle identity, the object
+ * can participate in owner/index/generation validation without coupling to
+ * a specific handle type.
+ */
 class EntropyObject {
 protected:
-    mutable std::atomic<uint32_t> _refCount{1};
+    mutable std::atomic<uint32_t> _refCount{1}; ///< Thread-safe retain/release counter
 
-    // Optional handle identity stamped by an owner/registry
+    /**
+     * @brief Optional handle identity stamped by an owner/registry
+     *
+     * When set, identifies the object within its owner using index+generation.
+     * This enables generation-based validation and C API interop.
+     */
     struct HandleCore {
-        void* owner = nullptr;
-        uint32_t index = 0;
-        uint32_t generation = 0;
+        void* owner = nullptr;      ///< Owning registry that stamped this object
+        uint32_t index = 0;         ///< Slot index within the owner
+        uint32_t generation = 0;    ///< Generation for stale-handle detection
         bool isSet() const noexcept { return owner != nullptr; }
         uint64_t id64() const noexcept { return (static_cast<uint64_t>(index) << 32) | generation; }
     } _handle{};
@@ -48,28 +74,71 @@ public:
     
     virtual ~EntropyObject() noexcept = default;
     
+    /**
+     * @brief Increments the reference count
+     * @note Thread-safe; may be called from any thread.
+     */
     void retain() const noexcept;
+    // Attempts to retain only if the object is still alive (refcount > 0).
+    // Returns true on success, false if the object is already dead.
+    bool tryRetain() const noexcept;
+
+    /**
+     * @brief Decrements the reference count and deletes when it reaches zero
+     * @note Thread-safe; may delete the object on the calling thread when count hits zero.
+     */
     void release() const noexcept;
+
+    /**
+     * @brief Current reference count (approximate under contention)
+     */
     uint32_t refCount() const noexcept;
 
     // Handle introspection (safe even if not stamped)
+    /** @return true if an owner has stamped this object with handle identity */
     bool hasHandle() const noexcept { return _handle.isSet(); }
+    /** @return Owner pointer that stamped this object, or null if none */
     const void* handleOwner() const noexcept { return _handle.owner; }
+    /** @return Index value stamped by the owner (undefined if !hasHandle()) */
     uint32_t handleIndex() const noexcept { return _handle.index; }
+    /** @return Generation value stamped by the owner (undefined if !hasHandle()) */
     uint32_t handleGeneration() const noexcept { return _handle.generation; }
+    /** @return 64-bit packed index:generation identifier (undefined if !hasHandle()) */
     uint64_t handleId() const noexcept { return _handle.id64(); }
+
+    /**
+     * @brief Returns the stamped owner pointer cast to the requested type
+     * @tparam OwnerT Expected owner class type (e.g., WorkContractGroup)
+     * @return Owner pointer cast to OwnerT*, or nullptr if not stamped
+     * @note Safe by construction: owners stamp the object with the true owner pointer
+     */
+    template <class OwnerT>
+    OwnerT* handleOwnerAs() const noexcept {
+        return static_cast<OwnerT*>(_handle.owner);
+    }
     
+    /** @brief Runtime class name for diagnostics and reflection */
     virtual const char* className() const noexcept { return "EntropyObject"; }
+    /** @brief Stable type hash for cross-language identification */
     virtual uint64_t classHash() const noexcept;
     
+    /** @brief Human-readable short string (class@ptr by default) */
     virtual std::string toString() const;
+    /** @brief Debug-oriented string including refcount and handle when present */
     virtual std::string debugString() const;
+    /** @brief Long-form description; defaults to toString() */
     virtual std::string description() const;
     
+    /** @brief Optional richer type information; may be null */
     virtual const TypeSystem::TypeInfo* typeInfo() const { return nullptr; }
 };
 
-// Minimal helper to allow owners to stamp/clear identity without friending
+/**
+ * @brief Helper allowing owners to stamp/clear identity without friending each derived type
+ *
+ * Usage: HandleAccess::set(obj, owner, index, generation) when allocating; and
+ * HandleAccess::clear(obj) before releasing/bumping generation.
+ */
 struct HandleAccess {
     static void set(EntropyObject& o, void* owner, uint32_t index, uint32_t generation) noexcept { o._setHandleIdentity(owner, index, generation); }
     static void clear(EntropyObject& o) noexcept { o._clearHandleIdentity(); }

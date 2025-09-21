@@ -4,6 +4,7 @@
 #include "Core/EntropyClass.h"
 #include <thread>
 #include <vector>
+#include <atomic>
 
 using namespace EntropyEngine::Core;
 
@@ -259,15 +260,19 @@ TEST_CASE("Thread safety", "[EntropyObject][Threading]")
         const int numThreads = 10;
         const int numCopies = 100;
         
+        std::atomic<bool> mismatch{false};
         std::vector<std::thread> threads;
         for (int i = 0; i < numThreads; ++i)
         {
-            threads.emplace_back([ref, numCopies]()
+            threads.emplace_back([ref, numCopies, &mismatch]()
             {
                 for (int j = 0; j < numCopies; ++j)
                 {
                     RefObject<TestObject> localCopy = ref;
-                    REQUIRE(localCopy->value == 42);
+                    int val = localCopy->value;
+                    if (val != 42) {
+                        mismatch.store(true, std::memory_order_relaxed);
+                    }
                     std::this_thread::yield();
                 }
             });
@@ -278,6 +283,7 @@ TEST_CASE("Thread safety", "[EntropyObject][Threading]")
             thread.join();
         }
         
+        REQUIRE_FALSE(mismatch.load());
         REQUIRE(ref->refCount() == 1);
     }
 }

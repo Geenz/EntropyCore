@@ -30,7 +30,9 @@ public:
 
     // Explicit tag-based constructors to clarify intent
     explicit RefObject(adopt_t, T* ptr) noexcept : _ptr(ptr) {}
-    explicit RefObject(retain_t, T* ptr) noexcept : _ptr(ptr) { if (_ptr) _ptr->retain(); }
+    explicit RefObject(retain_t, T* ptr) noexcept : _ptr(nullptr) {
+        if (ptr && ptr->tryRetain()) _ptr = ptr;
+    }
             
     ~RefObject() noexcept {
         if (_ptr) _ptr->release();
@@ -48,14 +50,19 @@ public:
     }
     
     RefObject(const RefObject& other) noexcept : _ptr(other._ptr) {
-        if (_ptr) _ptr->retain();
+        if (_ptr && !_ptr->tryRetain()) {
+            _ptr = nullptr;
+        }
     }
     
     RefObject& operator=(const RefObject& other) noexcept {
         if (this != &other) {
+            T* newPtr = other._ptr;
+            if (newPtr && !newPtr->tryRetain()) {
+                newPtr = nullptr;
+            }
             T* old = _ptr;
-            _ptr = other._ptr;
-            if (_ptr) _ptr->retain();
+            _ptr = newPtr;
             if (old) old->release();
         }
         return *this;
@@ -64,7 +71,9 @@ public:
     // Converting copy ctor from RefObject<U> where U derives from T (upcast)
     template<class U, class = std::enable_if_t<std::is_base_of_v<T, U>>> 
     RefObject(const RefObject<U>& other) noexcept : _ptr(static_cast<T*>(other.get())) {
-        if (_ptr) _ptr->retain();
+        if (_ptr && !_ptr->tryRetain()) {
+            _ptr = nullptr;
+        }
     }
 
     // Converting move ctor from RefObject<U> where U derives from T (upcast)
@@ -76,7 +85,9 @@ public:
     RefObject& operator=(const RefObject<U>& other) noexcept {
         T* newPtr = static_cast<T*>(other.get());
         if (_ptr != newPtr) {
-            if (newPtr) newPtr->retain();
+            if (newPtr && !newPtr->tryRetain()) {
+                newPtr = nullptr;
+            }
             T* old = _ptr;
             _ptr = newPtr;
             if (old) old->release();
@@ -107,7 +118,8 @@ public:
     }
     
     void reset(T* ptr = nullptr) noexcept {
-        if (ptr == _ptr) return; // guard against self-reset which would drop refcount and leave dangling pointer
+        if (ptr == _ptr) return; // no-op if identical
+        if (ptr) ptr->retain();  // take ownership of new before dropping old
         T* old = _ptr;
         _ptr = ptr;
         if (old) old->release();
@@ -153,13 +165,17 @@ struct RefPtrEq {
 // Casting helpers: wrap the same underlying pointer and RETAIN it to avoid double-release
 template<class To, class From>
 RefObject<To> ref_static_cast(const RefObject<From>& r) noexcept {
-    auto p = static_cast<To*>(r.get());
-    return p ? RefObject<To>(retain, p) : RefObject<To>{};
+    if (auto p = static_cast<To*>(r.get())) {
+        if (p->tryRetain()) return RefObject<To>(adopt, p);
+    }
+    return RefObject<To>{};
 }
 
 template<class To, class From>
 RefObject<To> ref_dynamic_cast(const RefObject<From>& r) noexcept {
-    if (auto p = dynamic_cast<To*>(r.get())) return RefObject<To>(retain, p);
+    if (auto p = dynamic_cast<To*>(r.get())) {
+        if (p->tryRetain()) return RefObject<To>(adopt, p);
+    }
     return RefObject<To>{};
 }
 

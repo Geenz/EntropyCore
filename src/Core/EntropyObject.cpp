@@ -12,19 +12,12 @@ namespace EntropyEngine::Core {
         
 void EntropyObject::retain() const noexcept
 {
-#ifdef ENTROPY_DEBUG
-    uint32_t newCount = _refCount.fetch_add(1, std::memory_order_relaxed) + 1;
-    ENTROPY_LOG_TRACE_CAT("RefCount", 
-        std::format("Retain {} @ {} -> refcount={}", 
-            className(), static_cast<const void*>(this), newCount));
-#else
-    _refCount.fetch_add(1, std::memory_order_relaxed);
-#endif
+    _refCount.fetch_add(1, std::memory_order_acq_rel);
 }
         
 void EntropyObject::release() const noexcept
 {
-    uint32_t oldCount = _refCount.fetch_sub(1, std::memory_order_release);
+    uint32_t oldCount = _refCount.fetch_sub(1, std::memory_order_acq_rel);
     
 #ifdef ENTROPY_DEBUG
     uint32_t newCount = oldCount - 1;
@@ -48,7 +41,22 @@ void EntropyObject::release() const noexcept
         
 uint32_t EntropyObject::refCount() const noexcept
 {
-    return _refCount.load(std::memory_order_relaxed);
+    // Use acquire to ensure we observe the latest completed updates after thread joins
+    return _refCount.load(std::memory_order_acquire);
+}
+
+bool EntropyObject::tryRetain() const noexcept
+{
+    uint32_t count = _refCount.load(std::memory_order_acquire);
+    while (count != 0) {
+        if (_refCount.compare_exchange_weak(count, count + 1,
+                                            std::memory_order_acq_rel,
+                                            std::memory_order_acquire)) {
+            return true;
+        }
+        // count has been updated with the current value; loop and retry unless it hit 0
+    }
+    return false;
 }
         
 uint64_t EntropyObject::classHash() const noexcept

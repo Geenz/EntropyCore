@@ -213,26 +213,6 @@ ENTROPY_API EntropyObjectRef* entropy_resolve_handle(EntropyHandle h) {
     return fn(h.owner, h.index, h.generation);
 }
 
-// Generic call surfaces (not implemented yet in this upheaval; return UNAVAILABLE)
-ENTROPY_API EntropyStatus entropy_call(EntropyHandle /*h*/,
-                                       uint32_t /*method_id*/,
-                                       const uint8_t* /*req*/, uint32_t /*req_len*/,
-                                       /*out*/ uint8_t** out_resp, /*out*/ uint32_t* out_resp_len) {
-    if (out_resp) *out_resp = nullptr;
-    if (out_resp_len) *out_resp_len = 0;
-    return ENTROPY_ERR_UNAVAILABLE;
-}
-
-ENTROPY_API EntropyStatus entropy_call_buf(EntropyHandle h,
-                                           uint32_t method_id,
-                                           const uint8_t* req, uint32_t req_len,
-                                           /*out*/ EntropyOwnedBuffer* out_resp) {
-    if (out_resp) { out_resp->ptr = nullptr; out_resp->len = 0; }
-    uint8_t* p = nullptr; uint32_t n = 0;
-    EntropyStatus st = entropy_call(h, method_id, req, req_len, &p, &n);
-    if (st == ENTROPY_OK && out_resp) { out_resp->ptr = p; out_resp->len = n; }
-    return st;
-}
 
 // (No demo functionality is provided in the C API implementation. The API is production-only.)
 

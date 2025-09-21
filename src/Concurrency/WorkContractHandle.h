@@ -9,17 +9,18 @@
 
 /**
  * @file WorkContractHandle.h
- * @brief Type-safe handle for managing work contract lifecycle and scheduling
- * 
- * This file provides a safe interface for scheduling and monitoring work contracts
- * using generation-based validation to prevent use-after-free errors.
+ * @brief EntropyObject-based handle for scheduling and managing work contracts
+ *
+ * WorkContractHandle is an EntropyObject stamped with (owner + index + generation)
+ * by WorkContractGroup. It exposes a safe API for scheduling, cancellation, and status
+ * queries while preserving generation-based validation to prevent use-after-free.
  */
 
 #pragma once
 
 #include <atomic>
 #include <cstdint>
-#include "../TypeSystem/GenericHandle.h"
+#include "../Core/EntropyObject.h"
 
 namespace EntropyEngine {
 namespace Core {
@@ -55,234 +56,137 @@ namespace Concurrency {
 
     /**
      * @class WorkContractHandle
-     * @brief Type-safe handle for scheduling and managing work contracts
-     * 
-     * WorkContractHandle provides a type-safe interface for managing work contract
-     * lifecycle. It enables reliable task scheduling, status monitoring, and lifecycle
-     * management while preventing race conditions and use-after-free errors through
-     * generation-based validation.
-     * 
-     * Suitable applications include:
-     * - Job systems requiring reliable work scheduling
-     * - Task graphs with controlled execution timing
-     * - Systems requiring deferred work execution with optional cancellation
-     * 
-     * The handle implements generation-based validation to accurately report work
-     * validity and execution status. This mechanism ensures safe operation without
-     * unexpected behavior or memory errors.
-     * 
-     * Key features:
-     * - Streamlined API: schedule(), unschedule(), valid(), release()
-     * - Automatic invalidation upon execution start (prevents double-execution)
-     * - Generation-based validation prevents use-after-free
-     * - Lightweight and copyable for flexible usage
-     * 
+     * @brief EntropyObject-stamped handle for work contracts
+     *
+     * This handle derives from EntropyObject and carries a stamped identity:
+     * owner (WorkContractGroup*), slot index, and generation. The group is the
+     * source of truth; validation compares the stamp against the group's slot.
+     *
+     * Copy semantics:
+     * - Copying a handle copies only its stamped identity (no ownership transfer).
+     * - The group owns lifetime; when a slot is freed, the handle becomes invalid.
+     *
      * Typical workflow:
-     * 1. Create work via WorkContractGroup::createContract()
-     * 2. Schedule it with handle.schedule() when ready
-     * 3. Optionally unschedule with handle.unschedule() if plans change
-     * 4. Handle becomes invalid once execution starts - automatic cleanup
-     * 
+     * 1. Create via WorkContractGroup::createContract()
+     * 2. Call schedule(), optionally unschedule()
+     * 3. After execution starts or release(), valid() becomes false
+     *
      * @code
      * WorkContractGroup group(1024);
-     * 
-     * // Create some work
-     * auto handle = group.createContract([]() {
-     *     processImportantData();
-     * });
-     * 
-     * // Schedule it when ready
-     * if (handle.schedule() == ScheduleResult::Scheduled) {
-     *     std::cout << "Work is now scheduled for execution\n";
-     * }
-     * 
-     * // Maybe change your mind?
-     * if (handle.unschedule() == ScheduleResult::NotScheduled) {
-     *     std::cout << "Cancelled before execution\n";
-     * }
-     * 
-     * // Always safe to check
-     * if (handle.valid()) {
-     *     // Handle still points to valid work
-     * }
+     * auto h = group.createContract([]{ doWork(); });
+     * if (h.schedule() == ScheduleResult::Scheduled) { // queued }
+     * if (h.valid()) { // still schedulable }
      * @endcode
      */
-    class WorkContractHandle : public TypeSystem::TypedHandle<WorkContractTag, WorkContractGroup> {
+    class WorkContractHandle : public EntropyEngine::Core::EntropyObject {
     private:
-        using BaseHandle = TypeSystem::TypedHandle<WorkContractTag, WorkContractGroup>;
-        
         friend class WorkContractGroup;
-        
-        /**
-         * @brief Private constructor for creating valid handles
-         * 
-         * Only WorkContractGroup can create valid handles. Always use
-         * WorkContractGroup::createContract() to obtain handles.
-         * 
-         * @param group Pointer to the WorkContractGroup that owns this contract
-         * @param index Slot index within the group's contract array
-         * @param generation Current generation of the slot for validation
-         */
-        WorkContractHandle(WorkContractGroup* group, uint32_t index, uint32_t generation)
-            : BaseHandle(group, index, generation) {}
-            
+
+        // Private constructor for group to stamp identity
+        WorkContractHandle(WorkContractGroup* group, uint32_t index, uint32_t generation) {
+            HandleAccess::set(*this, group, index, generation);
+        }
+
     public:
-        /**
-         * @brief Default constructor creates an invalid handle
-         * 
-         * Creates a handle that doesn't point to any work. Check valid() before use.
-         */
-        WorkContractHandle() : BaseHandle() {}
-        
+        // Default: invalid (no stamped identity)
+        WorkContractHandle() = default;
+
+        // Copy constructor: create a new handle object stamped with the same identity
+        WorkContractHandle(const WorkContractHandle& other) noexcept {
+            if (other.hasHandle()) {
+                HandleAccess::set(*this,
+                                  const_cast<void*>(other.handleOwner()),
+                                  other.handleIndex(),
+                                  other.handleGeneration());
+            }
+        }
+        // Copy assignment
+        WorkContractHandle& operator=(const WorkContractHandle& other) noexcept {
+            if (this != &other) {
+                if (other.hasHandle()) {
+                    HandleAccess::set(*this,
+                                      const_cast<void*>(other.handleOwner()),
+                                      other.handleIndex(),
+                                      other.handleGeneration());
+                } else {
+                    HandleAccess::clear(*this);
+                }
+            }
+            return *this;
+        }
+        // Move constructor
+        WorkContractHandle(WorkContractHandle&& other) noexcept {
+            if (other.hasHandle()) {
+                HandleAccess::set(*this,
+                                  const_cast<void*>(other.handleOwner()),
+                                  other.handleIndex(),
+                                  other.handleGeneration());
+            }
+        }
+        // Move assignment
+        WorkContractHandle& operator=(WorkContractHandle&& other) noexcept {
+            if (this != &other) {
+                if (other.hasHandle()) {
+                    HandleAccess::set(*this,
+                                      const_cast<void*>(other.handleOwner()),
+                                      other.handleIndex(),
+                                      other.handleGeneration());
+                } else {
+                    HandleAccess::clear(*this);
+                }
+            }
+            return *this;
+        }
+
+        // Maintain the same public API
+
         /**
          * @brief Schedules this contract for execution
-         * 
-         * Marks work as ready for execution. Work runs as soon as an executor
-         * becomes available.
-         * 
-         * @return ScheduleResult indicating outcome:
-         *         - Scheduled: Successfully added to execution list
-         *         - AlreadyScheduled: Already in the execution list
-         *         - Executing: Currently running
-         *         - Invalid: Handle doesn't point to valid work
-         * 
+         *
+         * Transitions Allocated -> Scheduled. No-op if already scheduled.
+         * @return Scheduled, AlreadyScheduled, Executing, or Invalid
+         *
          * @code
-         * auto handle = group.createContract([]() { doWork(); });
-         * 
-         * auto result = handle.schedule();
-         * if (result == ScheduleResult::Scheduled) {
-         *     // Work is now in line for execution
-         * } else if (result == ScheduleResult::AlreadyScheduled) {
-         *     // Someone else already scheduled it - that's fine
-         * }
+         * auto h = group.createContract([]{});
+         * if (h.schedule() == ScheduleResult::Scheduled) { // scheduled }
          * @endcode
          */
         ScheduleResult schedule();
-        
+
         /**
-         * @brief Attempts to remove this contract from the execution list
-         * 
-         * Cancels scheduled work before execution begins. Already executing work
-         * cannot be cancelled. Atomic and lock-free operation.
-         * 
-         * @return ScheduleResult indicating outcome:
-         *         - NotScheduled: Successfully removed
-         *         - Executing: Too late - already running
-         *         - Invalid: Handle doesn't point to valid work
-         * 
-         * @code
-         * auto handle = group.createContract([]() { expensiveWork(); });
-         * handle.schedule();
-         * 
-         * // Oh wait, we don't need this anymore
-         * if (handle.unschedule() == ScheduleResult::NotScheduled) {
-         *     std::cout << "Cancelled before execution - saved some CPU time\n";
-         * } else {
-         *     std::cout << "Too late to cancel - work is running or done\n";
-         * }
-         * @endcode
+         * @brief Attempts to remove this contract from the ready set
+         *
+         * Succeeds only when in Scheduled state; cannot cancel while Executing.
+         * @return NotScheduled on success, Executing if too late, or Invalid
          */
         ScheduleResult unschedule();
-        
+
         /**
-         * @brief Checks if this handle still points to valid work
-         * 
-         * Handle becomes invalid when work executes, release() is called, or
-         * the owning group is destroyed.
-         * 
-         * @return true if the handle points to valid, accessible work
-         * 
-         * @code
-         * auto handle = group.createContract([]() { doWork(); });
-         * 
-         * if (handle.valid()) {
-         *     // Safe to schedule, unschedule, or check status
-         *     handle.schedule();
-         * } else {
-         *     // Handle is stale - work is gone or already executed
-         *     std::cout << "Work is no longer available\n";
-         * }
-         * @endcode
+         * @brief Checks whether this handle still refers to a live slot
+         * @return true if owner, index, and generation match a live slot
          */
         bool valid() const;
-        
+
         /**
-         * @brief Immediately frees this work contract and cleans up resources
-         * 
-         * Removes work from execution lists and invalidates handle. If executing,
-         * work completes but handle becomes invalid immediately.
-         * 
-         * @note Destructive - handle cannot be reused after calling this
-         * 
-         * @code
-         * auto handle = group.createContract([]() { expensiveWork(); });
-         * handle.schedule();
-         * 
-         * // Emergency shutdown - cancel everything
-         * handle.release();
-         * 
-         * // Handle is now invalid
-         * assert(!handle.valid());
-         * @endcode
+         * @brief Immediately frees this contract's slot
+         *
+         * Clears scheduling state and returns the slot to the free list. After this, valid() is false.
          */
         void release();
-        
+
         /**
-         * @brief Gets the work contract group that owns this contract
-         * 
-         * Returns the group that created this handle, useful for creating more
-         * work or checking statistics.
-         * 
-         * @return Pointer to owning WorkContractGroup, or nullptr if invalid
-         * 
-         * @code
-         * auto handle = group.createContract([]() { doWork(); });
-         * 
-         * WorkContractGroup* ownerGroup = handle.getGroup();
-         * if (ownerGroup) {
-         *     std::cout << "Group has " << ownerGroup->activeCount() << " active contracts\n";
-         * }
-         * @endcode
-         */
-        WorkContractGroup* getGroup() const { return getOwner(); }
-        
-        /**
-         * @brief Checks if this work is currently scheduled for execution
-         * 
-         * Returns true if work is in execution list waiting to run.
-         * 
-         * @return true if scheduled and waiting, false otherwise
-         * 
-         * @code
-         * auto handle = group.createContract([]() { doWork(); });
-         * handle.schedule();
-         * 
-         * if (handle.isScheduled()) {
-         *     std::cout << "Work is waiting in line for execution\n";
-         * }
-         * @endcode
+         * @brief Reports whether the contract is currently Scheduled
+         * @return true if scheduled and waiting for execution
          */
         bool isScheduled() const;
-        
+
         /**
-         * @brief Checks if this work is currently being executed
-         * 
-         * Returns true if work is actively running. Cannot be scheduled or
-         * unscheduled while executing.
-         * 
-         * @return true if currently running, false otherwise
-         * 
-         * @code
-         * auto handle = group.createContract([]() { longRunningWork(); });
-         * handle.schedule();
-         * 
-         * // Later, from another thread
-         * if (handle.isExecuting()) {
-         *     std::cout << "Work is running - can't cancel now\n";
-         * }
-         * @endcode
+         * @brief Reports whether the contract is currently Executing
+         * @return true if actively running
          */
         bool isExecuting() const;
+
+        const char* className() const noexcept override { return "WorkContractHandle"; }
     };
 
 } // namespace Concurrency

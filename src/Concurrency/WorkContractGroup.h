@@ -65,6 +65,12 @@ namespace Concurrency {
      * concurrent work processing. The class functions as a centralized work registry
      * where tasks are posted and claimed by worker threads.
      * 
+     * Handle semantics:
+     * - WorkContractHandle derives from EntropyObject and is stamped with (owner + index + generation)
+     * - Copying a handle copies the stamped identity; validation is performed against this group's slots
+     * - The group owns the lifetime; when a slot is released, the object's identity is cleared and the
+     *   generation is incremented to invalidate stale handles
+     * 
      * @code
      * // Complete workflow: mixed execution with worker service
      * WorkContractGroup group(1024);

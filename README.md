@@ -87,7 +87,7 @@ target_link_libraries(YourTarget PRIVATE EntropyCore::Core)
 The Work Contract system provides a lock-free framework for managing parallel work execution.
 
 - WorkContractGroup: lock-free work pool and scheduling primitives
-- WorkContractHandle: type-safe handle managing contract lifecycle
+- WorkContractHandle: EntropyObject-based handle stamped with owner/index/generation
 
 Credit: Inspired by Michael A. Maniscalco’s work_contract (https://github.com/buildingcpp/work_contract).
 

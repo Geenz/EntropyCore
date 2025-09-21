@@ -113,17 +113,6 @@ ENTROPY_API EntropyStatus entropy_handle_info(EntropyHandle h,
                                              EntropyTypeId* out_type_id,
                                              EntropyOwnedString* out_class_name);
 
-// Generic call surface (opaque method ids and byte payloads)
-ENTROPY_API EntropyStatus entropy_call(EntropyHandle h,
-                                       uint32_t method_id,
-                                       const uint8_t* req, uint32_t req_len,
-                                       /*out*/ uint8_t** out_resp, /*out*/ uint32_t* out_resp_len);
-
-// Convenience wrapper using owned buffer
-ENTROPY_API EntropyStatus entropy_call_buf(EntropyHandle h,
-                                           uint32_t method_id,
-                                           const uint8_t* req, uint32_t req_len,
-                                           /*out*/ EntropyOwnedBuffer* out_resp);
 
 // Owner vtable registration & generic resolver (process-local) ---------------
 typedef EntropyObjectRef* (*EntropyResolveFn)(const void* owner, uint32_t index, uint32_t generation);

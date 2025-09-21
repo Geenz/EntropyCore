@@ -179,7 +179,7 @@ SCENARIO("WorkContractGroup handle validation", "[workcontract][experimental][va
             }
             
             AND_WHEN("The handle is released") {
-                uint32_t originalIndex = handle.getIndex();
+                uint32_t originalIndex = handle.handleIndex();
                 handle.release();
                 
                 THEN("It should no longer be valid") {

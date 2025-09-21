@@ -275,7 +275,7 @@ namespace Concurrency {
     ScheduleResult WorkContractGroup::scheduleContract(const WorkContractHandle& handle) {
         if (!validateHandle(handle)) return ScheduleResult::Invalid;
         
-        uint32_t index = handle.getIndex();
+        uint32_t index = handle.handleIndex();
         auto& slot = _contracts[index];
         
         // Try to transition from Allocated to Scheduled
@@ -315,7 +315,7 @@ namespace Concurrency {
     ScheduleResult WorkContractGroup::unscheduleContract(const WorkContractHandle& handle) {
         if (!validateHandle(handle)) return ScheduleResult::Invalid;
         
-        uint32_t index = handle.getIndex();
+        uint32_t index = handle.handleIndex();
         auto& slot = _contracts[index];
         
         // Check current state
@@ -358,7 +358,7 @@ namespace Concurrency {
     void WorkContractGroup::releaseContract(const WorkContractHandle& handle) {
         if (!validateHandle(handle)) return;
 
-        uint32_t index = handle.getIndex();
+        uint32_t index = handle.handleIndex();
         
         // Bounds check to prevent out-of-bounds access
         if (index >= _capacity) return;
@@ -551,7 +551,7 @@ namespace Concurrency {
     void WorkContractGroup::executeContract(const WorkContractHandle& handle) {
         if (handle.valid()) {
 
-            auto& slot = _contracts[handle.getIndex()];
+            auto& slot = _contracts[handle.handleIndex()];
             auto work = std::move(slot.work);
 
             // Execute the work
@@ -562,7 +562,7 @@ namespace Concurrency {
     }
 
     void WorkContractGroup::completeExecution(const WorkContractHandle& handle) {
-        uint32_t index = handle.getIndex();
+        uint32_t index = handle.handleIndex();
         if (index >= _capacity) return;
 
         auto& slot = _contracts[index];
@@ -578,7 +578,7 @@ namespace Concurrency {
     }
     
     void WorkContractGroup::completeMainThreadExecution(const WorkContractHandle& handle) {
-        uint32_t index = handle.getIndex();
+        uint32_t index = handle.handleIndex();
         if (index >= _capacity) return;
 
         auto& slot = _contracts[index];
@@ -671,22 +671,22 @@ namespace Concurrency {
     }
 
     bool WorkContractGroup::validateHandle(const WorkContractHandle& handle) const noexcept {
-        // Check owner
-        if (handle.getOwner() != this) return false;
+        // Check owner via stamped identity
+        if (handle.handleOwner() != static_cast<const void*>(this)) return false;
         
         // Check index bounds
-        uint32_t index = handle.getIndex();
+        uint32_t index = handle.handleIndex();
         if (index >= _capacity) return false;
         
         // Check generation
         uint32_t currentGen = _contracts[index].generation.load(std::memory_order_acquire);
-        return currentGen == handle.getGeneration();
+        return currentGen == handle.handleGeneration();
     }
     
     ContractState WorkContractGroup::getContractState(const WorkContractHandle& handle) const noexcept {
         if (!validateHandle(handle)) return ContractState::Free;
         
-        uint32_t index = handle.getIndex();
+        uint32_t index = handle.handleIndex();
         return _contracts[index].state.load(std::memory_order_acquire);
     }
 

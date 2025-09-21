@@ -15,37 +15,38 @@ namespace Core {
 namespace Concurrency {
 
     ScheduleResult WorkContractHandle::schedule() {
-        if (!getGroup()) return ScheduleResult::Invalid;
-        return getGroup()->scheduleContract(*this);
+        auto* group = handleOwnerAs<WorkContractGroup>();
+        if (!group) return ScheduleResult::Invalid;
+        return group->scheduleContract(*this);
     }
     
     ScheduleResult WorkContractHandle::unschedule() {
-        if (!getGroup()) return ScheduleResult::Invalid;
-        return getGroup()->unscheduleContract(*this);
+        auto* group = handleOwnerAs<WorkContractGroup>();
+        if (!group) return ScheduleResult::Invalid;
+        return group->unscheduleContract(*this);
     }
     
     bool WorkContractHandle::valid() const {
-        return getGroup() && getGroup()->isValidHandle(*this);
+        auto* group = handleOwnerAs<WorkContractGroup>();
+        return group && group->isValidHandle(*this);
     }
     
     void WorkContractHandle::release() {
-        if (getGroup()) {
-            getGroup()->releaseContract(*this);
+        if (auto* group = handleOwnerAs<WorkContractGroup>()) {
+            group->releaseContract(*this);
         }
     }
     
     bool WorkContractHandle::isScheduled() const {
-        if (!getGroup()) return false;
-        
-        ContractState state = getGroup()->getContractState(*this);
-        return state == ContractState::Scheduled;
+        auto* group = handleOwnerAs<WorkContractGroup>();
+        if (!group) return false;
+        return group->getContractState(*this) == ContractState::Scheduled;
     }
     
     bool WorkContractHandle::isExecuting() const {
-        if (!getGroup()) return false;
-        
-        ContractState state = getGroup()->getContractState(*this);
-        return state == ContractState::Executing;
+        auto* group = handleOwnerAs<WorkContractGroup>();
+        if (!group) return false;
+        return group->getContractState(*this) == ContractState::Executing;
     }
 
 } // namespace Concurrency
