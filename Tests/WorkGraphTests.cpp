@@ -339,7 +339,7 @@ SCENARIO("WorkGraph completion callback", "[workgraph][experimental][callback]")
         std::mutex orderMutex;
         
         graph.setNodeCompleteCallback([&](WorkGraph::NodeHandle node) {
-            if (auto* nodeData = node.getData()) {
+            if (auto* nodeData = graph.getNodeData(node)) {
                 std::lock_guard<std::mutex> lock(orderMutex);
                 completionOrder.push_back(nodeData->name);
             }

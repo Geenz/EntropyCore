@@ -27,7 +27,8 @@ bool NodeScheduler::scheduleNode(NodeHandle node) {
     if (_config.enableDebugLogging) {
         ENTROPY_LOG_DEBUG_CAT("NodeScheduler", "scheduleNode() called");
     }
-    auto* nodeData = node.getData();
+    auto* dag = node.handleOwnerAs<Graph::DirectedAcyclicGraph<WorkGraphNode>>();
+    auto* nodeData = dag ? dag->getNodeData(node) : nullptr;
     if (!nodeData) {
         if (_config.enableDebugLogging) {
             ENTROPY_LOG_DEBUG_CAT("NodeScheduler", "scheduleNode() - no node data");
@@ -217,7 +218,8 @@ std::function<void()> NodeScheduler::createWorkWrapper(NodeHandle node) {
             return;  // Scheduler is gone, do nothing
         }
         
-        auto* nodeData = node.getData();
+        auto* dag = node.handleOwnerAs<Graph::DirectedAcyclicGraph<WorkGraphNode>>();
+        auto* nodeData = dag ? dag->getNodeData(node) : nullptr;
         if (!nodeData) {
             return;
         }

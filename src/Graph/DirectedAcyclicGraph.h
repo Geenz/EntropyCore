@@ -197,7 +197,7 @@ namespace Graph {
                 return false;
             }
             
-            uint32_t index = node.getIndex();
+            uint32_t index = node.handleIndex();
             
             // Remove all edges from and to this node
             removeAllEdges(index);
@@ -224,8 +224,8 @@ namespace Graph {
                 return false;
             }
             
-            uint32_t fromIdx = from.getIndex();
-            uint32_t toIdx = to.getIndex();
+            uint32_t fromIdx = from.handleIndex();
+            uint32_t toIdx = to.handleIndex();
             
             // Remove from outgoing edges of source
             auto& outgoing = _edges[fromIdx].outgoing;
@@ -274,8 +274,8 @@ namespace Graph {
                 throw std::invalid_argument("Invalid handle provided to addEdge");
             }
             
-            uint32_t fromIdx = from.getIndex();
-            uint32_t toIdx = to.getIndex();
+            uint32_t fromIdx = from.handleIndex();
+            uint32_t toIdx = to.handleIndex();
             
             // Check for self-loops
             if (fromIdx == toIdx) {
@@ -320,7 +320,7 @@ namespace Graph {
             if (!isHandleValid(node)) {
                 return nullptr;
             }
-            return &_nodes[node.getIndex()].data;
+            return &_nodes[node.handleIndex()].data;
         }
 
         /**
@@ -344,7 +344,7 @@ namespace Graph {
             if (!isHandleValid(node)) {
                 return nullptr;
             }
-            return &_nodes[node.getIndex()].data;
+            return &_nodes[node.handleIndex()].data;
         }
         
         /**
@@ -367,13 +367,14 @@ namespace Graph {
          * @endcode
          */
         bool isHandleValid(const AcyclicNodeHandle<T>& handle) const {
-            if (!handle.isValid()) return false;
+            auto* owner = handle.template handleOwnerAs<DirectedAcyclicGraph<T>>();
+            if (owner != this) return false;
             
-            uint32_t index = handle.getIndex();
+            uint32_t index = handle.handleIndex();
             if (index >= _nodes.size()) return false;
             
             return _nodes[index].occupied && 
-                   _nodes[index].generation.load() == handle.getGeneration();
+                   _nodes[index].generation.load() == handle.handleGeneration();
         }
         
         /**
@@ -572,7 +573,7 @@ namespace Graph {
             std::vector<AcyclicNodeHandle<T>> children;
             if (!isHandleValid(node)) return children;
             
-            auto childIndices = getOutgoingEdges(node.getIndex());
+            auto childIndices = getOutgoingEdges(node.handleIndex());
             children.reserve(childIndices.size());
             
             for (uint32_t childIndex : childIndices) {
@@ -612,7 +613,7 @@ namespace Graph {
             std::vector<AcyclicNodeHandle<T>> parents;
             if (!isHandleValid(node)) return parents;
             
-            auto parentIndices = getIncomingEdges(node.getIndex());
+            auto parentIndices = getIncomingEdges(node.handleIndex());
             parents.reserve(parentIndices.size());
             
             for (uint32_t parentIndex : parentIndices) {
@@ -695,82 +696,6 @@ namespace Graph {
 
     };
 
-    template<class T>
-    /**
-     * @brief Adds a child node and creates an edge to it
-     *
-     * @param data Data for the new child node
-     * @return Handle to the newly created child
-     * @throws std::invalid_argument If handle is invalid or would create cycle
-     *
-     * @code
-     * DirectedAcyclicGraph<std::string> graph;
-     * auto parent = graph.addNode("Parent Task");
-     * auto child1 = parent.addChild("Child Task 1");
-     * auto child2 = parent.addChild("Child Task 2");
-     *
-     * // Now, parent -> child1 and parent -> child2 edges exist.
-     * @endcode
-     */
-    AcyclicNodeHandle<T> AcyclicNodeHandle<T>::addChild(T data) {
-        ENTROPY_ASSERT(this->isValid(), "Cannot add child to invalid handle.");
-        
-        // Create new node
-        auto childNode = this->getOwner()->addNode(std::move(data));
-        
-        // Add edge from this node to child
-        this->getOwner()->addEdge(*this, childNode);
-        
-        return childNode;
-    }
-
-    template<class T>
-    /**
-     * @brief Gets mutable pointer to node data
-     *
-     * @return Pointer to node data, or nullptr if handle is invalid
-     *
-     * @code
-     * DirectedAcyclicGraph<int> graph;
-     * auto nodeHandle = graph.addNode(10);
-     * int* data = nodeHandle.getData();
-     * if (data) {
-     *     *data = 20; // Modify the node's data through the handle
-     * }
-     * @endcode
-     */
-    T* AcyclicNodeHandle<T>::getData() {
-        if (!this->isValid()) {
-            return nullptr;
-        }
-
-        return this->getOwner()->getNodeData(*this);
-    }
-
-    template<class T>
-    /**
-     * @brief Gets const pointer to node data
-     *
-     * Provides read-only access with handle validation.
-     *
-     * @return Const pointer to the node's data, or nullptr if invalid
-     *
-     * @code
-     * DirectedAcyclicGraph<std::string> graph;
-     * auto nodeHandle = graph.addNode("Hello");
-     * const std::string* data = nodeHandle.getData();
-     * if (data) {
-     *     std::cout << *data << std::endl; // Read the node's data
-     * }
-     * @endcode
-     */
-    const T* AcyclicNodeHandle<T>::getData() const {
-        if (!this->isValid()) {
-            return nullptr;
-        }
-
-        return this->getOwner()->getNodeData(*this);
-    }
 
 
 } // namespace Graph

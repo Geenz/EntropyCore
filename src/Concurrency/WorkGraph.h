@@ -683,6 +683,10 @@ namespace Concurrency {
          */
         Core::EventBus* getEventBus();
         
+        // New: access node data from handle
+        WorkGraphNode* getNodeData(const NodeHandle& node) { return _graph.getNodeData(node); }
+        const WorkGraphNode* getNodeData(const NodeHandle& node) const { return _graph.getNodeData(node); }
+        
         /**
          * @brief Snapshot of your workflow's current state - how's it doing?
          * 

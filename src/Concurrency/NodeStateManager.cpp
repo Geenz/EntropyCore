@@ -21,7 +21,8 @@ bool NodeStateManager::transitionState(NodeHandle node, NodeState from, NodeStat
     // Validate transition
     if (!canTransition(from, to)) {
         // Log warning for invalid state transition attempts
-        auto* nodeData = node.getData();
+        auto* dag0 = node.handleOwnerAs<Graph::DirectedAcyclicGraph<WorkGraphNode>>();
+        auto* nodeData = dag0 ? dag0->getNodeData(node) : nullptr;
         if (nodeData) {
             auto msg = std::format("Invalid state transition attempted: {} -> {} for node: {}", 
                                    getStateName(from), getStateName(to), nodeData->name);
@@ -31,7 +32,8 @@ bool NodeStateManager::transitionState(NodeHandle node, NodeState from, NodeStat
     }
     
     // Get node data for atomic state update
-    auto* nodeData = node.getData();
+    auto* dag = node.handleOwnerAs<Graph::DirectedAcyclicGraph<WorkGraphNode>>();
+    auto* nodeData = dag ? dag->getNodeData(node) : nullptr;
     if (!nodeData) {
         return false;
     }
@@ -54,7 +56,8 @@ bool NodeStateManager::transitionState(NodeHandle node, NodeState from, NodeStat
 }
 
 void NodeStateManager::forceState(NodeHandle node, NodeState to) {
-    auto* nodeData = node.getData();
+    auto* dag = node.handleOwnerAs<Graph::DirectedAcyclicGraph<WorkGraphNode>>();
+    auto* nodeData = dag ? dag->getNodeData(node) : nullptr;
     if (!nodeData) {
         return;
     }
@@ -71,7 +74,8 @@ void NodeStateManager::forceState(NodeHandle node, NodeState to) {
 }
 
 NodeState NodeStateManager::getState(NodeHandle node) const {
-    auto* nodeData = node.getData();
+    auto* dag = node.handleOwnerAs<Graph::DirectedAcyclicGraph<WorkGraphNode>>();
+    auto* nodeData = dag ? dag->getNodeData(node) : nullptr;
     if (!nodeData) {
         return NodeState::Pending;
     }
@@ -80,7 +84,8 @@ NodeState NodeStateManager::getState(NodeHandle node) const {
 }
 
 void NodeStateManager::registerNode(NodeHandle node, NodeState initialState) {
-    auto* nodeData = node.getData();
+    auto* dag = node.handleOwnerAs<Graph::DirectedAcyclicGraph<WorkGraphNode>>();
+    auto* nodeData = dag ? dag->getNodeData(node) : nullptr;
     if (!nodeData) {
         return;
     }
@@ -123,7 +128,8 @@ void NodeStateManager::getNodesInState(NodeState state,
     
     // Check each node's atomic state directly
     for (const auto& node : allNodes) {
-        auto* nodeData = node.getData();
+        auto* dagN = node.handleOwnerAs<Graph::DirectedAcyclicGraph<WorkGraphNode>>();
+        auto* nodeData = dagN ? dagN->getNodeData(node) : nullptr;
         if (nodeData && nodeData->state.load(std::memory_order_acquire) == state) {
             output.push_back(node);
         }
