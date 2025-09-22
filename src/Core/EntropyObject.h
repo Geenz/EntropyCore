@@ -8,10 +8,23 @@
  * (owner + index + generation) by a registry/owner to support generation-based
  * validation and interop with handle-centric APIs.
  *
- * Typical usage:
- * - Derive your public-facing object from EntropyObject
- * - Let the owning container stamp identity via HandleAccess::set()
- * - Clear the identity via HandleAccess::clear() when the slot is released
+ * @code
+ * // Owner/registry stamps identity when allocating a slot
+ * struct SlotOwner {
+ *     void allocate(EntropyObject& obj, uint32_t index, uint32_t generation) {
+ *         HandleAccess::set(obj, this, index, generation);
+ *     }
+ *     void release(EntropyObject& obj) {
+ *         HandleAccess::clear(obj);
+ *     }
+ * };
+ *
+ * // Cross-boundary usage with retain/release
+ * EntropyObject* shared = createObject();
+ * shared->retain();   // Share safely
+ * useObject(shared);
+ * shared->release();  // Balance retains to avoid leaks
+ * @endcode
  */
 #pragma once
 #include <atomic>
@@ -79,8 +92,23 @@ public:
      * @note Thread-safe; may be called from any thread.
      */
     void retain() const noexcept;
-    // Attempts to retain only if the object is still alive (refcount > 0).
-    // Returns true on success, false if the object is already dead.
+    /**
+     * @brief Attempts to retain only if the object is still alive
+     * 
+     * Use when you need to safely grab a reference from a background thread
+     * without racing destruction. If the refcount has already reached zero,
+     * tryRetain() returns false and the object must not be used.
+     * 
+     * @return true on success (reference acquired), false if object already dead
+     * 
+     * @code
+     * // Example: Try to use an object that might be concurrently released
+     * if (obj->tryRetain()) {
+     *     doWork(obj);
+     *     obj->release();
+     * } // else: object was already destroyed or being destroyed
+     * @endcode
+     */
     bool tryRetain() const noexcept;
 
     /**

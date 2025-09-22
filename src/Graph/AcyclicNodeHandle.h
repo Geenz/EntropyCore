@@ -30,21 +30,54 @@ namespace EntropyEngine {
             // Optional tag retained for compatibility with any external code
             struct NodeTag {};
 
+            /**
+             * @class AcyclicNodeHandle
+             * @brief Lightweight, stamped handle to a node in a DirectedAcyclicGraph<T>
+             *
+             * AcyclicNodeHandle<T> is an EntropyObject that carries an owner+index+generation
+             * identity stamped by DirectedAcyclicGraph<T>. The generation prevents stale-handle
+             * reuse after node removal. Handles are cheap to copy and compare.
+             *
+             * @code
+             * using namespace EntropyEngine::Core::Graph;
+             * DirectedAcyclicGraph<int> dag;
+             * auto a = dag.addNode(1);
+             * auto b = dag.addNode(2);
+             * dag.addEdge(a, b);           // b depends on a
+             *
+             * // Validate and access data
+             * if (dag.isHandleValid(a)) {
+             *     int* data = dag.getNodeData(a);
+             *     if (data) { *data = 42; }
+             * }
+             *
+             * // Equality compares owner and stamped id (index:generation)
+             * bool same = (a == a);
+             * bool different = (a != b);
+             * @endcode
+             */
             template<class T>
             class AcyclicNodeHandle : public EntropyEngine::Core::EntropyObject {
                 using GraphT = DirectedAcyclicGraph<T>;
                 template<typename U>
                 friend class DirectedAcyclicGraph;
             public:
-                // Default: invalid (no stamped identity)
+                /** @brief Default-constructed handle with no identity (invalid) */
                 AcyclicNodeHandle() = default;
 
-                // Stamping constructor used by DirectedAcyclicGraph<T>
+                /**
+                 * @brief Internal constructor used by DirectedAcyclicGraph to stamp identity
+                 * @param graph Owning graph that stamps the handle
+                 * @param index Slot index within the graph
+                 * @param generation Generation counter for stale-handle detection
+                 */
                 AcyclicNodeHandle(GraphT* graph, uint32_t index, uint32_t generation) {
                     EntropyEngine::Core::HandleAccess::set(*this, graph, index, generation);
                 }
 
-                // Copy constructor: base default-constructed; copy stamp from other
+                /**
+                 * @brief Copies the stamped identity from another handle (if present)
+                 */
                 AcyclicNodeHandle(const AcyclicNodeHandle& other) noexcept {
                     if (other.hasHandle()) {
                         EntropyEngine::Core::HandleAccess::set(
@@ -54,7 +87,9 @@ namespace EntropyEngine {
                             other.handleGeneration());
                     }
                 }
-                // Copy assignment: copy or clear stamp
+                /**
+                 * @brief Copies or clears the stamped identity depending on source validity
+                 */
                 AcyclicNodeHandle& operator=(const AcyclicNodeHandle& other) noexcept {
                     if (this != &other) {
                         if (other.hasHandle()) {
@@ -69,7 +104,9 @@ namespace EntropyEngine {
                     }
                     return *this;
                 }
-                // Move constructor: copy stamp (handles are lightweight)
+                /**
+                 * @brief Moves by copying the stamped identity (handles are lightweight)
+                 */
                 AcyclicNodeHandle(AcyclicNodeHandle&& other) noexcept {
                     if (other.hasHandle()) {
                         EntropyEngine::Core::HandleAccess::set(
@@ -79,7 +116,9 @@ namespace EntropyEngine {
                             other.handleGeneration());
                     }
                 }
-                // Move assignment
+                /**
+                 * @brief Move-assigns by copying or clearing identity based on source validity
+                 */
                 AcyclicNodeHandle& operator=(AcyclicNodeHandle&& other) noexcept {
                     if (this != &other) {
                         if (other.hasHandle()) {
@@ -95,8 +134,9 @@ namespace EntropyEngine {
                     return *this;
                 }
 
-                // Diagnostics
+                /** @brief Runtime type name for diagnostics */
                 const char* className() const noexcept override { return "AcyclicNodeHandle"; }
+                /** @brief Stable type hash for cross-language identification */
                 uint64_t classHash() const noexcept override {
                     using EntropyEngine::Core::TypeSystem::createTypeId;
                     static const uint64_t hash = static_cast<uint64_t>(createTypeId< AcyclicNodeHandle<T> >().id);
@@ -104,11 +144,17 @@ namespace EntropyEngine {
                 }
             };
 
-            // Equality operators for tests and containers
+            /**
+             * @brief Equality compares owning graph and packed index:generation id
+             * @return true if both handles refer to the same stamped node
+             */
             template<class T>
             inline bool operator==(const AcyclicNodeHandle<T>& a, const AcyclicNodeHandle<T>& b) noexcept {
                 return a.handleOwner() == b.handleOwner() && a.handleId() == b.handleId();
             }
+            /**
+             * @brief Inequality is the negation of equality
+             */
             template<class T>
             inline bool operator!=(const AcyclicNodeHandle<T>& a, const AcyclicNodeHandle<T>& b) noexcept {
                 return !(a == b);

@@ -683,7 +683,23 @@ namespace Concurrency {
          */
         Core::EventBus* getEventBus();
         
-        // New: access node data from handle
+        /**
+         * @brief Access the underlying node payload for a given handle
+         * 
+         * Useful for debugging or custom instrumentation. Returns nullptr if the
+         * handle is invalid or the node has been removed. Prefer using public APIs
+         * for scheduling and state changes rather than mutating node data directly.
+         * 
+         * @param node Handle to the node whose data you want
+         * @return Pointer to node data (mutable/const), or nullptr if not valid
+         * 
+         * @code
+         * // Read node name for logging
+         * if (auto* n = graph.getNodeData(handle)) {
+         *     LOG_INFO("Node: {}", n->name);
+         * }
+         * @endcode
+         */
         WorkGraphNode* getNodeData(const NodeHandle& node) { return _graph.getNodeData(node); }
         const WorkGraphNode* getNodeData(const NodeHandle& node) const { return _graph.getNodeData(node); }
         
