@@ -53,6 +53,7 @@ set(ENTROPY_CORE_SOURCES
         src/Concurrency/NodeScheduler.cpp
         src/Core/EntropyObject.cpp
         src/Core/EntropyCAPI.cpp
+        src/Core/EntropyServiceRegistry.cpp
 )
 
 set(ENTROPY_CORE_HEADERS
@@ -65,6 +66,8 @@ set(ENTROPY_CORE_HEADERS
         src/Core/entropy_c_api.h
         src/EntropyCore.h
         src/ServiceLocator.h
+        src/Core/EntropyService.h
+        src/Core/EntropyServiceRegistry.h
         src/TypeSystem/GenericHandle.h
         src/TypeSystem/TypeID.h
         src/TypeSystem/Reflection.h
