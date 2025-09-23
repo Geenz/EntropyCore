@@ -54,6 +54,8 @@ set(ENTROPY_CORE_SOURCES
         src/Core/EntropyObject.cpp
         src/Core/EntropyCAPI.cpp
         src/Core/EntropyServiceRegistry.cpp
+        src/Core/EntropyApplication.cpp
+        src/Core/EntropyMain.cpp
 )
 
 set(ENTROPY_CORE_HEADERS
@@ -68,6 +70,8 @@ set(ENTROPY_CORE_HEADERS
         src/ServiceLocator.h
         src/Core/EntropyService.h
         src/Core/EntropyServiceRegistry.h
+        src/Core/EntropyApplication.h
+        src/Core/entropy_main.h
         src/TypeSystem/GenericHandle.h
         src/TypeSystem/TypeID.h
         src/TypeSystem/Reflection.h
@@ -161,6 +165,19 @@ set_source_files_properties(Examples/CInteropExample.c PROPERTIES LANGUAGE CXX)
 set_property(TARGET CInteropExample PROPERTY LINKER_LANGUAGE CXX)
 # Link core
 target_link_libraries(CInteropExample PRIVATE EntropyCore)
+
+# EntropyMain C ABI example
+add_executable(EntropyMainExample Examples/EntropyMainExample.c)
+# Compile the C example with C++ language to satisfy project language constraints
+set_source_files_properties(Examples/EntropyMainExample.c PROPERTIES LANGUAGE CXX)
+# Ensure C++ linker is used
+set_property(TARGET EntropyMainExample PROPERTY LINKER_LANGUAGE CXX)
+# Link core
+target_link_libraries(EntropyMainExample PRIVATE EntropyCore)
+
+# C++ EntropyApplication/Delegate example
+add_executable(EntropyCppAppExample Examples/EntropyCppAppExample.cpp)
+target_link_libraries(EntropyCppAppExample PRIVATE EntropyCore)
 
 # Link Tracy to examples if available
 if(ENTROPY_WITH_TRACY)
