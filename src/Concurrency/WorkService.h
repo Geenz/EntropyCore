@@ -27,6 +27,7 @@
 #include <limits>
 #include "IWorkScheduler.h"
 #include "IConcurrencyProvider.h"
+#include "Core/EntropyService.h"
 
 namespace EntropyEngine {
 namespace Core {
@@ -80,7 +81,7 @@ class WorkContractGroup;
  * service.stop();
  * @endcode
  */
-class WorkService : public IConcurrencyProvider {
+class WorkService : public IConcurrencyProvider, public ::EntropyEngine::Core::EntropyService {
     // Shared mutex management of work contract groups
     // HOT PATH (executeWork): shared_lock for concurrent reads
     // COLD PATH (add/remove): unique_lock for exclusive writes
@@ -160,6 +161,18 @@ public:
      */
     ~WorkService();
 
+        // EntropyService identity and lifecycle
+        const char* id() const override { return "com.entropy.core.work"; }
+        const char* name() const override { return "WorkService"; }
+        const char* version() const override { return "0.1.0"; }
+        // RTTI-less static type identity and dependencies
+        TypeSystem::TypeID typeId() const override { return TypeSystem::createTypeId<WorkService>(); }
+        std::vector<TypeSystem::TypeID> dependsOnTypes() const override { return {}; }
+        std::vector<std::string> dependsOn() const override { return {}; }
+
+        void load() override { /* no-op: configured on construction */ }
+        void unload() override { clear(); }
+
     /**
      * @brief Starts the worker threads and begins executing work.
      *
@@ -171,7 +184,7 @@ public:
      * service.start();  // Workers now actively looking for work
      * @endcode
      */
-    void start();
+    void start() override;
 
     /**
      * @brief Signals all worker threads to stop (non-blocking).
@@ -209,7 +222,7 @@ public:
      * service.stop();  // Stop and wait for all threads (blocking)
      * @endcode
      */
-    void stop();
+    void stop() override;
 
     /**
      * @brief Removes all registered work groups (only when stopped).

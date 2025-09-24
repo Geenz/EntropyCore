@@ -9,12 +9,14 @@ endif()
 project(EntropyCore 
     VERSION 1.0.0
     DESCRIPTION "Core utilities and concurrency primitives for Entropy Engine"
-    LANGUAGES CXX
+    LANGUAGES C CXX
 )
 
 # Options
 option(BUILD_SHARED_LIBS "Build as a shared library" OFF)
 option(ENTROPY_BUILD_TESTS "Build tests for EntropyCore" OFF)
+# Entropy does not depend on C++ RTTI. You may optionally disable RTTI for these targets if desired.
+option(ENTROPY_REQUIRE_NO_RTTI "Disable C++ RTTI for Entropy targets" OFF)
 
 # Set C++20 standard with modules support
 set(CMAKE_CXX_STANDARD 20)
@@ -42,6 +44,7 @@ endif()
 set(ENTROPY_CORE_SOURCES
         src/Logging/Logger.cpp
         src/Logging/ConsoleSink.cpp
+        src/Logging/CLogger.cpp
         src/Concurrency/WorkContractHandle.cpp
         src/Concurrency/WorkContractGroup.cpp
         src/Concurrency/WorkGraph.cpp
@@ -53,6 +56,9 @@ set(ENTROPY_CORE_SOURCES
         src/Concurrency/NodeScheduler.cpp
         src/Core/EntropyObject.cpp
         src/Core/EntropyCAPI.cpp
+        src/Core/EntropyServiceRegistry.cpp
+        src/Core/EntropyApplication.cpp
+        src/Core/EntropyMain.cpp
 )
 
 set(ENTROPY_CORE_HEADERS
@@ -65,6 +71,10 @@ set(ENTROPY_CORE_HEADERS
         src/Core/entropy_c_api.h
         src/EntropyCore.h
         src/ServiceLocator.h
+        src/Core/EntropyService.h
+        src/Core/EntropyServiceRegistry.h
+        src/Core/EntropyApplication.h
+        src/Core/entropy_main.h
         src/TypeSystem/GenericHandle.h
         src/TypeSystem/TypeID.h
         src/TypeSystem/Reflection.h
@@ -79,6 +89,7 @@ set(ENTROPY_CORE_HEADERS
         src/Logging/ILogSink.h
         src/Logging/ConsoleSink.h
         src/Logging/Logger.h
+        src/Logging/CLogger.h
         src/Concurrency/WorkContractHandle.h
         src/Concurrency/WorkContractGroup.h
         src/Concurrency/WorkGraph.h
@@ -152,12 +163,21 @@ target_link_libraries(EntropyObjectHandleExample PRIVATE EntropyCore)
 
 # C ABI example (pure C)
 add_executable(CInteropExample Examples/CInteropExample.c Examples/CInteropExample_linkshim.cpp)
-# Compile the C example with C++ language to satisfy project language constraints
-set_source_files_properties(Examples/CInteropExample.c PROPERTIES LANGUAGE CXX)
 # Link against the C++ library; ensure C++ linker is used on some toolchains
 set_property(TARGET CInteropExample PROPERTY LINKER_LANGUAGE CXX)
 # Link core
 target_link_libraries(CInteropExample PRIVATE EntropyCore)
+
+# EntropyMain C ABI example
+add_executable(EntropyMainExample Examples/EntropyMainExample.c)
+# Ensure C++ linker is used (C target linking against C++ library)
+set_property(TARGET EntropyMainExample PROPERTY LINKER_LANGUAGE CXX)
+# Link core
+target_link_libraries(EntropyMainExample PRIVATE EntropyCore)
+
+# C++ EntropyApplication/Delegate example
+add_executable(EntropyCppAppExample Examples/EntropyCppAppExample.cpp)
+target_link_libraries(EntropyCppAppExample PRIVATE EntropyCore)
 
 # Link Tracy to examples if available
 if(ENTROPY_WITH_TRACY)
@@ -175,13 +195,24 @@ if(WIN32)
     target_compile_definitions(EntropyCore PUBLIC WIN32_LEAN_AND_MEAN EntropyWindows)
     if(MSVC)
         target_compile_options(EntropyCore PRIVATE /W4)
-        # Use static runtime library to match vcpkg dependencies
-        set_property(TARGET EntropyCore PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-        set_property(TARGET WorkContractExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-        set_property(TARGET WorkGraphYieldableExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-        set_property(TARGET EntropyObjectExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-        set_property(TARGET EntropyObjectHandleExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-        set_property(TARGET CInteropExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+        # Use dynamic runtime library (/MD, /MDd) to match vcpkg defaults and avoid RTL mismatch
+        set_property(TARGET EntropyCore PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+        set_property(TARGET WorkContractExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+        set_property(TARGET WorkGraphYieldableExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+        set_property(TARGET EntropyObjectExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+        set_property(TARGET EntropyObjectHandleExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+        set_property(TARGET CInteropExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+        set_property(TARGET EntropyMainExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+        set_property(TARGET EntropyCppAppExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+        # Optionally disable RTTI if requested
+        if(ENTROPY_REQUIRE_NO_RTTI)
+            target_compile_options(EntropyCore PRIVATE /GR-)
+            foreach(tgt IN ITEMS WorkContractExample WorkGraphYieldableExample EntropyObjectExample EntropyObjectHandleExample CInteropExample EntropyMainExample EntropyCppAppExample)
+                if(TARGET ${tgt})
+                    target_compile_options(${tgt} PRIVATE /GR-)
+                endif()
+            endforeach()
+        endif()
     endif()
 else()
     # Settings for non-Windows platforms (macOS, Linux)
@@ -193,6 +224,15 @@ else()
     elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         # Linux specific
         target_compile_definitions(EntropyCore PUBLIC EntropyLinux)
+    endif()
+    # Optionally disable RTTI if requested
+    if(ENTROPY_REQUIRE_NO_RTTI)
+        target_compile_options(EntropyCore PRIVATE -fno-rtti)
+        foreach(tgt IN ITEMS WorkContractExample WorkGraphYieldableExample EntropyObjectExample EntropyObjectHandleExample CInteropExample EntropyMainExample EntropyCppAppExample)
+            if(TARGET ${tgt})
+                target_compile_options(${tgt} PRIVATE -fno-rtti)
+            endif()
+        endforeach()
     endif()
 endif()
 
