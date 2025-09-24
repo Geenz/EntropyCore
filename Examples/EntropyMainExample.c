@@ -1,14 +1,14 @@
 #include <Core/entropy_main.h>
-#include <Logging/Logger.h>
+#include <Logging/CLogger.h>
 
 static void will_finish(EntropyApp* app, void* userdata) {
     (void)app; (void)userdata;
-    ENTROPY_LOG_INFO("[EntropyMainExample] will_finish_launching");
+    ENTROPY_LOG_INFO_F("[EntropyMainExample] will_finish_launching");
 }
 
 static void did_finish(EntropyApp* app, void* userdata) {
     (void)app; (void)userdata;
-    ENTROPY_LOG_INFO("[EntropyMainExample] did_finish_launching");
+    ENTROPY_LOG_INFO_F("[EntropyMainExample] did_finish_launching");
     // Request termination directly; no main-thread posting API
     entropy_main_terminate(0);
 }
@@ -21,12 +21,12 @@ static bool should_terminate(EntropyApp* app, void* userdata) {
 
 static void will_terminate(EntropyApp* app, void* userdata) {
     (void)app; (void)userdata;
-    ENTROPY_LOG_INFO("[EntropyMainExample] will_terminate");
+    ENTROPY_LOG_INFO_F("[EntropyMainExample] will_terminate");
 }
 
 static void did_catch(EntropyApp* app, void* userdata) {
     (void)app; (void)userdata;
-    ENTROPY_LOG_WARNING("[EntropyMainExample] did_catch_unhandled_exception (if any)");
+    ENTROPY_LOG_WARNING_F("[EntropyMainExample] did_catch_unhandled_exception (if any)");
 }
 
 int main(void) {
@@ -43,8 +43,8 @@ int main(void) {
     del.did_catch_unhandled_exception = did_catch;
     del.userdata = NULL;
 
-    ENTROPY_LOG_INFO("[EntropyMainExample] Starting entropy_main_run...");
+    ENTROPY_LOG_INFO_F("[EntropyMainExample] Starting entropy_main_run...");
     int rc = entropy_main_run(&cfg, &del);
-    ENTROPY_LOG_INFO(std::format("[EntropyMainExample] Exited with code {}", rc));
+    ENTROPY_LOG_INFO_F("[EntropyMainExample] Exited with code %d", rc);
     return rc;
 }

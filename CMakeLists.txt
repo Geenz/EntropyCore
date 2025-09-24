@@ -44,6 +44,7 @@ endif()
 set(ENTROPY_CORE_SOURCES
         src/Logging/Logger.cpp
         src/Logging/ConsoleSink.cpp
+        src/Logging/CLogger.cpp
         src/Concurrency/WorkContractHandle.cpp
         src/Concurrency/WorkContractGroup.cpp
         src/Concurrency/WorkGraph.cpp
@@ -88,6 +89,7 @@ set(ENTROPY_CORE_HEADERS
         src/Logging/ILogSink.h
         src/Logging/ConsoleSink.h
         src/Logging/Logger.h
+        src/Logging/CLogger.h
         src/Concurrency/WorkContractHandle.h
         src/Concurrency/WorkContractGroup.h
         src/Concurrency/WorkGraph.h
