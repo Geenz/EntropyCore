@@ -132,7 +132,8 @@ namespace EntropyEngine {
             template <typename T>
             [[nodiscard]] inline const TypeID& typeIdOf() noexcept {
 #if ENTROPY_TYPEID_INCLUDE_NAME
-                static const TypeID k{ static_cast<uint64_t>(boost::typeindex::type_id<T>().hash_code()), boost::typeindex::type_id<T>().pretty_name() };
+                const auto& type_index = boost::typeindex::type_id<T>();
+                static const TypeID k{ static_cast<uint64_t>(type_index.hash_code()), type_index.pretty_name() };
 #else
                 static const TypeID k{ static_cast<uint64_t>(boost::typeindex::type_id<T>().hash_code()), std::string() };
 #endif
