@@ -9,7 +9,7 @@ endif()
 project(EntropyCore 
     VERSION 1.0.0
     DESCRIPTION "Core utilities and concurrency primitives for Entropy Engine"
-    LANGUAGES CXX
+    LANGUAGES C CXX
 )
 
 # Options
@@ -163,8 +163,6 @@ target_link_libraries(EntropyObjectHandleExample PRIVATE EntropyCore)
 
 # C ABI example (pure C)
 add_executable(CInteropExample Examples/CInteropExample.c Examples/CInteropExample_linkshim.cpp)
-# Compile the C example with C++ language to satisfy project language constraints
-set_source_files_properties(Examples/CInteropExample.c PROPERTIES LANGUAGE CXX)
 # Link against the C++ library; ensure C++ linker is used on some toolchains
 set_property(TARGET CInteropExample PROPERTY LINKER_LANGUAGE CXX)
 # Link core
@@ -172,9 +170,7 @@ target_link_libraries(CInteropExample PRIVATE EntropyCore)
 
 # EntropyMain C ABI example
 add_executable(EntropyMainExample Examples/EntropyMainExample.c)
-# Compile the C example with C++ language to satisfy project language constraints
-set_source_files_properties(Examples/EntropyMainExample.c PROPERTIES LANGUAGE CXX)
-# Ensure C++ linker is used
+# Ensure C++ linker is used (C target linking against C++ library)
 set_property(TARGET EntropyMainExample PROPERTY LINKER_LANGUAGE CXX)
 # Link core
 target_link_libraries(EntropyMainExample PRIVATE EntropyCore)
