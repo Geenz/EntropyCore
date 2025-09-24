@@ -131,11 +131,11 @@ namespace EntropyEngine {
             // Cached, allocation-free type id for T. This avoids RTTI/string work in hot paths.
             template <typename T>
             [[nodiscard]] inline const TypeID& typeIdOf() noexcept {
+                const auto index = boost::typeindex::type_id<T>();
 #if ENTROPY_TYPEID_INCLUDE_NAME
-                const auto& type_index = boost::typeindex::type_id<T>();
-                static const TypeID k{ static_cast<uint64_t>(type_index.hash_code()), type_index.pretty_name() };
+                static const TypeID k{ static_cast<uint64_t>(index.hash_code()), index.pretty_name() };
 #else
-                static const TypeID k{ static_cast<uint64_t>(boost::typeindex::type_id<T>().hash_code()), std::string() };
+                static const TypeID k{ static_cast<uint64_t>(index.hash_code()), std::string() };
 #endif
                 return k;
             }
