@@ -12,6 +12,7 @@
 #include <utility>
 #include <thread>
 #include <cstdlib>
+#include <memory>
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -20,9 +21,14 @@
 
 namespace EntropyEngine { namespace Core {
 
+
 EntropyApplication& EntropyApplication::shared() {
-    static EntropyApplication instance;
-    return instance;
+    return *sharedPtr();
+}
+
+std::shared_ptr<EntropyApplication> EntropyApplication::sharedPtr() {
+    static std::shared_ptr<EntropyApplication> inst{ std::shared_ptr<EntropyApplication>(new EntropyApplication()) };
+    return inst;
 }
 
 EntropyApplication::EntropyApplication() = default;
@@ -198,16 +204,19 @@ void EntropyApplication::handleConsoleSignal(unsigned long ctrlType) {
         // Start escalation timer after first signal regardless, to avoid hanging forever
         if (!_escalationStarted.exchange(true)) {
             auto deadline = _cfg.shutdownDeadline;
-            std::thread([this, deadline]{
+            std::weak_ptr<EntropyApplication> weak = EntropyApplication::sharedPtr();
+            std::thread([weak, deadline]{
                 auto endAt = std::chrono::steady_clock::now() + deadline;
                 std::this_thread::sleep_until(endAt);
-                if (_running.load()) {
-                    // Escalate: attempt a harder exit
-                    // If terminate didn't succeed yet, try again, then quick_exit.
-                    terminate(1);
-                    std::this_thread::sleep_for(std::chrono::milliseconds(200));
-                    if (_running.load()) {
-                        std::quick_exit(1);
+                if (auto sp = weak.lock()) {
+                    if (sp->isRunning()) {
+                        // Escalate: attempt a harder exit
+                        // If terminate didn't succeed yet, try again, then quick_exit.
+                        sp->terminate(1);
+                        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                        if (sp->isRunning()) {
+                            std::quick_exit(1);
+                        }
                     }
                 }
             }).detach();

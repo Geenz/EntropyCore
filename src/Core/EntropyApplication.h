@@ -45,6 +45,7 @@ struct EntropyApplicationConfig {
 class EntropyApplication {
 public:
     static EntropyApplication& shared();
+    static std::shared_ptr<EntropyApplication> sharedPtr();
 
     void configure(const EntropyApplicationConfig& cfg);
     void setDelegate(EntropyAppDelegate* del);
@@ -57,6 +58,7 @@ public:
     EntropyServiceRegistry& services() { return _services; }
 
     int exitCode() const { return _exitCode.load(); }
+    bool isRunning() const noexcept { return _running.load(); }
 
 #if defined(_WIN32)
     // Exposed for console control handler forwarder
