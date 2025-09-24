@@ -19,6 +19,9 @@
 #include <condition_variable>
 #include "Core/EntropyServiceRegistry.h"
 
+#if defined(_WIN32)
+#endif
+
 namespace EntropyEngine { namespace Core {
 
 
@@ -54,6 +57,11 @@ public:
 
     int exitCode() const { return _exitCode.load(); }
 
+#if defined(_WIN32)
+    // Exposed for console control handler forwarder
+    void handleConsoleSignal(unsigned long ctrlType);
+#endif
+
 private:
     EntropyApplication();
     void ensureCoreServices();
@@ -62,8 +70,6 @@ private:
     // Windows console control handling
     void installSignalHandlers();
     void uninstallSignalHandlers();
-    static int __stdcall ConsoleCtrlHandler(unsigned long ctrlType); // DWORD signature-compatible
-    void handleConsoleSignal(unsigned long ctrlType);
 #endif
 
     // Fields

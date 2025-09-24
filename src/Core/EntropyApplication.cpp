@@ -91,22 +91,22 @@ void EntropyApplication::terminate(int code) {
     _loopCv.notify_all();
 }
 #if defined(_WIN32)
+namespace {
+    // Free function with exact signature expected by SetConsoleCtrlHandler
+    static BOOL WINAPI EntropyConsoleCtrlHandler(DWORD ctrlType) {
+        std::thread([ctrlType]{ EntropyEngine::Core::EntropyApplication::shared().handleConsoleSignal(ctrlType); }).detach();
+        return TRUE;
+    }
+}
+
 void EntropyApplication::installSignalHandlers() {
     if (_handlersInstalled.exchange(true)) return;
-    SetConsoleCtrlHandler(reinterpret_cast<PHANDLER_ROUTINE>(&EntropyApplication::ConsoleCtrlHandler), TRUE);
+    SetConsoleCtrlHandler(EntropyConsoleCtrlHandler, TRUE);
 }
 
 void EntropyApplication::uninstallSignalHandlers() {
     if (!_handlersInstalled.exchange(false)) return;
-    SetConsoleCtrlHandler(reinterpret_cast<PHANDLER_ROUTINE>(&EntropyApplication::ConsoleCtrlHandler), FALSE);
-}
-
-int __stdcall EntropyApplication::ConsoleCtrlHandler(unsigned long ctrlType) {
-    // Minimal work in handler: dispatch to a detached thread
-    auto& app = EntropyApplication::shared();
-    std::thread([ctrlType]{ EntropyApplication::shared().handleConsoleSignal(ctrlType); }).detach();
-    // Claim we handled it so the process can shut down gracefully
-    return TRUE;
+    SetConsoleCtrlHandler(EntropyConsoleCtrlHandler, FALSE);
 }
 
 void EntropyApplication::handleConsoleSignal(unsigned long ctrlType) {
