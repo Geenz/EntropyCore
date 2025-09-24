@@ -53,6 +53,10 @@ int EntropyApplication::run() {
     ensureCoreServices();
 
 #if defined(_WIN32)
+    if (_terminateEvent == nullptr) {
+        // Manual-reset event signaled by terminate()
+        _terminateEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    }
     if (_cfg.installSignalHandlers) {
         installSignalHandlers();
     }
@@ -65,10 +69,41 @@ int EntropyApplication::run() {
     if (_delegate) _delegate->applicationDidFinishLaunching();
 
     // Wait until termination requested
+#if defined(_WIN32)
+    {
+        HANDLE handles[2];
+        DWORD count = 0;
+        HANDLE termH = static_cast<HANDLE>(_terminateEvent);
+        if (termH) { handles[count++] = termH; }
+        HANDLE ctrlH = _cfg.installSignalHandlers && _ctrlEvent ? static_cast<HANDLE>(_ctrlEvent) : nullptr;
+        if (ctrlH) { handles[count++] = ctrlH; }
+        // Always ensure we have at least the terminate event
+        if (count == 0) {
+            // Fallback to condition_variable if for some reason terminate event is missing
+            std::unique_lock<std::mutex> lk(_loopMutex);
+            _loopCv.wait(lk, [&]{ return _terminateRequested.load(std::memory_order_acquire); });
+        } else {
+            for (;;) {
+                DWORD w = WaitForMultipleObjects(count, handles, FALSE, INFINITE);
+                if (w == WAIT_OBJECT_0) {
+                    // terminateEvent signaled
+                    break;
+                }
+                if (count >= 2 && w == WAIT_OBJECT_0 + 1) {
+                    auto type = _lastCtrlType.load(std::memory_order_relaxed);
+                    handleConsoleSignal(type);
+                    // Continue waiting afterwards
+                    continue;
+                }
+            }
+        }
+    }
+#else
     {
         std::unique_lock<std::mutex> lk(_loopMutex);
         _loopCv.wait(lk, [&]{ return _terminateRequested.load(std::memory_order_acquire); });
     }
+#endif
 
     if (_delegate) _delegate->applicationWillTerminate();
     _services.stopAll();
@@ -77,6 +112,10 @@ int EntropyApplication::run() {
 #if defined(_WIN32)
     if (_cfg.installSignalHandlers) {
         uninstallSignalHandlers();
+    }
+    if (_terminateEvent) {
+        CloseHandle(static_cast<HANDLE>(_terminateEvent));
+        _terminateEvent = nullptr;
     }
 #endif
 
@@ -87,26 +126,48 @@ int EntropyApplication::run() {
 void EntropyApplication::terminate(int code) {
     _exitCode.store(code);
     _terminateRequested.store(true, std::memory_order_release);
-    // Wake the wait in run()
+#if defined(_WIN32)
+    // Signal terminate event so Windows wait loop wakes
+    HANDLE th = static_cast<HANDLE>(_terminateEvent);
+    if (th) SetEvent(th);
+#endif
+    // Wake the wait in run() for non-Windows path (noop on Windows)
     _loopCv.notify_all();
 }
 #if defined(_WIN32)
 namespace {
     // Free function with exact signature expected by SetConsoleCtrlHandler
     static BOOL WINAPI EntropyConsoleCtrlHandler(DWORD ctrlType) {
-        std::thread([ctrlType]{ EntropyEngine::Core::EntropyApplication::shared().handleConsoleSignal(ctrlType); }).detach();
+        EntropyEngine::Core::EntropyApplication::shared().notifyConsoleSignalFromHandler(ctrlType);
         return TRUE;
     }
 }
 
 void EntropyApplication::installSignalHandlers() {
     if (_handlersInstalled.exchange(true)) return;
+    // Create auto-reset event to queue console signals
+    HANDLE ev = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    _ctrlEvent = ev;
+    // Register console control handler; processing happens on the main wait loop
     SetConsoleCtrlHandler(EntropyConsoleCtrlHandler, TRUE);
 }
 
 void EntropyApplication::uninstallSignalHandlers() {
     if (!_handlersInstalled.exchange(false)) return;
     SetConsoleCtrlHandler(EntropyConsoleCtrlHandler, FALSE);
+    HANDLE h = static_cast<HANDLE>(_ctrlEvent);
+    if (h) {
+        // Ensure any pending waits can complete, then close
+        SetEvent(h);
+        CloseHandle(h);
+        _ctrlEvent = nullptr;
+    }
+}
+
+void EntropyApplication::notifyConsoleSignalFromHandler(unsigned long ctrlType) noexcept {
+    HANDLE h = static_cast<HANDLE>(_ctrlEvent);
+    _lastCtrlType.store(ctrlType, std::memory_order_relaxed);
+    if (h) SetEvent(h);
 }
 
 void EntropyApplication::handleConsoleSignal(unsigned long ctrlType) {

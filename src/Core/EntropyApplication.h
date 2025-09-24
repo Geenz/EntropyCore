@@ -17,6 +17,7 @@
 #include <string>
 #include <mutex>
 #include <condition_variable>
+#include <thread>
 #include "Core/EntropyServiceRegistry.h"
 
 #if defined(_WIN32)
@@ -60,6 +61,8 @@ public:
 #if defined(_WIN32)
     // Exposed for console control handler forwarder
     void handleConsoleSignal(unsigned long ctrlType);
+    // Signal-safe notification from console handler (sets flag and signals event)
+    void notifyConsoleSignalFromHandler(unsigned long ctrlType) noexcept;
 #endif
 
 private:
@@ -86,6 +89,10 @@ private:
     std::atomic<bool> _handlersInstalled{false};
     std::atomic<bool> _signalSeen{false};
     std::atomic<bool> _escalationStarted{false};
+    // Signal handling internals
+    void* _ctrlEvent{nullptr};      // HANDLE, kept as void* to avoid windows.h in header (auto-reset)
+    void* _terminateEvent{nullptr}; // HANDLE, kept as void* (manual-reset)
+    std::atomic<unsigned long> _lastCtrlType{0};
 #endif
 
     // Inline wait primitives (replacing EntropyRunLoop)
