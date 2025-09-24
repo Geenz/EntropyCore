@@ -13,6 +13,7 @@
 #include <string>
 #include <vector>
 #include <atomic>
+#include "TypeSystem/TypeID.h"
 
 namespace EntropyEngine {
     namespace Core {
@@ -44,15 +45,20 @@ namespace EntropyEngine {
         public:
             virtual ~EntropyService() = default;
 
-            // Identity
+            // Identity (metadata only; not used for lookups)
             virtual const char* id() const = 0;    // stable unique id, e.g. "com.entropy.core.work"
             virtual const char* name() const = 0;  // human readable
+
+            // Static type identity for RTTI-less registration and lookup
+            virtual TypeSystem::TypeID typeId() const = 0;
 
             // Optional semantic version for compatibility checks
             virtual const char* version() const { return "0.1.0"; }
 
-            // Declare service dependencies by id(). These must be available and started
-            // before this service's start() is invoked.
+            // RTTI-less dependency declaration by static types. Preferred and used for ordering.
+            virtual std::vector<TypeSystem::TypeID> dependsOnTypes() const { return {}; }
+
+            // (Legacy metadata) String-based dependencies retained for diagnostics only; ignored by orchestrator.
             virtual std::vector<std::string> dependsOn() const { return {}; }
 
             // Lifecycle hooks (main thread unless documented otherwise)

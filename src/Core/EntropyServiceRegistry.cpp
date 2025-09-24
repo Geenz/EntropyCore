@@ -9,33 +9,33 @@
 
 #include "Core/EntropyServiceRegistry.h"
 #include <queue>
+#include <unordered_map>
 
 namespace EntropyEngine {
     namespace Core {
 
         bool EntropyServiceRegistry::registerService(std::shared_ptr<EntropyService> service) {
             if (!service) return false;
-            auto key = std::string(service->id());
-            auto it = _services.find(key);
-            bool inserted = (it == _services.end());
-            _services[key] = std::move(service);
+            auto tid = service->typeId();
+            bool inserted = (_servicesByType.find(tid) == _servicesByType.end());
+            _servicesByType[tid] = std::move(service);
             return inserted;
         }
 
-        std::shared_ptr<EntropyService> EntropyServiceRegistry::get(const std::string& id) const {
-            auto it = _services.find(id);
-            if (it == _services.end()) return nullptr;
+        std::shared_ptr<EntropyService> EntropyServiceRegistry::get(const TypeSystem::TypeID& tid) const {
+            auto it = _servicesByType.find(tid);
+            if (it == _servicesByType.end()) return nullptr;
             return it->second;
         }
 
-        bool EntropyServiceRegistry::has(const std::string& id) const noexcept {
-            return _services.find(id) != _services.end();
+        bool EntropyServiceRegistry::has(const TypeSystem::TypeID& tid) const noexcept {
+            return _servicesByType.find(tid) != _servicesByType.end();
         }
 
         void EntropyServiceRegistry::loadAll() {
             auto order = topoOrder();
-            for (const auto& id : order) {
-                auto& svc = _services.at(id);
+            for (const auto& tid : order) {
+                auto& svc = _servicesByType.at(tid);
                 svc->setState(ServiceState::Loaded);
                 svc->load();
             }
@@ -43,8 +43,8 @@ namespace EntropyEngine {
 
         void EntropyServiceRegistry::startAll() {
             auto order = topoOrder();
-            for (const auto& id : order) {
-                auto& svc = _services.at(id);
+            for (const auto& tid : order) {
+                auto& svc = _servicesByType.at(tid);
                 svc->setState(ServiceState::Started);
                 svc->start();
             }
@@ -54,7 +54,7 @@ namespace EntropyEngine {
             auto order = topoOrder();
             // stop in reverse order
             for (auto it = order.rbegin(); it != order.rend(); ++it) {
-                auto& svc = _services.at(*it);
+                auto& svc = _servicesByType.at(*it);
                 svc->stop();
                 svc->setState(ServiceState::Stopped);
             }
@@ -63,41 +63,42 @@ namespace EntropyEngine {
         void EntropyServiceRegistry::unloadAll() {
             auto order = topoOrder();
             for (auto it = order.rbegin(); it != order.rend(); ++it) {
-                auto& svc = _services.at(*it);
+                auto& svc = _servicesByType.at(*it);
                 svc->unload();
                 svc->setState(ServiceState::Unloaded);
             }
         }
 
-        std::vector<std::string> EntropyServiceRegistry::topoOrder() const {
-            // Kahn's algorithm
+        std::vector<TypeSystem::TypeID> EntropyServiceRegistry::topoOrder() const {
+            // Kahn's algorithm on TypeIDs
             // Build adjacency: dep -> svc
-            std::unordered_map<std::string, size_t> indegree;
-            std::unordered_map<std::string, std::vector<std::string>> adj;
+            std::unordered_map<TypeSystem::TypeID, size_t> indegree;
+            std::unordered_map<TypeSystem::TypeID, std::vector<TypeSystem::TypeID>> adj;
 
             // Initialize vertices
-            for (const auto& [id, _] : _services) {
-                indegree[id] = 0;
+            for (const auto& [tid, _] : _servicesByType) {
+                indegree[tid] = 0;
             }
 
-            // Add edges and indegrees
-            for (const auto& [id, svc] : _services) {
-                for (const auto& dep : svc->dependsOn()) {
-                    if (!has(dep)) {
-                        throw std::runtime_error("Missing dependency '" + dep + "' required by service '" + id + "'");
+            // Add edges and indegrees using type-based dependencies
+            for (const auto& [tid, svc] : _servicesByType) {
+                for (const auto& depTid : svc->dependsOnTypes()) {
+                    if (!has(depTid)) {
+                        // Diagnostic message uses metadata strings, not for lookup
+                        throw std::runtime_error(std::string("Missing dependency required by service '") + svc->id() + "'");
                     }
-                    adj[dep].push_back(id);
-                    indegree[id] += 1;
+                    adj[depTid].push_back(tid);
+                    indegree[tid] += 1;
                 }
             }
 
-            std::queue<std::string> q;
-            for (const auto& [id, deg] : indegree) {
-                if (deg == 0) q.push(id);
+            std::queue<TypeSystem::TypeID> q;
+            for (const auto& [tid, deg] : indegree) {
+                if (deg == 0) q.push(tid);
             }
 
-            std::vector<std::string> order;
-            order.reserve(_services.size());
+            std::vector<TypeSystem::TypeID> order;
+            order.reserve(_servicesByType.size());
             while (!q.empty()) {
                 auto u = q.front(); q.pop();
                 order.push_back(u);
@@ -112,7 +113,7 @@ namespace EntropyEngine {
                 }
             }
 
-            if (order.size() != _services.size()) {
+            if (order.size() != _servicesByType.size()) {
                 throw std::runtime_error("Service dependency cycle detected");
             }
 

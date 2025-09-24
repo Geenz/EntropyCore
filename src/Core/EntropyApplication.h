@@ -58,6 +58,14 @@ private:
     EntropyApplication();
     void ensureCoreServices();
 
+#if defined(_WIN32)
+    // Windows console control handling
+    void installSignalHandlers();
+    void uninstallSignalHandlers();
+    static int __stdcall ConsoleCtrlHandler(unsigned long ctrlType); // DWORD signature-compatible
+    void handleConsoleSignal(unsigned long ctrlType);
+#endif
+
     // Fields
     EntropyApplicationConfig _cfg{};
     EntropyAppDelegate* _delegate{nullptr};
@@ -67,6 +75,12 @@ private:
     std::atomic<bool> _running{false};
     std::atomic<bool> _terminateRequested{false};
     std::atomic<int> _exitCode{0};
+
+#if defined(_WIN32)
+    std::atomic<bool> _handlersInstalled{false};
+    std::atomic<bool> _signalSeen{false};
+    std::atomic<bool> _escalationStarted{false};
+#endif
 
     // Inline wait primitives (replacing EntropyRunLoop)
     std::mutex _loopMutex;

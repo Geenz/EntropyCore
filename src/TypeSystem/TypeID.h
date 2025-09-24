@@ -14,6 +14,14 @@
 #include <compare>
 #include <functional>
 
+#ifndef ENTROPY_ENABLE_RTTI
+#define ENTROPY_ENABLE_RTTI 0
+#endif
+
+#ifndef ENTROPY_TYPEID_INCLUDE_NAME
+#define ENTROPY_TYPEID_INCLUDE_NAME 0
+#endif
+
 namespace EntropyEngine {
     namespace Core {
         namespace TypeSystem {
@@ -27,7 +35,7 @@ namespace EntropyEngine {
              * 
              * Features:
              * - Stable hash codes across compilation units
-             * - Human-readable type names with template parameters
+             * - Human-readable type names with template parameters (optionally compiled in)
              * - Supports comparison operations
              * - Compatible with standard containers (via std::hash specialization)
              * 
@@ -41,8 +49,6 @@ namespace EntropyEngine {
              * if (intTypeId == floatTypeId) {
              *     // Never executed - different types
              * }
-             * 
-             * std::cout << "Type: " << intTypeId.prettyName() << std::endl; // "int"
              * @endcode
              */
             struct TypeID {
@@ -121,16 +127,37 @@ namespace EntropyEngine {
              * auto customId = createTypeId<MyCustomClass>();
              * @endcode
              */
+            // Cached, allocation-free type id for T. This avoids RTTI/string work in hot paths.
+            template <typename T>
+            [[nodiscard]] inline const TypeID& typeIdOf() noexcept {
+#if ENTROPY_TYPEID_INCLUDE_NAME
+                static const TypeID k{ boost::typeindex::type_id<T>().hash_code(), boost::typeindex::type_id<T>().pretty_name() };
+#else
+                static const TypeID k{ boost::typeindex::type_id<T>().hash_code(), std::string() };
+#endif
+                return k;
+            }
+
             template <typename T>
             [[nodiscard]] inline TypeID createTypeId() noexcept {
-                const auto& index = boost::typeindex::type_id<T>();
-                std::string pretty_name = index.pretty_name();
+                // Return the cached instance by value (cheap copy: two words + small string empty)
+                return typeIdOf<T>();
+            }
 
-                // Use the raw boost::typeindex output without modification
-                // This preserves template parameter information and provides
-                // the most accurate canonical type representation
+            /**
+             * @brief Create a TypeID for the dynamic type of a given object reference
+             * @tparam T The static type of the object (can be a base class)
+             * @param obj Reference to the object to inspect at runtime
+             * @return TypeID representing the dynamic type of obj
+             */
+#if ENTROPY_ENABLE_RTTI
+            template <typename T>
+            [[nodiscard]] inline TypeID createTypeIdRuntime(const T& obj) noexcept {
+                const auto& index = boost::typeindex::type_id_runtime(obj);
+                std::string pretty_name = index.pretty_name();
                 return { index.hash_code(), std::move(pretty_name) };
             }
+#endif
 
         } // namespace TypeSystem
     } // namespace Core

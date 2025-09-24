@@ -11,6 +11,7 @@ using namespace EntropyEngine::Core::Concurrency;
 class MyDelegate : public EntropyAppDelegate {
     std::shared_ptr<WorkService> work_;
     std::unique_ptr<WorkContractGroup> group_;
+    std::atomic<int> remaining_{0};
 
 public:
     void applicationWillFinishLaunching() override {
@@ -20,9 +21,8 @@ public:
     void applicationDidFinishLaunching() override {
         ENTROPY_LOG_INFO("[EntropyCppAppExample] applicationDidFinishLaunching");
 
-        // Acquire the WorkService registered by EntropyApplication
-        auto base = EntropyApplication::shared().services().get("com.entropy.core.work");
-        work_ = std::dynamic_pointer_cast<WorkService>(base);
+        // Acquire the WorkService registered by EntropyApplication using type-based lookup
+        work_ = EntropyApplication::shared().services().get<WorkService>();
         if (!work_) {
             ENTROPY_LOG_ERROR("[EntropyCppAppExample] WorkService not available!");
             EntropyApplication::shared().terminate(1);
@@ -39,25 +39,30 @@ public:
             return;
         }
 
-        // Schedule some background work
+        // Schedule some background work using contracts only; no detached threads
+        int scheduled = 0;
         for (int i = 0; i < 16; ++i) {
-            auto handle = group_->createContract([i]() noexcept {
+            auto handle = group_->createContract([this, i]() noexcept {
                 // Simulate compute
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
                 auto tid = std::hash<std::thread::id>{}(std::this_thread::get_id());
                 ENTROPY_LOG_DEBUG(std::format("  [Work] item {} executed on thread {}", i, tid));
+                // If this was the last contract to finish, request app termination
+                if (--remaining_ == 0) {
+                    ENTROPY_LOG_INFO("[EntropyCppAppExample] All work completed; requesting terminate");
+                    EntropyApplication::shared().terminate(0);
+                }
             });
             if (handle.valid()) {
                 handle.schedule();
+                ++scheduled;
             }
         }
-
-        // When all work completes, request application termination from a helper thread
-        std::thread([grp = group_.get()]() {
-            grp->wait();
-            ENTROPY_LOG_INFO("[EntropyCppAppExample] All work completed; requesting terminate");
+        remaining_.store(scheduled, std::memory_order_relaxed);
+        if (scheduled == 0) {
+            // Nothing scheduled; terminate immediately
             EntropyApplication::shared().terminate(0);
-        }).detach();
+        }
     }
 
     bool applicationShouldTerminate() override {

@@ -10,6 +10,13 @@
 #include "Core/EntropyApplication.h"
 #include "Concurrency/WorkService.h"
 #include <utility>
+#include <thread>
+#include <cstdlib>
+
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
 
 namespace EntropyEngine { namespace Core {
 
@@ -29,11 +36,11 @@ void EntropyApplication::setDelegate(EntropyAppDelegate* del) {
 }
 
 void EntropyApplication::ensureCoreServices() {
-    if (!_services.has("com.entropy.core.work")) {
+    if (!_services.has<Concurrency::WorkService>()) {
         Concurrency::WorkService::Config wcfg{};
         wcfg.threadCount = static_cast<uint32_t>(_cfg.workerThreads);
         auto work = std::make_shared<Concurrency::WorkService>(wcfg);
-        _services.registerService(work);
+        _services.registerService<Concurrency::WorkService>(work);
     }
 }
 
@@ -44,6 +51,12 @@ int EntropyApplication::run() {
     _exitCode.store(0);
 
     ensureCoreServices();
+
+#if defined(_WIN32)
+    if (_cfg.installSignalHandlers) {
+        installSignalHandlers();
+    }
+#endif
 
     // Drive service lifecycle
     _services.loadAll();
@@ -61,6 +74,12 @@ int EntropyApplication::run() {
     _services.stopAll();
     _services.unloadAll();
 
+#if defined(_WIN32)
+    if (_cfg.installSignalHandlers) {
+        uninstallSignalHandlers();
+    }
+#endif
+
     _running.store(false);
     return _exitCode.load();
 }
@@ -71,6 +90,79 @@ void EntropyApplication::terminate(int code) {
     // Wake the wait in run()
     _loopCv.notify_all();
 }
+#if defined(_WIN32)
+void EntropyApplication::installSignalHandlers() {
+    if (_handlersInstalled.exchange(true)) return;
+    SetConsoleCtrlHandler(reinterpret_cast<PHANDLER_ROUTINE>(&EntropyApplication::ConsoleCtrlHandler), TRUE);
+}
+
+void EntropyApplication::uninstallSignalHandlers() {
+    if (!_handlersInstalled.exchange(false)) return;
+    SetConsoleCtrlHandler(reinterpret_cast<PHANDLER_ROUTINE>(&EntropyApplication::ConsoleCtrlHandler), FALSE);
+}
+
+int __stdcall EntropyApplication::ConsoleCtrlHandler(unsigned long ctrlType) {
+    // Minimal work in handler: dispatch to a detached thread
+    auto& app = EntropyApplication::shared();
+    std::thread([ctrlType]{ EntropyApplication::shared().handleConsoleSignal(ctrlType); }).detach();
+    // Claim we handled it so the process can shut down gracefully
+    return TRUE;
+}
+
+void EntropyApplication::handleConsoleSignal(unsigned long ctrlType) {
+    // Map control types we care about
+    switch (ctrlType) {
+        case CTRL_C_EVENT:
+        case CTRL_BREAK_EVENT:
+        case CTRL_CLOSE_EVENT:
+        case CTRL_LOGOFF_EVENT:
+        case CTRL_SHUTDOWN_EVENT:
+            break;
+        default:
+            return; // ignore others
+    }
+
+    bool first = !_signalSeen.exchange(true);
+
+    if (first) {
+        // Optionally consult delegate; if vetoed, just return on first request
+        bool allow = true;
+        if (_delegate) {
+            try { allow = _delegate->applicationShouldTerminate(); }
+            catch (...) { /* swallow in signal path */ }
+        }
+        if (allow) {
+            terminate(0);
+        }
+        // Start escalation timer after first signal regardless, to avoid hanging forever
+        if (!_escalationStarted.exchange(true)) {
+            auto deadline = _cfg.shutdownDeadline;
+            std::thread([this, deadline]{
+                auto endAt = std::chrono::steady_clock::now() + deadline;
+                std::this_thread::sleep_until(endAt);
+                if (_running.load()) {
+                    // Escalate: attempt a harder exit
+                    // If terminate didn't succeed yet, try again, then quick_exit.
+                    terminate(1);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                    if (_running.load()) {
+                        std::quick_exit(1);
+                    }
+                }
+            }).detach();
+        }
+    } else {
+        // Subsequent signal: escalate immediately
+        if (_running.load()) {
+            terminate(1);
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            if (_running.load()) {
+                std::quick_exit(1);
+            }
+        }
+    }
+}
+#endif
 
 
 }} // namespace EntropyEngine::Core

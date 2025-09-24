@@ -165,6 +165,9 @@ public:
         const char* id() const override { return "com.entropy.core.work"; }
         const char* name() const override { return "WorkService"; }
         const char* version() const override { return "0.1.0"; }
+        // RTTI-less static type identity and dependencies
+        TypeSystem::TypeID typeId() const override { return TypeSystem::createTypeId<WorkService>(); }
+        std::vector<TypeSystem::TypeID> dependsOnTypes() const override { return {}; }
         std::vector<std::string> dependsOn() const override { return {}; }
 
         void load() override { /* no-op: configured on construction */ }

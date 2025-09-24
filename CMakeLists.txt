@@ -15,6 +15,8 @@ project(EntropyCore
 # Options
 option(BUILD_SHARED_LIBS "Build as a shared library" OFF)
 option(ENTROPY_BUILD_TESTS "Build tests for EntropyCore" OFF)
+# Entropy does not depend on C++ RTTI. You may optionally disable RTTI for these targets if desired.
+option(ENTROPY_REQUIRE_NO_RTTI "Disable C++ RTTI for Entropy targets" OFF)
 
 # Set C++20 standard with modules support
 set(CMAKE_CXX_STANDARD 20)
@@ -195,13 +197,24 @@ if(WIN32)
     target_compile_definitions(EntropyCore PUBLIC WIN32_LEAN_AND_MEAN EntropyWindows)
     if(MSVC)
         target_compile_options(EntropyCore PRIVATE /W4)
-        # Use static runtime library to match vcpkg dependencies
-        set_property(TARGET EntropyCore PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-        set_property(TARGET WorkContractExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-        set_property(TARGET WorkGraphYieldableExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-        set_property(TARGET EntropyObjectExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-        set_property(TARGET EntropyObjectHandleExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-        set_property(TARGET CInteropExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+        # Use dynamic runtime library (/MD, /MDd) to match vcpkg defaults and avoid RTL mismatch
+        set_property(TARGET EntropyCore PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+        set_property(TARGET WorkContractExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+        set_property(TARGET WorkGraphYieldableExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+        set_property(TARGET EntropyObjectExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+        set_property(TARGET EntropyObjectHandleExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+        set_property(TARGET CInteropExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+        set_property(TARGET EntropyMainExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+        set_property(TARGET EntropyCppAppExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+        # Optionally disable RTTI if requested
+        if(ENTROPY_REQUIRE_NO_RTTI)
+            target_compile_options(EntropyCore PRIVATE /GR-)
+            foreach(tgt IN ITEMS WorkContractExample WorkGraphYieldableExample EntropyObjectExample EntropyObjectHandleExample CInteropExample EntropyMainExample EntropyCppAppExample)
+                if(TARGET ${tgt})
+                    target_compile_options(${tgt} PRIVATE /GR-)
+                endif()
+            endforeach()
+        endif()
     endif()
 else()
     # Settings for non-Windows platforms (macOS, Linux)
@@ -213,6 +226,15 @@ else()
     elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         # Linux specific
         target_compile_definitions(EntropyCore PUBLIC EntropyLinux)
+    endif()
+    # Optionally disable RTTI if requested
+    if(ENTROPY_REQUIRE_NO_RTTI)
+        target_compile_options(EntropyCore PRIVATE -fno-rtti)
+        foreach(tgt IN ITEMS WorkContractExample WorkGraphYieldableExample EntropyObjectExample EntropyObjectHandleExample CInteropExample EntropyMainExample EntropyCppAppExample)
+            if(TARGET ${tgt})
+                target_compile_options(${tgt} PRIVATE -fno-rtti)
+            endif()
+        endforeach()
     endif()
 endif()
 
