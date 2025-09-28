@@ -14,7 +14,7 @@ project(EntropyCore
 
 # Options
 option(BUILD_SHARED_LIBS "Build as a shared library" OFF)
-option(ENTROPY_BUILD_TESTS "Build tests for EntropyCore" OFF)
+option(ENTROPY_BUILD_TESTS "Build tests for EntropyCore" ON)
 
 # Set C++20 standard with modules support
 set(CMAKE_CXX_STANDARD 20)
@@ -53,6 +53,11 @@ set(ENTROPY_CORE_SOURCES
         src/Concurrency/NodeScheduler.cpp
         src/Core/EntropyObject.cpp
         src/Core/EntropyCAPI.cpp
+        src/VirtualFileSystem/VirtualFileSystem.cpp
+        src/VirtualFileSystem/FileOperationHandle.cpp
+        src/VirtualFileSystem/FileHandle.cpp
+        src/VirtualFileSystem/LocalFileSystemBackend.cpp
+        src/VirtualFileSystem/FileStream.cpp
 )
 
 set(ENTROPY_CORE_HEADERS
@@ -95,6 +100,9 @@ set(ENTROPY_CORE_HEADERS
         src/Concurrency/AdaptiveRankingScheduler.h
         src/Concurrency/RandomScheduler.h
         src/Concurrency/RoundRobinScheduler.h
+        src/VirtualFileSystem/VirtualFileSystem.h
+        src/VirtualFileSystem/FileOperationHandle.h
+        src/VirtualFileSystem/FileHandle.h
 )
 
 # Create the core library
@@ -159,6 +167,19 @@ set_property(TARGET CInteropExample PROPERTY LINKER_LANGUAGE CXX)
 # Link core
 target_link_libraries(CInteropExample PRIVATE EntropyCore)
 
+add_executable(VirtualFileSystemExample Examples/VirtualFileSystemExample.cpp)
+target_link_libraries(VirtualFileSystemExample PRIVATE EntropyCore)
+# Avoid Windows min/max macro pollution
+if(WIN32)
+  target_compile_definitions(VirtualFileSystemExample PRIVATE NOMINMAX)
+endif()
+
+add_executable(VirtualFileStreamingExample Examples/VirtualFileStreamingExample.cpp)
+target_link_libraries(VirtualFileStreamingExample PRIVATE EntropyCore)
+if(WIN32)
+  target_compile_definitions(VirtualFileStreamingExample PRIVATE NOMINMAX)
+endif()
+
 # Link Tracy to examples if available
 if(ENTROPY_WITH_TRACY)
   if(TARGET Tracy::TracyClient)
@@ -172,16 +193,18 @@ endif()
 # Platform and compiler-specific settings
 if(WIN32)
     # Settings for Windows
-    target_compile_definitions(EntropyCore PUBLIC WIN32_LEAN_AND_MEAN EntropyWindows)
+    target_compile_definitions(EntropyCore PUBLIC WIN32_LEAN_AND_MEAN NOMINMAX EntropyWindows)
     if(MSVC)
         target_compile_options(EntropyCore PRIVATE /W4)
         # Use static runtime library to match vcpkg dependencies
-        set_property(TARGET EntropyCore PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-        set_property(TARGET WorkContractExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-        set_property(TARGET WorkGraphYieldableExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-        set_property(TARGET EntropyObjectExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-        set_property(TARGET EntropyObjectHandleExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-        set_property(TARGET CInteropExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+        set_property(TARGET EntropyCore PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+        set_property(TARGET WorkContractExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+        set_property(TARGET WorkGraphYieldableExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+        set_property(TARGET EntropyObjectExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+        set_property(TARGET EntropyObjectHandleExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+        set_property(TARGET CInteropExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+        set_property(TARGET VirtualFileSystemExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+        set_property(TARGET VirtualFileStreamingExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
     endif()
 else()
     # Settings for non-Windows platforms (macOS, Linux)
@@ -243,6 +266,7 @@ if(ENTROPY_BUILD_TESTS)
             Tests/SignalTreeTests.cpp
             Tests/WorkContractGroupAccountingTests.cpp
             Tests/EntropyObjectTests.cpp
+            Tests/VirtualFileSystemStreamingTests.cpp
     )
 
     target_link_libraries(EntropyCoreTests 
@@ -252,6 +276,10 @@ if(ENTROPY_BUILD_TESTS)
     )
     
     target_compile_features(EntropyCoreTests PRIVATE cxx_std_20)
+
+    if(WIN32 AND MSVC)
+        set_property(TARGET EntropyCoreTests PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+    endif()
     
     # Register tests with CTest
     include(CTest)
