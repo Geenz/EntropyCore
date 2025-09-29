@@ -19,7 +19,7 @@ int main() {
     service.start();
 
     // Create a contract group and register it to the service
-    WorkContractGroup group(256, "VFSGroup");
+    WorkContractGroup group(2000, "VFSGroup");
     service.addWorkContractGroup(&group);
 
     // Create VFS instance with custom config
@@ -134,6 +134,41 @@ int main() {
     }
     std::cout << "All concurrent operations completed\n";
     
+    // Demonstrate concurrency: many file operations writing to the SAME file
+    std::cout << "\n1000 file operations writing to the same file (serialized by VFS lock):\n";
+    const std::string sameFile = "vfs_contracts_same_file.txt";
+    // Ensure a clean file
+    vfs.createFileHandle(sameFile).createEmpty().wait();
+
+    // Create 1000 file operations (not nested work contracts)
+    std::vector<FileOperationHandle> writeOps;
+    writeOps.reserve(1000);
+    for (int i = 0; i < 1000; ++i) {
+        auto fh = vfs.createFileHandle(sameFile);
+        // Each operation writes its own line index. Lines are:
+        // "Work contract N wrote!"
+        writeOps.push_back(fh.writeLine(static_cast<size_t>(i), 
+            "Work contract " + std::to_string(i + 1) + " wrote!"));
+        ENTROPY_LOG_INFO("Scheduled write " + std::to_string(i + 1));
+    }
+    // Wait for all write operations to finish
+    for (auto& op : writeOps) {
+        op.wait();
+        if (op.status() != FileOpStatus::Complete) {
+            std::cerr << "Write operation failed: " << op.errorInfo().message << "\n";
+        }
+    }
+    std::cout << "All 1000 writes completed\n";
+
+    // Read back the file to show the results
+    auto verify = vfs.createFileHandle(sameFile).readAll();
+    verify.wait();
+    if (verify.status() == FileOpStatus::Complete) {
+        std::cout << "Contents of '" << sameFile << "':\n" << verify.contentsText() << "\n";
+    } else {
+        std::cerr << "Failed to read back '" << sameFile << "': " << verify.errorInfo().message << "\n";
+    }
+
     // Clean up test files
     for (int i = 0; i < 5; ++i) {
         auto h = vfs.createFileHandle("concurrent_test_" + std::to_string(i) + ".txt");

@@ -29,7 +29,29 @@ namespace {
     static bool win_replace_file(const std::filesystem::path& src, const std::filesystem::path& dst) {
         auto wsrc = src.wstring();
         auto wdst = std::filesystem::path(dst).wstring();
-        return MoveFileExW(wsrc.c_str(), wdst.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+        
+        // Retry logic for Windows file operations which can fail due to sharing violations
+        const int maxRetries = 50;
+        const int retryDelayMs = 10;
+        
+        for (int i = 0; i < maxRetries; ++i) {
+            if (MoveFileExW(wsrc.c_str(), wdst.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0) {
+                return true;  // Success
+            }
+            
+            DWORD error = GetLastError();
+            // Retry on sharing violations and access denied (file might be in use)
+            if (error == ERROR_SHARING_VIOLATION || 
+                error == ERROR_ACCESS_DENIED || 
+                error == ERROR_LOCK_VIOLATION) {
+                if (i < maxRetries - 1) {
+                    Sleep(retryDelayMs);
+                    continue;
+                }
+            }
+            break;  // Other error or max retries reached
+        }
+        return false;
     }
 #endif
 }
@@ -64,6 +86,13 @@ FileHandle::FileHandle(VirtualFileSystem* vfs, std::string path)
 }
 
 FileOperationHandle FileHandle::readAll() const {
+    // Use backend if available
+    if (_backend) {
+        ReadOptions opts;
+        return _backend->readFile(_meta.path, opts);
+    }
+    
+    // Fallback to direct implementation
     return _vfs->submit(_meta.path, [](FileOperationHandle::OpState& s, const std::string& p){
         std::ifstream in(p, std::ios::in | std::ios::binary);
         if (!in) {
@@ -100,6 +129,15 @@ FileOperationHandle FileHandle::readAll() const {
 }
 
 FileOperationHandle FileHandle::readRange(uint64_t offset, size_t length) const {
+    // Use backend if available
+    if (_backend) {
+        ReadOptions opts;
+        opts.offset = offset;
+        opts.length = length;
+        return _backend->readFile(_meta.path, opts);
+    }
+    
+    // Fallback to direct implementation
     return _vfs->submit(_meta.path, [offset, length](FileOperationHandle::OpState& s, const std::string& p){
         std::ifstream in(p, std::ios::in | std::ios::binary);
         if (!in) {
@@ -133,6 +171,12 @@ FileOperationHandle FileHandle::readRange(uint64_t offset, size_t length) const 
 }
 
 FileOperationHandle FileHandle::readLine(size_t lineNumber) const {
+    // Use backend if available
+    if (_backend) {
+        return _backend->readLine(_meta.path, lineNumber);
+    }
+    
+    // Fallback to direct implementation
     return _vfs->submit(_meta.path, [lineNumber](FileOperationHandle::OpState& s, const std::string& p){
         std::ifstream in(p, std::ios::in);
         if (!in) {
@@ -187,6 +231,14 @@ FileOperationHandle FileHandle::readLineBinary(size_t lineNumber, std::byte deli
 }
 
 FileOperationHandle FileHandle::writeAll(std::span<const std::byte> bytes) const {
+    // Use backend if available
+    if (_backend) {
+        WriteOptions opts;
+        opts.truncate = true;
+        return _backend->writeFile(_meta.path, bytes, opts);
+    }
+    
+    // Fallback to direct implementation
     auto lock = _vfs->lockForPath(_meta.path);
     return _vfs->submit(_meta.path, [lock, copy=std::vector<std::byte>(bytes.begin(), bytes.end())](FileOperationHandle::OpState& s, const std::string& p) mutable {
         std::unique_lock<std::mutex> pathLock; if (lock) pathLock = std::unique_lock<std::mutex>(*lock);
@@ -209,6 +261,15 @@ FileOperationHandle FileHandle::writeAll(std::span<const std::byte> bytes) const
 }
 
 FileOperationHandle FileHandle::writeRange(uint64_t offset, std::span<const std::byte> bytes) const {
+    // Use backend if available
+    if (_backend) {
+        WriteOptions opts;
+        opts.offset = offset;
+        opts.truncate = false;
+        return _backend->writeFile(_meta.path, bytes, opts);
+    }
+    
+    // Fallback to direct implementation
     auto lock = _vfs->lockForPath(_meta.path);
     return _vfs->submit(_meta.path, [lock, offset, copy=std::vector<std::byte>(bytes.begin(), bytes.end())](FileOperationHandle::OpState& s, const std::string& p) mutable {
         std::unique_lock<std::mutex> pathLock; if (lock) pathLock = std::unique_lock<std::mutex>(*lock);
@@ -237,6 +298,12 @@ FileOperationHandle FileHandle::writeRange(uint64_t offset, std::span<const std:
 }
 
 FileOperationHandle FileHandle::writeLine(size_t lineNumber, std::string_view line) const {
+    // Use backend if available
+    if (_backend) {
+        return _backend->writeLine(_meta.path, lineNumber, line);
+    }
+    
+    // Fallback to direct implementation
     auto lock = _vfs->lockForPath(_meta.path);
     return _vfs->submit(_meta.path, [lock, lineNumber, line = std::string(line)](FileOperationHandle::OpState& s, const std::string& p) mutable {
         std::unique_lock<std::mutex> pathLock; if (lock) pathLock = std::unique_lock<std::mutex>(*lock);
@@ -272,10 +339,8 @@ FileOperationHandle FileHandle::writeLine(size_t lineNumber, std::string_view li
                     } else {
                         out << currentLine;
                     }
+                    out << "\n";  // Always add newline after each line
                     currentLineNum++;
-                    if (currentLineNum <= lineNumber || in.peek() != EOF) {
-                        out << "\n";
-                    }
                 }
             }
             
@@ -287,7 +352,8 @@ FileOperationHandle FileHandle::writeLine(size_t lineNumber, std::string_view li
             
             // Add the target line if we haven't yet
             if (currentLineNum == lineNumber) {
-                out << line;
+                out << line << "\n";  // Add newline after the new line too
+                currentLineNum++;
             }
             
             out.flush();
@@ -324,6 +390,15 @@ FileOperationHandle FileHandle::writeLine(size_t lineNumber, std::string_view li
 }
 
 FileOperationHandle FileHandle::writeAll(std::string_view text) const {
+    // Use backend if available
+    if (_backend) {
+        WriteOptions opts;
+        opts.truncate = true;
+        return _backend->writeFile(_meta.path, 
+            std::span<const std::byte>(reinterpret_cast<const std::byte*>(text.data()), text.size()), opts);
+    }
+    
+    // Fallback to direct implementation
     auto lock = _vfs->lockForPath(_meta.path);
     return _vfs->submit(_meta.path, [lock, txt = std::string(text)](FileOperationHandle::OpState& s, const std::string& p) mutable {
         std::unique_lock<std::mutex> pathLock; if (lock) pathLock = std::unique_lock<std::mutex>(*lock);
@@ -346,6 +421,12 @@ FileOperationHandle FileHandle::writeAll(std::string_view text) const {
 }
 
 FileOperationHandle FileHandle::createEmpty() const {
+    // Use backend if available
+    if (_backend) {
+        return _backend->createFile(_meta.path);
+    }
+    
+    // Fallback to direct implementation
     auto lock = _vfs->lockForPath(_meta.path);
     return _vfs->submit(_meta.path, [lock](FileOperationHandle::OpState& s, const std::string& p) mutable {
         std::unique_lock<std::mutex> pathLock; if (lock) pathLock = std::unique_lock<std::mutex>(*lock);
@@ -367,6 +448,12 @@ FileOperationHandle FileHandle::createEmpty() const {
 }
 
 FileOperationHandle FileHandle::remove() const {
+    // Use backend if available
+    if (_backend) {
+        return _backend->deleteFile(_meta.path);
+    }
+    
+    // Fallback to direct implementation
     auto lock = _vfs->lockForPath(_meta.path);
     return _vfs->submit(_meta.path, [lock](FileOperationHandle::OpState& s, const std::string& p) mutable {
         std::unique_lock<std::mutex> pathLock; if (lock) pathLock = std::unique_lock<std::mutex>(*lock);
@@ -384,39 +471,38 @@ FileOperationHandle FileHandle::remove() const {
 
 // Stream factory methods - FileHandle acts as factory
 std::unique_ptr<FileStream> FileHandle::openReadStream() const {
-    if (_backend) {
+    if (_vfs) {
         StreamOptions opts;
         opts.mode = StreamOptions::Read;
-        return _backend->openStream(_meta.path, opts);
+        return _vfs->openStream(_meta.path, opts);
     }
-    
-    // Fallback - should always have a backend in production
     return nullptr;
 }
 
 std::unique_ptr<FileStream> FileHandle::openWriteStream(bool append) const {
-    if (_backend) {
+    (void)append; // append semantics can be handled by backend via options in the future
+    if (_vfs) {
         StreamOptions opts;
         opts.mode = StreamOptions::Write;
-        // TODO: Add append support to StreamOptions if needed
-        return _backend->openStream(_meta.path, opts);
+        return _vfs->openStream(_meta.path, opts);
     }
     return nullptr;
 }
 
 std::unique_ptr<FileStream> FileHandle::openReadWriteStream() const {
-    if (_backend) {
+    if (_vfs) {
         StreamOptions opts;
         opts.mode = StreamOptions::ReadWrite;
-        return _backend->openStream(_meta.path, opts);
+        return _vfs->openStream(_meta.path, opts);
     }
     return nullptr;
 }
 
 std::unique_ptr<BufferedFileStream> FileHandle::openBufferedStream(size_t bufferSize) const {
-    auto stream = openReadWriteStream();
-    if (stream) {
-        return std::make_unique<BufferedFileStream>(std::move(stream), bufferSize);
+    if (_vfs) {
+        StreamOptions opts;
+        opts.mode = StreamOptions::ReadWrite;
+        return _vfs->openBufferedStream(_meta.path, bufferSize, opts);
     }
     return nullptr;
 }

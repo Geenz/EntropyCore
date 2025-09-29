@@ -17,6 +17,9 @@
 
 namespace EntropyEngine::Core::IO {
 
+class FileStream; // fwd
+class BufferedFileStream; // fwd
+
 class VirtualFileSystem {
 public:
     struct Config { 
@@ -30,6 +33,13 @@ public:
 
     // Factory is defined in .cpp to avoid circular includes issues
     FileHandle createFileHandle(std::string path);
+    // Ergonomic helpers for value-semantic handle reuse
+    FileHandle handle(std::string path) { return createFileHandle(std::move(path)); }
+    FileHandle operator()(std::string path) { return createFileHandle(std::move(path)); }
+    
+    // Streaming convenience
+    std::unique_ptr<FileStream> openStream(const std::string& path, StreamOptions options = {});
+    std::unique_ptr<BufferedFileStream> openBufferedStream(const std::string& path, size_t bufferSize = 8192, StreamOptions options = {});
     
     // Backend management
     void setDefaultBackend(std::unique_ptr<IFileSystemBackend> backend);

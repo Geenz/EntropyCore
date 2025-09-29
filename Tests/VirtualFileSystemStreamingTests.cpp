@@ -6,10 +6,23 @@
 #include <vector>
 #include <cstring>
 #include <fstream>
+#include <filesystem>
 
 using namespace EntropyEngine::Core;
 using namespace EntropyEngine::Core::Concurrency;
 using namespace EntropyEngine::Core::IO;
+
+static std::filesystem::path make_temp_file_path(const std::string& base) {
+    auto dir = std::filesystem::temp_directory_path();
+    std::random_device rd;
+    for (int i = 0; i < 8; ++i) {
+        auto now = std::chrono::high_resolution_clock::now().time_since_epoch().count();
+        auto name = base + "-" + std::to_string(now) + "-" + std::to_string(rd());
+        auto p = dir / name;
+        if (!std::filesystem::exists(p)) return p;
+    }
+    return dir / (base + "-" + std::to_string(rd()));
+}
 
 static void setup_service(WorkService& svc, WorkContractGroup& group) {
     svc.start();
@@ -22,7 +35,8 @@ TEST_CASE("VFS streaming unbuffered roundtrip", "[vfs][stream]") {
     setup_service(svc, group);
     VirtualFileSystem vfs(&group);
 
-    auto fh = vfs.createFileHandle("vfs_test_stream_unbuffered.txt");
+    auto temp = make_temp_file_path("vfs_test_stream_unbuffered");
+    auto fh = vfs.createFileHandle(temp.string());
     fh.createEmpty().wait();
 
     auto stream = fh.openReadWriteStream();
@@ -40,6 +54,7 @@ TEST_CASE("VFS streaming unbuffered roundtrip", "[vfs][stream]") {
     REQUIRE(read.bytesTransferred >= wrote.bytesTransferred);
 
     svc.stop();
+    std::error_code ec; (void)std::filesystem::remove(temp, ec);
 }
 
 TEST_CASE("VFS streaming buffered roundtrip", "[vfs][stream][buffered]") {
@@ -48,7 +63,8 @@ TEST_CASE("VFS streaming buffered roundtrip", "[vfs][stream][buffered]") {
     setup_service(svc, group);
     VirtualFileSystem vfs(&group);
 
-    auto fh = vfs.createFileHandle("vfs_test_stream_buffered.txt");
+    auto temp = make_temp_file_path("vfs_test_stream_buffered");
+    auto fh = vfs.createFileHandle(temp.string());
     fh.createEmpty().wait();
 
     auto base = fh.openReadWriteStream();
@@ -67,6 +83,7 @@ TEST_CASE("VFS streaming buffered roundtrip", "[vfs][stream][buffered]") {
     REQUIRE(read.bytesTransferred >= wrote.bytesTransferred);
 
     svc.stop();
+    std::error_code ec; (void)std::filesystem::remove(temp, ec);
 }
 
 TEST_CASE("VFS readLine trims CRLF and writeLine atomic replace", "[vfs][line]") {
@@ -75,7 +92,8 @@ TEST_CASE("VFS readLine trims CRLF and writeLine atomic replace", "[vfs][line]")
     setup_service(svc, group);
     VirtualFileSystem vfs(&group);
 
-    auto fh = vfs.createFileHandle("vfs_test_lines.txt");
+    auto temp = make_temp_file_path("vfs_test_lines");
+    auto fh = vfs.createFileHandle(temp.string());
     auto w = fh.writeAll("Line1\r\nLine2\r\n");
     w.wait();
     REQUIRE(w.status() == FileOpStatus::Complete);
@@ -95,4 +113,5 @@ TEST_CASE("VFS readLine trims CRLF and writeLine atomic replace", "[vfs][line]")
     REQUIRE(l2.contentsText() == std::string("ReplacedLine2"));
 
     svc.stop();
+    std::error_code ec; (void)std::filesystem::remove(temp, ec);
 }

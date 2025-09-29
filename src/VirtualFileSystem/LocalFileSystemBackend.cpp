@@ -396,10 +396,8 @@ FileOperationHandle LocalFileSystemBackend::writeLine(const std::string& path, s
                     } else {
                         out << currentLine;
                     }
+                    out << "\n";  // Always add newline after each line
                     currentLineNum++;
-                    if (currentLineNum <= lineNumber || in.peek() != EOF) {
-                        out << "\n";
-                    }
                 }
             }
             
@@ -411,7 +409,8 @@ FileOperationHandle LocalFileSystemBackend::writeLine(const std::string& path, s
             
             // Add the target line if we haven't yet
             if (currentLineNum == lineNumber) {
-                out << line;
+                out << line << "\n";  // Add newline after the new line too
+                currentLineNum++;
             }
             
             out.flush();

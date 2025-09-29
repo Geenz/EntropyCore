@@ -17,9 +17,22 @@ FileOperationHandle VirtualFileSystem::submit(std::string path, std::function<vo
         st->st.store(FileOpStatus::Running, std::memory_order_release);
         try {
             body(*st, p);
+            // Ensure complete() was called - if not, call it with success
+            // This prevents hanging if body forgets to call complete()
+            if (!st->isComplete.load(std::memory_order_acquire)) {
+                // Body didn't call complete() - do it now
+                // If status is still Running, mark as Complete
+                auto expected = FileOpStatus::Running;
+                if (st->st.compare_exchange_strong(expected, FileOpStatus::Complete)) {
+                    st->complete(FileOpStatus::Complete);
+                }
+            }
         } catch (...) {
-            st->setError(FileError::Unknown, "Unknown error occurred during file operation");
-            st->complete(FileOpStatus::Failed);
+            // Only set error if not already complete
+            if (!st->isComplete.load(std::memory_order_acquire)) {
+                st->setError(FileError::Unknown, "Unknown error occurred during file operation");
+                st->complete(FileOpStatus::Failed);
+            }
             return;
         }
     };
@@ -73,13 +86,29 @@ IFileSystemBackend* VirtualFileSystem::findBackend(const std::string& path) cons
     // Check mounted backends for longest matching prefix
     IFileSystemBackend* bestMatch = nullptr;
     size_t longestPrefix = 0;
-    
+
+#if defined(_WIN32)
+    // Case-insensitive prefix matching on Windows
+    auto toLower = [](std::string s){
+        std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+        return s;
+    };
+    const std::string pathLower = toLower(path);
     for (const auto& [prefix, backend] : _mountedBackends) {
-        if (path.starts_with(prefix) && prefix.length() > longestPrefix) {
+        const std::string prefixLower = toLower(prefix);
+        if (pathLower.rfind(prefixLower, 0) == 0 && prefixLower.length() > longestPrefix) {
+            bestMatch = backend.get();
+            longestPrefix = prefixLower.length();
+        }
+    }
+#else
+    for (const auto& [prefix, backend] : _mountedBackends) {
+        if (path.rfind(prefix, 0) == 0 && prefix.length() > longestPrefix) {
             bestMatch = backend.get();
             longestPrefix = prefix.length();
         }
     }
+#endif
     
     return bestMatch ? bestMatch : _defaultBackend.get();
 }
@@ -148,6 +177,30 @@ void VirtualFileSystem::evictOldLocks(std::chrono::steady_clock::time_point now)
             break;
         }
     }
+}
+
+std::unique_ptr<FileStream> VirtualFileSystem::openStream(const std::string& path, StreamOptions options) {
+    auto* backend = findBackend(path);
+    if (!backend) {
+        // Ensure default backend exists
+        auto def = getDefaultBackend();
+        if (!def) {
+            auto localBackend = std::make_unique<LocalFileSystemBackend>();
+            localBackend->setVirtualFileSystem(this);
+            def = localBackend.get();
+            setDefaultBackend(std::move(localBackend));
+        }
+        backend = def;
+    }
+    return backend->openStream(path, options);
+}
+
+std::unique_ptr<BufferedFileStream> VirtualFileSystem::openBufferedStream(const std::string& path, size_t bufferSize, StreamOptions options) {
+    // Force unbuffered inner; buffering is handled by wrapper
+    options.buffered = false;
+    auto inner = openStream(path, options);
+    if (!inner) return {};
+    return std::make_unique<BufferedFileStream>(std::move(inner), bufferSize);
 }
 
 } // namespace EntropyEngine::Core::IO
