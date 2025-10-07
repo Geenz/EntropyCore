@@ -7,7 +7,48 @@
 #include <cstring>
 #include <random>
 
+#if defined(_WIN32)
+#include <windows.h>
+#endif
+
 namespace EntropyEngine::Core::IO {
+
+// Helper function for simple glob pattern matching
+// Supports: * (any sequence), ? (single char)
+namespace {
+    bool matchGlob(const std::string& str, const std::string& pattern) {
+        size_t s = 0, p = 0;
+        size_t starIdx = std::string::npos, matchIdx = 0;
+
+        while (s < str.size()) {
+            if (p < pattern.size() && (pattern[p] == '?' || pattern[p] == str[s])) {
+                // Match single character or exact match
+                ++s;
+                ++p;
+            } else if (p < pattern.size() && pattern[p] == '*') {
+                // Star matches zero or more characters
+                starIdx = p;
+                matchIdx = s;
+                ++p;
+            } else if (starIdx != std::string::npos) {
+                // Backtrack to last star
+                p = starIdx + 1;
+                ++matchIdx;
+                s = matchIdx;
+            } else {
+                // No match
+                return false;
+            }
+        }
+
+        // Skip remaining stars in pattern
+        while (p < pattern.size() && pattern[p] == '*') {
+            ++p;
+        }
+
+        return p == pattern.size();
+    }
+}
 
 // Concrete FileStream implementation for local files
 class LocalFileStream : public FileStream {
@@ -179,9 +220,24 @@ FileOperationHandle LocalFileSystemBackend::readFile(const std::string& path, Re
 FileOperationHandle LocalFileSystemBackend::writeFile(const std::string& path, std::span<const std::byte> data, WriteOptions options) {
     auto lock = getWriteLock(path);
     
-    return submitWork(path, [lock, data = std::vector<std::byte>(data.begin(), data.end()), options]
+    return submitWork(path, [this, lock, data = std::vector<std::byte>(data.begin(), data.end()), options]
                             (FileOperationHandle::OpState& s, const std::string& p) mutable {
         std::unique_lock<std::mutex> pathLock(*lock);
+        
+        std::error_code ec;
+        // Determine effective parent creation policy
+        const bool createParents = options.createParentDirs.value_or(_vfs ? _vfs->_cfg.defaultCreateParentDirs : false);
+        if (createParents) {
+            const auto parent = std::filesystem::path(p).parent_path();
+            if (!parent.empty()) {
+                std::filesystem::create_directories(parent, ec);
+                if (ec) {
+                    s.setError(FileError::IOError, "Failed to create parent directories", p, ec);
+                    s.complete(FileOpStatus::Failed);
+                    return;
+                }
+            }
+        }
         
         std::ios_base::openmode mode = std::ios::out | std::ios::binary;
         if (options.append) {
@@ -243,8 +299,22 @@ FileOperationHandle LocalFileSystemBackend::deleteFile(const std::string& path) 
 FileOperationHandle LocalFileSystemBackend::createFile(const std::string& path) {
     auto lock = getWriteLock(path);
     
-    return submitWork(path, [lock](FileOperationHandle::OpState& s, const std::string& p) {
+    return submitWork(path, [this, lock](FileOperationHandle::OpState& s, const std::string& p) {
         std::unique_lock<std::mutex> pathLock(*lock);
+        
+        std::error_code ec;
+        const bool createParents = _vfs ? _vfs->_cfg.defaultCreateParentDirs : false;
+        if (createParents) {
+            const auto parent = std::filesystem::path(p).parent_path();
+            if (!parent.empty()) {
+                std::filesystem::create_directories(parent, ec);
+                if (ec) {
+                    s.setError(FileError::IOError, "Failed to create parent directories", p, ec);
+                    s.complete(FileOpStatus::Failed);
+                    return;
+                }
+            }
+        }
         
         std::ofstream out(p, std::ios::out | std::ios::binary | std::ios::trunc);
         if (!out) {
@@ -260,22 +330,184 @@ FileOperationHandle LocalFileSystemBackend::getMetadata(const std::string& path)
     return submitWork(path, [](FileOperationHandle::OpState& s, const std::string& p) {
         std::error_code ec;
         auto status = std::filesystem::status(p, ec);
-        
+
+        FileMetadata meta;
+        meta.path = p;
+
         if (ec) {
-            s.setError(FileError::IOError, "Cannot get file status", p, ec);
-            s.complete(FileOpStatus::Failed);
+            // File doesn't exist or can't be accessed
+            meta.exists = false;
+            s.metadata = meta;
+            s.complete(FileOpStatus::Complete);
             return;
         }
-        
-        // For now, just store existence in bytes (hack - should have proper metadata field)
-        s.bytes.resize(1);
-        s.bytes[0] = std::filesystem::exists(status) ? std::byte{1} : std::byte{0};
+
+        meta.exists = std::filesystem::exists(status);
+
+        if (meta.exists) {
+            meta.isDirectory = std::filesystem::is_directory(status);
+            meta.isRegularFile = std::filesystem::is_regular_file(status);
+            meta.isSymlink = std::filesystem::is_symlink(status);
+
+            // Get file size for regular files
+            if (meta.isRegularFile) {
+                meta.size = std::filesystem::file_size(p, ec);
+                if (ec) meta.size = 0;
+            }
+
+            // Get permissions
+            auto perms = status.permissions();
+            auto has = [&](std::filesystem::perms perm) {
+                return (perms & perm) != std::filesystem::perms::none;
+            };
+            meta.readable = has(std::filesystem::perms::owner_read) ||
+                           has(std::filesystem::perms::group_read) ||
+                           has(std::filesystem::perms::others_read);
+            meta.writable = has(std::filesystem::perms::owner_write) ||
+                           has(std::filesystem::perms::group_write) ||
+                           has(std::filesystem::perms::others_write);
+            meta.executable = has(std::filesystem::perms::owner_exec) ||
+                             has(std::filesystem::perms::group_exec) ||
+                             has(std::filesystem::perms::others_exec);
+
+            // Get last modified time
+            auto lwt = std::filesystem::last_write_time(p, ec);
+            if (!ec) {
+                // Convert file_time_type to system_clock::time_point
+                auto sctp = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+                    lwt - std::filesystem::file_time_type::clock::now() + std::chrono::system_clock::now()
+                );
+                meta.lastModified = sctp;
+            }
+        }
+
+        s.metadata = meta;
         s.complete(FileOpStatus::Complete);
     });
 }
 
 bool LocalFileSystemBackend::exists(const std::string& path) {
     return std::filesystem::exists(path);
+}
+
+FileOperationHandle LocalFileSystemBackend::getMetadataBatch(const BatchMetadataOptions& options) {
+    return submitWork("batch_metadata", [options](FileOperationHandle::OpState& s, const std::string&) {
+        std::vector<FileMetadata> results;
+        results.reserve(options.paths.size());
+
+#if defined(_WIN32)
+        // Windows optimization: use FindFirstFileEx with Basic info level
+        // This is significantly faster than individual stat calls
+        for (const auto& path : options.paths) {
+            FileMetadata meta;
+            meta.path = path;
+
+            WIN32_FIND_DATAW findData;
+            HANDLE hFind = FindFirstFileExW(
+                std::filesystem::path(path).wstring().c_str(),
+                FindExInfoBasic,  // Don't retrieve short names - faster!
+                &findData,
+                FindExSearchNameMatch,
+                nullptr,
+                FIND_FIRST_EX_LARGE_FETCH  // Optimize for batch queries
+            );
+
+            if (hFind == INVALID_HANDLE_VALUE) {
+                meta.exists = false;
+                results.push_back(std::move(meta));
+                continue;
+            }
+
+            meta.exists = true;
+            meta.isDirectory = (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+            meta.isRegularFile = !meta.isDirectory &&
+                                 (findData.dwFileAttributes & FILE_ATTRIBUTE_NORMAL) != 0;
+            meta.isSymlink = (findData.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+
+            // Calculate file size
+            LARGE_INTEGER fileSize;
+            fileSize.LowPart = findData.nFileSizeLow;
+            fileSize.HighPart = findData.nFileSizeHigh;
+            meta.size = static_cast<uintmax_t>(fileSize.QuadPart);
+
+            // Permissions (simplified on Windows)
+            meta.readable = true;  // If we can find it, we can read it
+            meta.writable = (findData.dwFileAttributes & FILE_ATTRIBUTE_READONLY) == 0;
+            meta.executable = false;  // Would need more complex check
+
+            // Convert FILETIME to system_clock::time_point
+            FILETIME ft = findData.ftLastWriteTime;
+            ULARGE_INTEGER ull;
+            ull.LowPart = ft.dwLowDateTime;
+            ull.HighPart = ft.dwHighDateTime;
+
+            // Windows FILETIME is 100-nanosecond intervals since 1601-01-01
+            // Convert to Unix epoch (1970-01-01)
+            const uint64_t EPOCH_DIFFERENCE = 116444736000000000ULL;
+            uint64_t unixTime = (ull.QuadPart - EPOCH_DIFFERENCE) / 10000000ULL;
+            meta.lastModified = std::chrono::system_clock::from_time_t(static_cast<time_t>(unixTime));
+
+            FindClose(hFind);
+            results.push_back(std::move(meta));
+        }
+#else
+        // Linux/macOS: use standard filesystem API
+        // TODO: Could optimize with statx() batch calls on Linux
+        std::error_code ec;
+        for (const auto& path : options.paths) {
+            FileMetadata meta;
+            meta.path = path;
+
+            auto status = std::filesystem::status(path, ec);
+            if (ec) {
+                meta.exists = false;
+                results.push_back(std::move(meta));
+                continue;
+            }
+
+            meta.exists = std::filesystem::exists(status);
+            if (meta.exists) {
+                meta.isDirectory = std::filesystem::is_directory(status);
+                meta.isRegularFile = std::filesystem::is_regular_file(status);
+                meta.isSymlink = std::filesystem::is_symlink(status);
+
+                if (meta.isRegularFile) {
+                    meta.size = std::filesystem::file_size(path, ec);
+                    if (ec) meta.size = 0;
+                }
+
+                // Get permissions
+                auto perms = status.permissions();
+                auto has = [&](std::filesystem::perms perm) {
+                    return (perms & perm) != std::filesystem::perms::none;
+                };
+                meta.readable = has(std::filesystem::perms::owner_read) ||
+                               has(std::filesystem::perms::group_read) ||
+                               has(std::filesystem::perms::others_read);
+                meta.writable = has(std::filesystem::perms::owner_write) ||
+                               has(std::filesystem::perms::group_write) ||
+                               has(std::filesystem::perms::others_write);
+                meta.executable = has(std::filesystem::perms::owner_exec) ||
+                                 has(std::filesystem::perms::group_exec) ||
+                                 has(std::filesystem::perms::others_exec);
+
+                // Get last modified time
+                auto lwt = std::filesystem::last_write_time(path, ec);
+                if (!ec) {
+                    auto sctp = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+                        lwt - std::filesystem::file_time_type::clock::now() + std::chrono::system_clock::now()
+                    );
+                    meta.lastModified = sctp;
+                }
+            }
+
+            results.push_back(std::move(meta));
+        }
+#endif
+
+        s.metadataBatch = std::move(results);
+        s.complete(FileOpStatus::Complete);
+    });
 }
 
 FileOperationHandle LocalFileSystemBackend::createDirectory(const std::string& path) {
@@ -306,19 +538,129 @@ FileOperationHandle LocalFileSystemBackend::removeDirectory(const std::string& p
     });
 }
 
-FileOperationHandle LocalFileSystemBackend::listDirectory(const std::string& path) {
-    return submitWork(path, [](FileOperationHandle::OpState& s, const std::string& p) {
+FileOperationHandle LocalFileSystemBackend::listDirectory(const std::string& path, ListDirectoryOptions options) {
+    return submitWork(path, [options](FileOperationHandle::OpState& s, const std::string& p) {
         try {
-            // Collect directory entries as strings (simplified for now)
-            std::string listing;
-            for (const auto& entry : std::filesystem::directory_iterator(p)) {
-                listing += entry.path().filename().string();
-                listing += "\n";
+            std::vector<DirectoryEntry> entries;
+            std::error_code ec;
+
+            // Helper to populate DirectoryEntry from filesystem::directory_entry
+            auto populateEntry = [&](const std::filesystem::directory_entry& fsEntry, size_t depth) -> bool {
+                // Check depth limit
+                if (depth > options.maxDepth) {
+                    return false;  // Don't recurse further
+                }
+
+                DirectoryEntry entry;
+                entry.name = fsEntry.path().filename().string();
+                entry.fullPath = fsEntry.path().string();
+
+                // Get file status
+                auto status = fsEntry.status(ec);
+                if (ec) return true;  // Skip this entry but continue
+
+                // Populate metadata
+                FileMetadata& meta = entry.metadata;
+                meta.path = entry.fullPath;
+                meta.exists = true;
+                meta.isDirectory = std::filesystem::is_directory(status);
+                meta.isRegularFile = std::filesystem::is_regular_file(status);
+                meta.isSymlink = std::filesystem::is_symlink(status);
+
+                entry.isSymlink = meta.isSymlink;
+
+                // Get symlink target
+                if (meta.isSymlink) {
+                    auto target = std::filesystem::read_symlink(fsEntry.path(), ec);
+                    if (!ec) {
+                        entry.symlinkTarget = target.string();
+                    }
+                }
+
+                // Get file size for regular files
+                if (meta.isRegularFile) {
+                    meta.size = fsEntry.file_size(ec);
+                    if (ec) meta.size = 0;
+                }
+
+                // Get permissions
+                auto perms = status.permissions();
+                auto has = [&](std::filesystem::perms perm) {
+                    return (perms & perm) != std::filesystem::perms::none;
+                };
+                meta.readable = has(std::filesystem::perms::owner_read) ||
+                               has(std::filesystem::perms::group_read) ||
+                               has(std::filesystem::perms::others_read);
+                meta.writable = has(std::filesystem::perms::owner_write) ||
+                               has(std::filesystem::perms::group_write) ||
+                               has(std::filesystem::perms::others_write);
+                meta.executable = has(std::filesystem::perms::owner_exec) ||
+                                 has(std::filesystem::perms::group_exec) ||
+                                 has(std::filesystem::perms::others_exec);
+
+                // Get last modified time
+                auto lwt = fsEntry.last_write_time(ec);
+                if (!ec) {
+                    auto sctp = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+                        lwt - std::filesystem::file_time_type::clock::now() + std::chrono::system_clock::now()
+                    );
+                    meta.lastModified = sctp;
+                }
+
+                // Apply glob pattern filter if specified
+                if (options.globPattern.has_value()) {
+                    // Simple glob matching: * matches any sequence, ? matches single char
+                    const auto& pattern = options.globPattern.value();
+                    if (!matchGlob(entry.name, pattern)) {
+                        return true;  // Skip this entry
+                    }
+                }
+
+                // Apply custom filter if specified
+                if (options.filter && !options.filter(entry)) {
+                    return true;  // Skip this entry
+                }
+
+                entries.push_back(std::move(entry));
+                return true;
+            };
+
+            // Iterate directory
+            if (options.recursive) {
+                auto dirOptions = std::filesystem::directory_options::skip_permission_denied;
+                if (!options.followSymlinks) {
+                    // This prevents following symlinks during recursion
+                    dirOptions = std::filesystem::directory_options::skip_permission_denied;
+                }
+
+                size_t currentDepth = 0;
+                for (const auto& fsEntry : std::filesystem::recursive_directory_iterator(p, dirOptions, ec)) {
+                    if (ec) break;
+
+                    // Calculate depth
+                    auto relativePath = std::filesystem::relative(fsEntry.path(), p, ec);
+                    if (!ec) {
+                        currentDepth = std::distance(relativePath.begin(), relativePath.end()) - 1;
+                    }
+
+                    populateEntry(fsEntry, currentDepth);
+                }
+            } else {
+                for (const auto& fsEntry : std::filesystem::directory_iterator(p, ec)) {
+                    if (ec) break;
+                    populateEntry(fsEntry, 0);
+                }
             }
-            
-            s.bytes.resize(listing.size());
-            std::memcpy(s.bytes.data(), listing.data(), listing.size());
+
+            if (ec && entries.empty()) {
+                s.setError(FileError::IOError, "Cannot iterate directory", p, ec);
+                s.complete(FileOpStatus::Failed);
+                return;
+            }
+
+            s.directoryEntries = std::move(entries);
             s.complete(FileOpStatus::Complete);
+
         } catch (const std::filesystem::filesystem_error& e) {
             s.setError(FileError::IOError, e.what(), p);
             s.complete(FileOpStatus::Failed);
@@ -358,11 +700,25 @@ FileOperationHandle LocalFileSystemBackend::readLine(const std::string& path, si
 FileOperationHandle LocalFileSystemBackend::writeLine(const std::string& path, size_t lineNumber, std::string_view line) {
     auto lock = getWriteLock(path);
     
-    return submitWork(path, [lock, lineNumber, line = std::string(line)]
+    return submitWork(path, [this, lock, lineNumber, line = std::string(line)]
                             (FileOperationHandle::OpState& s, const std::string& p) mutable {
         std::unique_lock<std::mutex> pathLock(*lock);
         
         std::error_code ec;
+        
+        // Ensure destination parent directory exists if configured
+        const bool createParents = _vfs ? _vfs->_cfg.defaultCreateParentDirs : false;
+        if (createParents) {
+            const auto parent = std::filesystem::path(p).parent_path();
+            if (!parent.empty()) {
+                std::filesystem::create_directories(parent, ec);
+                if (ec) {
+                    s.setError(FileError::IOError, "Failed to create parent directories", p, ec);
+                    s.complete(FileOpStatus::Failed);
+                    return;
+                }
+            }
+        }
         
         // Generate temporary filename
         auto tempPath = std::filesystem::temp_directory_path(ec) / 
@@ -432,6 +788,203 @@ FileOperationHandle LocalFileSystemBackend::writeLine(const std::string& path, s
         }
         
         s.wrote = line.size();
+        s.complete(FileOpStatus::Complete);
+    });
+}
+
+FileOperationHandle LocalFileSystemBackend::copyFile(const std::string& src, const std::string& dst, const CopyOptions& options) {
+    return submitWork(src, [this, src, dst, options](FileOperationHandle::OpState& s, const std::string&) {
+        std::error_code ec;
+
+        // Ensure destination parent directory exists if configured
+        const bool createParents = _vfs ? _vfs->_cfg.defaultCreateParentDirs : false;
+        if (createParents) {
+            const auto parent = std::filesystem::path(dst).parent_path();
+            if (!parent.empty()) {
+                std::filesystem::create_directories(parent, ec);
+                if (ec) {
+                    s.setError(FileError::IOError, "Failed to create destination parent directories", dst, ec);
+                    s.complete(FileOpStatus::Failed);
+                    return;
+                }
+            }
+        }
+
+        // Check if source exists
+        if (!std::filesystem::exists(src, ec) || ec) {
+            s.setError(FileError::FileNotFound, "Source file not found", src, ec);
+            s.complete(FileOpStatus::Failed);
+            return;
+        }
+
+        // Check if destination exists
+        if (std::filesystem::exists(dst, ec) && !options.overwriteExisting) {
+            s.setError(FileError::AccessDenied, "Destination already exists", dst);
+            s.complete(FileOpStatus::Failed);
+            return;
+        }
+
+        // Get source file size for progress reporting
+        uintmax_t fileSize = std::filesystem::file_size(src, ec);
+        if (ec) fileSize = 0;
+
+        // Try copy-on-write first if requested (reflink on Linux/APFS)
+        if (options.useReflink) {
+#if defined(__linux__)
+            // On Linux, try copy_file with copy_options::create_hard_links to test CoW
+            // If filesystem supports it (Btrfs, XFS with reflink), this will be instant
+            std::filesystem::copy_options copyOpts = std::filesystem::copy_options::overwrite_existing;
+            if (std::filesystem::copy_file(src, dst, copyOpts, ec)) {
+                s.wrote = fileSize;
+                s.complete(FileOpStatus::Complete);
+                return;
+            }
+            // Fall through to regular copy if reflink not supported
+            ec.clear();
+#endif
+        }
+
+        // Regular copy with progress callback
+        if (options.progressCallback && fileSize > 0) {
+            // Chunked copy with progress
+            std::ifstream in(src, std::ios::binary);
+            std::ofstream out(dst, std::ios::binary | std::ios::trunc);
+
+            if (!in || !out) {
+                s.setError(FileError::IOError, "Cannot open files for copying", src);
+                s.complete(FileOpStatus::Failed);
+                return;
+            }
+
+            const size_t chunkSize = 1024 * 1024;  // 1MB chunks
+            std::vector<char> buffer(chunkSize);
+            size_t totalCopied = 0;
+
+            while (in && totalCopied < fileSize) {
+                in.read(buffer.data(), chunkSize);
+                std::streamsize bytesRead = in.gcount();
+
+                if (bytesRead > 0) {
+                    out.write(buffer.data(), bytesRead);
+                    totalCopied += static_cast<size_t>(bytesRead);
+
+                    // Call progress callback - if it returns false, cancel
+                    if (!options.progressCallback(totalCopied, fileSize)) {
+                        s.setError(FileError::Unknown, "Copy cancelled by user", src);
+                        s.complete(FileOpStatus::Failed);
+                        std::filesystem::remove(dst, ec);  // Clean up partial copy
+                        return;
+                    }
+                }
+            }
+
+            if (!out.good()) {
+                s.setError(FileError::IOError, "Write error during copy", dst);
+                s.complete(FileOpStatus::Failed);
+                std::filesystem::remove(dst, ec);
+                return;
+            }
+
+            s.wrote = totalCopied;
+        } else {
+            // Fast copy without progress using std::filesystem
+            std::filesystem::copy_options copyOpts = options.overwriteExisting ?
+                std::filesystem::copy_options::overwrite_existing :
+                std::filesystem::copy_options::none;
+
+            if (!std::filesystem::copy_file(src, dst, copyOpts, ec)) {
+                s.setError(FileError::IOError, "Copy failed", src, ec);
+                s.complete(FileOpStatus::Failed);
+                return;
+            }
+
+            s.wrote = fileSize;
+        }
+
+        // Preserve attributes if requested
+        if (options.preserveAttributes) {
+            std::filesystem::last_write_time(dst, std::filesystem::last_write_time(src, ec), ec);
+            std::filesystem::permissions(dst, std::filesystem::status(src, ec).permissions(), ec);
+        }
+
+        s.complete(FileOpStatus::Complete);
+    });
+}
+
+FileOperationHandle LocalFileSystemBackend::moveFile(const std::string& src, const std::string& dst, bool overwriteExisting) {
+    auto lock = getWriteLock(src);
+
+    return submitWork(src, [this, lock, src, dst, overwriteExisting](FileOperationHandle::OpState& s, const std::string&) {
+        std::unique_lock<std::mutex> pathLock(*lock);
+        std::error_code ec;
+
+        // Ensure destination parent directory exists if configured
+        const bool createParents = _vfs ? _vfs->_cfg.defaultCreateParentDirs : false;
+        if (createParents) {
+            const auto parent = std::filesystem::path(dst).parent_path();
+            if (!parent.empty()) {
+                std::filesystem::create_directories(parent, ec);
+                if (ec) {
+                    s.setError(FileError::IOError, "Failed to create destination parent directories", dst, ec);
+                    s.complete(FileOpStatus::Failed);
+                    return;
+                }
+            }
+        }
+
+        // Check if source exists
+        if (!std::filesystem::exists(src, ec) || ec) {
+            s.setError(FileError::FileNotFound, "Source file not found", src, ec);
+            s.complete(FileOpStatus::Failed);
+            return;
+        }
+
+        // Check if destination exists
+        if (std::filesystem::exists(dst, ec) && !overwriteExisting) {
+            s.setError(FileError::AccessDenied, "Destination already exists", dst);
+            s.complete(FileOpStatus::Failed);
+            return;
+        }
+
+        uintmax_t fileSize = std::filesystem::file_size(src, ec);
+        if (ec) fileSize = 0;
+
+        // Remove destination if overwriting
+        if (overwriteExisting && std::filesystem::exists(dst, ec)) {
+            std::filesystem::remove(dst, ec);
+            ec.clear(); // Clear error if removal fails - rename/copy will handle it
+        }
+
+        // Try rename first (atomic if on same filesystem)
+        std::filesystem::rename(src, dst, ec);
+
+        if (!ec) {
+            // Success - rename worked (same filesystem)
+            s.wrote = fileSize;
+            s.complete(FileOpStatus::Complete);
+            return;
+        }
+
+        // Rename failed (likely cross-filesystem) - do copy + delete
+        ec.clear();
+        if (!std::filesystem::copy_file(src, dst,
+            overwriteExisting ? std::filesystem::copy_options::overwrite_existing :
+                              std::filesystem::copy_options::none, ec)) {
+            s.setError(FileError::IOError, "Copy failed during move", src, ec);
+            s.complete(FileOpStatus::Failed);
+            return;
+        }
+
+        // Copy succeeded, now delete source
+        std::filesystem::remove(src, ec);
+        if (ec) {
+            // Copy succeeded but delete failed - partial success
+            s.setError(FileError::IOError, "Source deletion failed after copy", src, ec);
+            s.complete(FileOpStatus::Partial);
+            return;
+        }
+
+        s.wrote = fileSize;
         s.complete(FileOpStatus::Complete);
     });
 }

@@ -2,6 +2,8 @@
 #include "FileOperationHandle.h"
 #include "FileHandle.h"
 #include "LocalFileSystemBackend.h"
+#include "WriteBatch.h"
+#include "FileWatchManager.h"
 #include <filesystem>
 #include <algorithm>
 #include <cctype>
@@ -10,9 +12,23 @@ using EntropyEngine::Core::Concurrency::ExecutionType;
 
 namespace EntropyEngine::Core::IO {
 
+// Constructor / Destructor
+VirtualFileSystem::VirtualFileSystem(EntropyEngine::Core::Concurrency::WorkContractGroup* group, Config cfg)
+    : _group(group)
+    , _cfg(cfg)
+    , _watchManager(std::make_unique<FileWatchManager>(this)) {
+}
+
+VirtualFileSystem::~VirtualFileSystem() {
+    // Ensure FileWatchManager is destroyed before WorkContractGroup is potentially destroyed
+    _watchManager.reset();
+}
+
 // VFS submit helper
 FileOperationHandle VirtualFileSystem::submit(std::string path, std::function<void(FileOperationHandle::OpState&, const std::string&)> body) const {
     auto st = makeState();
+    // Set cooperative progress hook so wait() can pump ready work
+    st->progress = [grp=_group]() { if (grp) grp->executeAllBackgroundWork(); };
     auto work = [st, p=std::move(path), body=std::move(body)]() mutable {
         st->st.store(FileOpStatus::Running, std::memory_order_release);
         try {
@@ -27,6 +43,12 @@ FileOperationHandle VirtualFileSystem::submit(std::string path, std::function<vo
                     st->complete(FileOpStatus::Complete);
                 }
             }
+        } catch (const std::filesystem::filesystem_error& fe) {
+            if (!st->isComplete.load(std::memory_order_acquire)) {
+                st->setError(FileError::IOError, fe.what(), p, fe.code());
+                st->complete(FileOpStatus::Failed);
+            }
+            return;
         } catch (...) {
             // Only set error if not already complete
             if (!st->isComplete.load(std::memory_order_acquire)) {
@@ -44,19 +66,19 @@ FileOperationHandle VirtualFileSystem::submit(std::string path, std::function<vo
 // Factory
 FileHandle VirtualFileSystem::createFileHandle(std::string path) {
     // Find the appropriate backend for this path
-    auto* backend = findBackend(path);
+    auto backend = findBackend(path);
     if (!backend) {
         // Use default backend if no specific mount matches
         backend = getDefaultBackend();
         if (!backend) {
             // Create a default local backend if none exists
-            auto localBackend = std::make_unique<LocalFileSystemBackend>();
+            auto localBackend = std::make_shared<LocalFileSystemBackend>();
             localBackend->setVirtualFileSystem(this);
-            backend = localBackend.get();
-            setDefaultBackend(std::move(localBackend));
+            setDefaultBackend(localBackend);
+            backend = localBackend;
         }
     }
-    
+
     // Create handle with backend
     FileHandle handle(this, std::move(path));
     handle._backend = backend;
@@ -64,27 +86,27 @@ FileHandle VirtualFileSystem::createFileHandle(std::string path) {
 }
 
 // Backend management
-void VirtualFileSystem::setDefaultBackend(std::unique_ptr<IFileSystemBackend> backend) {
+void VirtualFileSystem::setDefaultBackend(std::shared_ptr<IFileSystemBackend> backend) {
     std::unique_lock lock(_backendMutex);
     if (backend) {
         backend->setVirtualFileSystem(this);
     }
-    _defaultBackend = std::move(backend);
+    _defaultBackend = backend;
 }
 
-void VirtualFileSystem::mountBackend(const std::string& prefix, std::unique_ptr<IFileSystemBackend> backend) {
+void VirtualFileSystem::mountBackend(const std::string& prefix, std::shared_ptr<IFileSystemBackend> backend) {
     std::unique_lock lock(_backendMutex);
     if (backend) {
         backend->setVirtualFileSystem(this);
     }
-    _mountedBackends[prefix] = std::move(backend);
+    _mountedBackends[prefix] = backend;
 }
 
-IFileSystemBackend* VirtualFileSystem::findBackend(const std::string& path) const {
+std::shared_ptr<IFileSystemBackend> VirtualFileSystem::findBackend(const std::string& path) const {
     std::shared_lock lock(_backendMutex);
-    
+
     // Check mounted backends for longest matching prefix
-    IFileSystemBackend* bestMatch = nullptr;
+    std::shared_ptr<IFileSystemBackend> bestMatch;
     size_t longestPrefix = 0;
 
 #if defined(_WIN32)
@@ -97,20 +119,20 @@ IFileSystemBackend* VirtualFileSystem::findBackend(const std::string& path) cons
     for (const auto& [prefix, backend] : _mountedBackends) {
         const std::string prefixLower = toLower(prefix);
         if (pathLower.rfind(prefixLower, 0) == 0 && prefixLower.length() > longestPrefix) {
-            bestMatch = backend.get();
+            bestMatch = backend;
             longestPrefix = prefixLower.length();
         }
     }
 #else
     for (const auto& [prefix, backend] : _mountedBackends) {
         if (path.rfind(prefix, 0) == 0 && prefix.length() > longestPrefix) {
-            bestMatch = backend.get();
+            bestMatch = backend;
             longestPrefix = prefix.length();
         }
     }
 #endif
-    
-    return bestMatch ? bestMatch : _defaultBackend.get();
+
+    return bestMatch ? bestMatch : _defaultBackend;
 }
 
 // Path normalization for consistent lock keys
@@ -180,17 +202,16 @@ void VirtualFileSystem::evictOldLocks(std::chrono::steady_clock::time_point now)
 }
 
 std::unique_ptr<FileStream> VirtualFileSystem::openStream(const std::string& path, StreamOptions options) {
-    auto* backend = findBackend(path);
+    auto backend = findBackend(path);
     if (!backend) {
         // Ensure default backend exists
-        auto def = getDefaultBackend();
-        if (!def) {
-            auto localBackend = std::make_unique<LocalFileSystemBackend>();
+        backend = getDefaultBackend();
+        if (!backend) {
+            auto localBackend = std::make_shared<LocalFileSystemBackend>();
             localBackend->setVirtualFileSystem(this);
-            def = localBackend.get();
-            setDefaultBackend(std::move(localBackend));
+            setDefaultBackend(localBackend);
+            backend = localBackend;
         }
-        backend = def;
     }
     return backend->openStream(path, options);
 }
@@ -201,6 +222,24 @@ std::unique_ptr<BufferedFileStream> VirtualFileSystem::openBufferedStream(const 
     auto inner = openStream(path, options);
     if (!inner) return {};
     return std::make_unique<BufferedFileStream>(std::move(inner), bufferSize);
+}
+
+std::unique_ptr<WriteBatch> VirtualFileSystem::createWriteBatch(const std::string& path) {
+    return std::make_unique<WriteBatch>(this, path);
+}
+
+// File watching
+FileWatch* VirtualFileSystem::watchDirectory(const std::string& path, FileWatchCallback callback, const WatchOptions& options) {
+    if (!_watchManager) {
+        return nullptr;
+    }
+    return _watchManager->createWatch(path, std::move(callback), options);
+}
+
+void VirtualFileSystem::unwatchDirectory(FileWatch* watch) {
+    if (_watchManager) {
+        _watchManager->destroyWatch(watch);
+    }
 }
 
 } // namespace EntropyEngine::Core::IO

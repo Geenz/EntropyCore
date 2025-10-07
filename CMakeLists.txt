@@ -32,6 +32,7 @@ if(ENTROPY_WITH_TRACY)
     find_package(Tracy CONFIG QUIET)
 endif()
 find_package(Boost REQUIRED COMPONENTS type_index)
+find_package(efsw CONFIG REQUIRED)
 
 # Only require Catch2 when building tests
 if(ENTROPY_BUILD_TESTS)
@@ -58,6 +59,9 @@ set(ENTROPY_CORE_SOURCES
         src/VirtualFileSystem/FileHandle.cpp
         src/VirtualFileSystem/LocalFileSystemBackend.cpp
         src/VirtualFileSystem/FileStream.cpp
+        src/VirtualFileSystem/WriteBatch.cpp
+        src/VirtualFileSystem/FileWatch.cpp
+        src/VirtualFileSystem/FileWatchManager.cpp
 )
 
 set(ENTROPY_CORE_HEADERS
@@ -127,9 +131,11 @@ target_include_directories(EntropyCore
 )
 
 # Link dependencies
-target_link_libraries(EntropyCore 
+target_link_libraries(EntropyCore
     PUBLIC
         Boost::type_index
+    PRIVATE
+        efsw::efsw
 )
 
 # Define for export macros when building the library

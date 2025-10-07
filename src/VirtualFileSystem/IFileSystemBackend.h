@@ -5,6 +5,7 @@
 #include <optional>
 #include <functional>
 #include <chrono>
+#include <vector>
 #include "FileOperationHandle.h"
 
 namespace EntropyEngine::Core::IO {
@@ -25,13 +26,15 @@ struct WriteOptions {
     bool append = false;
     bool createIfMissing = true;
     bool truncate = false;
+    std::optional<bool> createParentDirs;     // per-operation override; nullopt => use VFS default
+    std::optional<bool> ensureFinalNewline;   // for whole-file rewrites; nullopt => preserve prior
 };
 
 struct StreamOptions {
     enum Mode { Read, Write, ReadWrite };
     Mode mode = Read;
     bool buffered = true;
-    size_t bufferSize = 8192;
+    size_t bufferSize = 65536;  // 64KB default (Phase 2 optimization)
 };
 
 // Backend capabilities
@@ -46,18 +49,36 @@ struct BackendCapabilities {
     size_t maxFileSize = SIZE_MAX;
 };
 
-// File metadata
-struct FileMetadata {
-    std::string path;
-    bool exists = false;
-    bool isDirectory = false;
-    bool isRegularFile = false;
-    uintmax_t size = 0;
-    bool readable = false;
-    bool writable = false;
-    bool executable = false;
-    std::optional<std::chrono::system_clock::time_point> lastModified;
-    std::optional<std::string> mimeType;
+// FileMetadata and DirectoryEntry are now defined in FileOperationHandle.h
+
+// Options for directory listing
+struct ListDirectoryOptions {
+    bool recursive = false;
+    bool followSymlinks = true;
+    size_t maxDepth = SIZE_MAX;
+    std::optional<std::string> globPattern;  // Simple glob matching (*.txt, file?.dat, etc)
+    std::function<bool(const DirectoryEntry&)> filter;  // Optional filter callback
+};
+
+// Options for batch metadata queries
+struct BatchMetadataOptions {
+    std::vector<std::string> paths;
+    bool includeExtendedAttributes = false;
+    std::chrono::seconds cacheTTL = std::chrono::seconds(0);  // 0 = no caching
+};
+
+// Options for copy operations
+struct CopyOptions {
+    bool overwriteExisting = false;
+    bool preserveAttributes = true;
+    bool useReflink = true;  // Use copy-on-write if available (Linux, APFS)
+    std::function<bool(size_t copied, size_t total)> progressCallback;  // Return false to cancel
+};
+
+// Options for large file operations with progress
+struct ProgressOptions {
+    size_t chunkSize = 1024 * 1024;  // 1MB default
+    std::function<bool(size_t processed, size_t total)> progressCallback;  // Return false to cancel
 };
 
 // Backend interface
@@ -74,15 +95,22 @@ public:
     // Metadata operations
     virtual FileOperationHandle getMetadata(const std::string& path) = 0;
     virtual bool exists(const std::string& path) = 0;
+
+    // Batch metadata query (Phase 2)
+    virtual FileOperationHandle getMetadataBatch(const BatchMetadataOptions& options) {
+        (void)options;
+        return FileOperationHandle{}; // Default: not supported
+    }
     
     // Directory operations (optional)
-    virtual FileOperationHandle createDirectory(const std::string& path) { 
+    virtual FileOperationHandle createDirectory(const std::string& path) {
         return FileOperationHandle{}; // Default: not supported
     }
-    virtual FileOperationHandle removeDirectory(const std::string& path) { 
+    virtual FileOperationHandle removeDirectory(const std::string& path) {
         return FileOperationHandle{}; // Default: not supported
     }
-    virtual FileOperationHandle listDirectory(const std::string& path) { 
+    virtual FileOperationHandle listDirectory(const std::string& path, ListDirectoryOptions options = {}) {
+        (void)options;  // Suppress unused warning
         return FileOperationHandle{}; // Default: not supported
     }
     
@@ -92,6 +120,17 @@ public:
     // Line operations
     virtual FileOperationHandle readLine(const std::string& path, size_t lineNumber) = 0;
     virtual FileOperationHandle writeLine(const std::string& path, size_t lineNumber, std::string_view line) = 0;
+
+    // Copy/Move operations (Phase 2)
+    virtual FileOperationHandle copyFile(const std::string& src, const std::string& dst, const CopyOptions& options = {}) {
+        (void)src; (void)dst; (void)options;
+        return FileOperationHandle{}; // Default: not supported
+    }
+
+    virtual FileOperationHandle moveFile(const std::string& src, const std::string& dst, bool overwriteExisting = false) {
+        (void)src; (void)dst; (void)overwriteExisting;
+        return FileOperationHandle{}; // Default: not supported
+    }
     
     // Backend info
     virtual BackendCapabilities getCapabilities() const = 0;

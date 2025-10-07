@@ -51,14 +51,14 @@ public:
     std::unique_ptr<FileStream> openReadStream() const;
     std::unique_ptr<FileStream> openWriteStream(bool append = false) const;
     std::unique_ptr<FileStream> openReadWriteStream() const;
-    std::unique_ptr<BufferedFileStream> openBufferedStream(size_t bufferSize = 8192) const;
+    std::unique_ptr<BufferedFileStream> openBufferedStream(size_t bufferSize = 65536) const;
 
     const Metadata& metadata() const noexcept { return _meta; }
 private:
     VirtualFileSystem* _vfs;
-    IFileSystemBackend* _backend = nullptr;  // Backend for this file
+    std::shared_ptr<IFileSystemBackend> _backend;  // Backend for this file (ref-counted for safety)
     Metadata _meta; // associated metadata for this handle
-    
+
     friend class VirtualFileSystem;
 };
 

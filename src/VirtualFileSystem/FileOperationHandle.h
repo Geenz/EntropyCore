@@ -11,6 +11,8 @@
 #include <cstddef>
 #include <optional>
 #include <system_error>
+#include <chrono>
+#include <functional>
 
 namespace EntropyEngine::Core::IO {
 
@@ -34,6 +36,30 @@ struct FileErrorInfo {
     std::string path;
 };
 
+// File metadata - defined here so OpState can use it
+struct FileMetadata {
+    std::string path;
+    bool exists = false;
+    bool isDirectory = false;
+    bool isRegularFile = false;
+    bool isSymlink = false;
+    uintmax_t size = 0;
+    bool readable = false;
+    bool writable = false;
+    bool executable = false;
+    std::optional<std::chrono::system_clock::time_point> lastModified;
+    std::optional<std::string> mimeType;
+};
+
+// Directory entry with metadata - defined here so OpState can use it
+struct DirectoryEntry {
+    std::string name;           // Just the filename, not full path
+    std::string fullPath;       // Complete absolute path
+    FileMetadata metadata;      // Full metadata for this entry
+    bool isSymlink = false;
+    std::optional<std::string> symlinkTarget;
+};
+
 class FileOperationHandle {
 public:
     FileOperationHandle() = default;
@@ -47,9 +73,21 @@ public:
 
     // Write results - only valid after wait()
     uint64_t bytesWritten() const;
-    
+
+    // Metadata results - only valid after wait()
+    const std::optional<FileMetadata>& metadata() const;
+
+    // Directory listing results - only valid after wait()
+    const std::vector<DirectoryEntry>& directoryEntries() const;
+
+    // Batch metadata results - only valid after wait()
+    const std::vector<FileMetadata>& metadataBatch() const;
+
     // Error information - only valid after wait() and status is Failed
     const FileErrorInfo& errorInfo() const;
+
+    // Factory for immediate completion (no async work needed)
+    static FileOperationHandle immediate(FileOpStatus status);
 
 private:
     struct OpState {
@@ -57,11 +95,18 @@ private:
         mutable std::mutex completionMutex;
         mutable std::condition_variable completionCV;
         std::atomic<bool> isComplete{false};
-        
+
+        // Optional progress hook called by wait() to ensure forward progress
+        std::function<void()> progress;
+
         // Result data - only valid after completion
         std::vector<std::byte> bytes;    // for reads
         uint64_t wrote = 0;              // for writes
         FileErrorInfo error;             // error details if failed
+        std::string text;                // for text preview/read operations
+        std::optional<FileMetadata> metadata;  // for metadata queries
+        std::vector<DirectoryEntry> directoryEntries;  // for directory listings
+        std::vector<FileMetadata> metadataBatch;  // for batch metadata queries
         
         void complete(FileOpStatus final) noexcept {
             {

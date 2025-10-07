@@ -19,11 +19,12 @@ public:
     // Metadata operations
     FileOperationHandle getMetadata(const std::string& path) override;
     bool exists(const std::string& path) override;
+    FileOperationHandle getMetadataBatch(const BatchMetadataOptions& options) override;
     
     // Directory operations
     FileOperationHandle createDirectory(const std::string& path) override;
     FileOperationHandle removeDirectory(const std::string& path) override;
-    FileOperationHandle listDirectory(const std::string& path) override;
+    FileOperationHandle listDirectory(const std::string& path, ListDirectoryOptions options = {}) override;
     
     // Stream support
     std::unique_ptr<FileStream> openStream(const std::string& path, StreamOptions options = {}) override;
@@ -31,6 +32,10 @@ public:
     // Line operations
     FileOperationHandle readLine(const std::string& path, size_t lineNumber) override;
     FileOperationHandle writeLine(const std::string& path, size_t lineNumber, std::string_view line) override;
+
+    // Copy/Move operations (Phase 2)
+    FileOperationHandle copyFile(const std::string& src, const std::string& dst, const CopyOptions& options = {}) override;
+    FileOperationHandle moveFile(const std::string& src, const std::string& dst, bool overwriteExisting = false) override;
     
     // Backend info
     BackendCapabilities getCapabilities() const override;

@@ -7,5 +7,8 @@
   "dependencies" : [ "catch2", "tracy", {
     "name" : "boost-type-index",
     "version>=" : "1.88.0"
+  }, {
+    "name" : "efsw",
+    "version>=" : "1.5.0"
   } ]
 }
