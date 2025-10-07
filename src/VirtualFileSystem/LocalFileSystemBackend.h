@@ -40,6 +40,9 @@ public:
     // Backend info
     BackendCapabilities getCapabilities() const override;
     std::string getBackendType() const override { return "LocalFileSystem"; }
+
+    // Backend-aware normalization for identity/locking
+    std::string normalizeKey(const std::string& path) const override;
     
 private:
     // Helper to get a write lock for a path if needed

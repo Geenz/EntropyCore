@@ -6,6 +6,8 @@
 #include <sstream>
 #include <cstring>
 #include <random>
+#include <algorithm>
+#include <cctype>
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -176,13 +178,19 @@ FileOperationHandle LocalFileSystemBackend::submitWork(const std::string& path,
 }
 
 std::shared_ptr<std::mutex> LocalFileSystemBackend::getWriteLock(const std::string& path) {
+    // Prefer VFS advisory lock cache to centralize serialization and respect backend-aware normalization.
+    if (_vfs) {
+        return _vfs->lockForPath(path);
+    }
+    // Fallback: local map if no VFS is set (should be rare/testing only)
     std::lock_guard<std::mutex> lock(_lockMapMutex);
-    auto it = _writeLocks.find(path);
+    auto key = path;
+    auto it = _writeLocks.find(key);
     if (it != _writeLocks.end()) {
         return it->second;
     }
     auto mutex = std::make_shared<std::mutex>();
-    _writeLocks[path] = mutex;
+    _writeLocks[key] = mutex;
     return mutex;
 }
 
@@ -1003,3 +1011,20 @@ BackendCapabilities LocalFileSystemBackend::getCapabilities() const {
 }
 
 } // namespace EntropyEngine::Core::IO
+
+// Backend-aware path normalization for LocalFileSystemBackend
+std::string EntropyEngine::Core::IO::LocalFileSystemBackend::normalizeKey(const std::string& path) const {
+    if (_vfs) {
+        // Use VFS normalization (canonical + case-insensitive on Windows)
+        return _vfs->normalizePath(path);
+    }
+    // Fallback similar to VFS normalizePath
+    std::error_code ec;
+    auto p = std::filesystem::path(path);
+    auto canon = std::filesystem::weakly_canonical(p, ec);
+    std::string s = (ec ? p.lexically_normal().string() : canon.string());
+#if defined(_WIN32)
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+#endif
+    return s;
+}

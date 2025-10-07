@@ -135,6 +135,11 @@ public:
     // Backend info
     virtual BackendCapabilities getCapabilities() const = 0;
     virtual std::string getBackendType() const = 0;
+
+    // Backend-aware path normalization for identity/locking keys
+    // Default: pass-through (no normalization).
+    // Backends should override to implement their own canonicalization (e.g., case-insensitive on Windows local FS).
+    virtual std::string normalizeKey(const std::string& path) const { return path; }
     
     // Set the parent VFS for callbacks
     void setVirtualFileSystem(VirtualFileSystem* vfs) { _vfs = vfs; }

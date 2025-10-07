@@ -54,12 +54,37 @@ public:
     std::unique_ptr<BufferedFileStream> openBufferedStream(size_t bufferSize = 65536) const;
 
     const Metadata& metadata() const noexcept { return _meta; }
+
+    // Normalized key for identity and locking (backend-aware)
+    const std::string& normalizedKey() const noexcept { return _normKey; }
+
+    // Equality based on backend identity and normalized key
+    friend bool operator==(const FileHandle& a, const FileHandle& b) noexcept {
+        return a._backend.get() == b._backend.get() && a._normKey == b._normKey;
+    }
+    friend bool operator!=(const FileHandle& a, const FileHandle& b) noexcept { return !(a == b); }
+
 private:
     VirtualFileSystem* _vfs;
     std::shared_ptr<IFileSystemBackend> _backend;  // Backend for this file (ref-counted for safety)
     Metadata _meta; // associated metadata for this handle
+    std::string _normKey; // backend-normalized key captured at creation
 
     friend class VirtualFileSystem;
 };
 
 } // namespace EntropyEngine::Core::IO
+
+// Hash support for FileHandle
+namespace std {
+    template<>
+    struct hash<EntropyEngine::Core::IO::FileHandle> {
+        size_t operator()(const EntropyEngine::Core::IO::FileHandle& h) const noexcept {
+            // Combine backend pointer and normalized key
+            // Note: To avoid accessing private members, hash only the normalized key.
+            // This satisfies the requirement that equal objects have equal hashes, though it may increase collisions across backends.
+            size_t seed = std::hash<std::string>{}(h.normalizedKey());
+            return seed;
+        }
+    };
+}

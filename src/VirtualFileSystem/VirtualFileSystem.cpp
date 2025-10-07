@@ -82,6 +82,8 @@ FileHandle VirtualFileSystem::createFileHandle(std::string path) {
     // Create handle with backend
     FileHandle handle(this, std::move(path));
     handle._backend = backend;
+    // Capture backend-normalized key for value identity
+    handle._normKey = backend ? backend->normalizeKey(handle._meta.path) : normalizePath(handle._meta.path);
     return handle;
 }
 
@@ -153,7 +155,12 @@ std::shared_ptr<std::mutex> VirtualFileSystem::lockForPath(const std::string& pa
     
     std::lock_guard lk(_mapMutex);
     auto now = std::chrono::steady_clock::now();
-    const std::string key = normalizePath(path);
+    std::string key;
+    if (auto backend = findBackend(path)) {
+        key = backend->normalizeKey(path);
+    } else {
+        key = normalizePath(path);
+    }
     
     // Check if path exists in cache
     auto it = _writeLocks.find(key);
