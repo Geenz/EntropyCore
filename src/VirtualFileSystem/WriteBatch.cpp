@@ -164,6 +164,10 @@ std::vector<std::string> WriteBatch::applyOperations(const std::vector<std::stri
 }
 
 FileOperationHandle WriteBatch::commit() {
+    return commit(WriteOptions{});
+}
+
+FileOperationHandle WriteBatch::commit(const WriteOptions& opts) {
     if (_operations.empty()) {
         // No operations to commit - return immediate success
         return FileOperationHandle::immediate(FileOpStatus::Complete);
@@ -171,21 +175,60 @@ FileOperationHandle WriteBatch::commit() {
     
     auto lock = _vfs->lockForPath(_path);
     
-    return _vfs->submit(_path, [this, lock, ops = _operations](FileOperationHandle::OpState& s, const std::string& p) mutable {
+    return _vfs->submit(_path, [this, lock, ops = _operations, opts](FileOperationHandle::OpState& s, const std::string& p) mutable {
         std::unique_lock<std::mutex> pathLock;
         if (lock) pathLock = std::unique_lock<std::mutex>(*lock);
         
         std::error_code ec;
         
-        // Read the original file
-        std::vector<std::string> originalLines;
+        // Determine line-ending style and original final-newline presence
+        std::string data;
+        bool originalFinalNewline = false;
+        bool originalExists = false;
+        std::string eol;
+#if defined(_WIN32)
+        const std::string platformDefaultEol = "\r\n";
+#else
+        const std::string platformDefaultEol = "\n";
+#endif
         {
-            std::ifstream in(p, std::ios::in);
-            if (in) {
-                std::string line;
-                while (std::getline(in, line)) {
-                    originalLines.push_back(line);
+            std::ifstream inBin(p, std::ios::in | std::ios::binary);
+            if (inBin) {
+                originalExists = true;
+                std::ostringstream ss; ss << inBin.rdbuf();
+                data = ss.str();
+                if (!data.empty() && data.back() == '\n') {
+                    originalFinalNewline = true;
                 }
+                size_t crlf = 0, lf = 0;
+                for (size_t i = 0; i < data.size(); ++i) {
+                    if (data[i] == '\n') {
+                        if (i > 0 && data[i-1] == '\r') ++crlf; else ++lf;
+                    }
+                }
+                if (crlf > lf) eol = "\r\n"; else if (lf > crlf) eol = "\n"; else eol = platformDefaultEol;
+            } else {
+                eol = platformDefaultEol;
+            }
+        }
+        if (eol.empty()) eol = platformDefaultEol;
+        
+        // Parse original lines without EOLs
+        std::vector<std::string> originalLines;
+        if (!data.empty()) {
+            std::string cur;
+            for (size_t i = 0; i < data.size(); ++i) {
+                char c = data[i];
+                if (c == '\n') {
+                    if (!cur.empty() && cur.back() == '\r') cur.pop_back();
+                    originalLines.push_back(std::move(cur));
+                    cur.clear();
+                } else {
+                    cur.push_back(c);
+                }
+            }
+            if (!originalFinalNewline) {
+                originalLines.push_back(std::move(cur));
             }
         }
         
@@ -198,8 +241,9 @@ FileOperationHandle WriteBatch::commit() {
         auto base = targetPath.filename().string();
         auto tempPath = dir / (base + ".tmp" + std::to_string(std::random_device{}()));
         
-        // Ensure parent directory exists if configured by VFS default
-        if (_vfs && _vfs->_cfg.defaultCreateParentDirs) {
+        // Ensure parent directory exists if configured (effective option)
+        const bool createParents = opts.createParentDirs.value_or(_vfs ? _vfs->_cfg.defaultCreateParentDirs : false);
+        if (createParents) {
             std::error_code dirEc;
             if (!dir.empty()) {
                 std::filesystem::create_directories(dir, dirEc);
@@ -211,27 +255,30 @@ FileOperationHandle WriteBatch::commit() {
             }
         }
         
-        // Write to temp file
+        // Decide final newline presence
+        const bool finalNewline = opts.ensureFinalNewline.has_value()
+            ? opts.ensureFinalNewline.value()
+            : (originalExists ? originalFinalNewline : true);
+        
+        // Write to temp file in binary with consistent EOL
         {
-            std::ofstream out(tempPath, std::ios::out | std::ios::trunc);
+            std::ofstream out(tempPath, std::ios::out | std::ios::trunc | std::ios::binary);
             if (!out) {
                 s.setError(FileError::IOError, "Failed to create temp file", tempPath.string());
                 s.complete(FileOpStatus::Failed);
                 return;
             }
-            
             for (size_t i = 0; i < finalLines.size(); ++i) {
-                out << finalLines[i];
-                if (i < finalLines.size() - 1) {
-                    out << "\n";
+                const auto& ln = finalLines[i];
+                out.write(ln.data(), static_cast<std::streamsize>(ln.size()));
+                if (i < finalLines.size() - 1 || (i == finalLines.size() - 1 && finalNewline)) {
+                    out.write(eol.data(), static_cast<std::streamsize>(eol.size()));
                 }
             }
-            
-            // Add final newline if file isn't empty
-            if (!finalLines.empty()) {
-                out << "\n";
+            if (finalLines.empty() && finalNewline) {
+                // Preserve policy even for empty content
+                out.write(eol.data(), static_cast<std::streamsize>(eol.size()));
             }
-            
             out.flush();
             if (!out.good()) {
                 std::filesystem::remove(tempPath, ec);
@@ -286,8 +333,15 @@ FileOperationHandle WriteBatch::commit() {
         
         // Calculate total bytes written
         size_t totalBytes = 0;
-        for (const auto& line : finalLines) {
-            totalBytes += line.size() + 1; // +1 for newline
+        if (finalLines.empty()) {
+            if (finalNewline) totalBytes = eol.size();
+        } else {
+            for (size_t i = 0; i < finalLines.size(); ++i) {
+                totalBytes += finalLines[i].size();
+                if (i < finalLines.size() - 1 || (i == finalLines.size() - 1 && finalNewline)) {
+                    totalBytes += eol.size();
+                }
+            }
         }
         
         s.wrote = totalBytes;

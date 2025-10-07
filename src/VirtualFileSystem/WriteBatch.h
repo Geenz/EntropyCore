@@ -5,6 +5,7 @@
 #include <memory>
 #include <variant>
 #include "FileOperationHandle.h"
+#include "IFileSystemBackend.h" // for WriteOptions
 
 namespace EntropyEngine::Core::IO {
 
@@ -48,7 +49,8 @@ public:
     WriteBatch& insertLines(size_t startLine, const std::vector<std::string>& lines);
     
     // Commit changes
-    FileOperationHandle commit();        // Apply all changes atomically
+    FileOperationHandle commit();        // Apply all changes atomically (uses defaults)
+    FileOperationHandle commit(const WriteOptions& opts); // Apply changes with per-commit options
     FileOperationHandle preview() const; // Get what the file would look like (for debugging)
     
     // Query

@@ -738,45 +738,94 @@ FileOperationHandle LocalFileSystemBackend::writeLine(const std::string& path, s
             return;
         }
         
-        // Read from original and write to temp file
+        // Determine existing file content and line-ending style
+        std::string data;
+        bool originalExists = false;
+        bool originalFinalNewline = false;
+        std::string eol;
+#if defined(_WIN32)
+        const std::string platformDefaultEol = "\r\n";
+#else
+        const std::string platformDefaultEol = "\n";
+#endif
         {
-            std::ifstream in(p, std::ios::in);
-            std::ofstream out(tempPath, std::ios::out | std::ios::trunc);
-            
+            std::ifstream inBin(p, std::ios::in | std::ios::binary);
+            if (inBin) {
+                originalExists = true;
+                std::ostringstream ss; ss << inBin.rdbuf();
+                data = ss.str();
+                if (!data.empty()) {
+                    if (data.back() == '\n') {
+                        originalFinalNewline = true;
+                    }
+                }
+                // Detect dominant EOL
+                size_t crlf = 0, lf = 0;
+                for (size_t i = 0; i < data.size(); ++i) {
+                    if (data[i] == '\n') {
+                        if (i > 0 && data[i-1] == '\r') ++crlf; else ++lf;
+                    }
+                }
+                if (crlf > lf) eol = "\r\n"; else if (lf > crlf) eol = "\n"; else eol = platformDefaultEol;
+            } else {
+                eol = platformDefaultEol;
+            }
+        }
+        if (eol.empty()) eol = platformDefaultEol;
+        
+        // Parse existing lines without EOLs
+        std::vector<std::string> linesVec;
+        if (!data.empty()) {
+            std::string cur;
+            for (size_t i = 0; i < data.size(); ++i) {
+                char c = data[i];
+                if (c == '\n') {
+                    // If previous char was \r, drop it
+                    if (!cur.empty() && cur.back() == '\r') cur.pop_back();
+                    linesVec.push_back(std::move(cur));
+                    cur.clear();
+                } else {
+                    cur.push_back(c);
+                }
+            }
+            if (!originalFinalNewline) {
+                // Last line without trailing newline remains
+                linesVec.push_back(std::move(cur));
+            }
+        }
+        
+        // Apply writeLine semantics
+        if (lineNumber < linesVec.size()) {
+            linesVec[lineNumber] = line;
+        } else {
+            // extend with blanks up to lineNumber, then add line
+            while (linesVec.size() < lineNumber) {
+                linesVec.emplace_back("");
+            }
+            if (linesVec.size() == lineNumber) {
+                linesVec.emplace_back(line);
+            }
+        }
+        
+        // Write to temp file using chosen EOL and preserving original final-newline presence
+        {
+            std::ofstream out(tempPath, std::ios::out | std::ios::trunc | std::ios::binary);
             if (!out) {
                 s.setError(FileError::IOError, "Failed to create temp file", tempPath.string());
                 s.complete(FileOpStatus::Failed);
                 return;
             }
-            
-            std::string currentLine;
-            size_t currentLineNum = 0;
-            bool fileExists = in.is_open();
-            
-            if (fileExists) {
-                while (std::getline(in, currentLine)) {
-                    if (currentLineNum == lineNumber) {
-                        out << line;
-                    } else {
-                        out << currentLine;
-                    }
-                    out << "\n";  // Always add newline after each line
-                    currentLineNum++;
+            for (size_t i = 0; i < linesVec.size(); ++i) {
+                out.write(linesVec[i].data(), static_cast<std::streamsize>(linesVec[i].size()));
+                // Add EOL if not last line, or if last line and originalFinalNewline was true
+                if (i < linesVec.size() - 1 || (i == linesVec.size() - 1 && originalFinalNewline)) {
+                    out.write(eol.data(), static_cast<std::streamsize>(eol.size()));
                 }
             }
-            
-            // Add empty lines if needed
-            while (currentLineNum < lineNumber) {
-                out << "\n";
-                currentLineNum++;
+            if (linesVec.empty() && originalFinalNewline) {
+                // Edge case: empty file but original had final newline -> preserve by writing one EOL
+                out.write(eol.data(), static_cast<std::streamsize>(eol.size()));
             }
-            
-            // Add the target line if we haven't yet
-            if (currentLineNum == lineNumber) {
-                out << line << "\n";  // Add newline after the new line too
-                currentLineNum++;
-            }
-            
             out.flush();
             if (!out.good()) {
                 std::filesystem::remove(tempPath, ec);
