@@ -82,6 +82,19 @@ FileOperationHandle VirtualFileSystem::submit(std::string path, std::function<vo
     return FileOperationHandle{std::move(st)};
 }
 
+/**
+ * Serialized write orchestration:
+ * - Request backend write scope first (with optional timeout per config).
+ * - If Acquired: run the provided op inline while holding the backend token.
+ * - Otherwise apply advisory fallback policy:
+ *   - None: map Busy→Conflict, TimedOut→Timeout, Error→IOError and fail early.
+ *   - FallbackWithTimeout: try VFS advisory try_lock_for(timeout); on failure set Timeout with
+ *     a message that includes the duration (ms) and the lock key.
+ *   - FallbackThenWait: block on VFS advisory lock and proceed (discouraged).
+ * Invariants:
+ * - The op must complete inline and call s.complete(...). No scheduling nested work into the same
+ *   WorkContractGroup as the caller.
+ */
 FileOperationHandle VirtualFileSystem::submitSerialized(std::string path, std::function<void(FileOperationHandle::OpState&, std::shared_ptr<IFileSystemBackend>, const std::string&, const ExecContext&)> op) const {
     auto backend = findBackend(path);
     auto vfsLock = lockForPath(path);

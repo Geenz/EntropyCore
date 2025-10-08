@@ -11,6 +11,10 @@
 #include <cctype>
 #include <cerrno>
 #include <thread>
+#include <cstdlib>
+#include <chrono>
+
+#include "CoreCommon.h"
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -62,6 +66,14 @@ namespace {
     }
 
     // Map errno to FileError with platform-specific handling
+    // Mapping notes:
+    // - ENOSPC/EDQUOT → DiskFull (out of space or quota exceeded)
+    // - EACCES/EPERM → AccessDenied (permission denied)
+    // - ENOENT → FileNotFound (missing file/dir)
+    // - EINVAL/ENAMETOOLONG/(EISDIR on POSIX) → InvalidPath (malformed or wrong type)
+    // - ENET*/ETIMEDOUT (POSIX) → NetworkError (remote transport issues)
+    // - default → IOError (local I/O failures)
+    // systemError in FileErrorInfo should carry std::error_code when available.
     FileError mapErrnoToFileError(int err) {
         switch (err) {
             case ENOSPC:
@@ -391,6 +403,26 @@ void LocalFileSystemBackend::doWriteFile(FileOperationHandle::OpState& s, const 
         s.complete(FileOpStatus::Failed);
         return;
     }
+
+    ENTROPY_DEBUG_BLOCK({
+        // Test seam: simulate disk full via env var and path marker
+        // When ENTROPY_TEST_SIMULATE_DISK_FULL=1 and path contains "SimulateDiskFull",
+        // return DiskFull with a populated systemError.
+        if (const char* sim = std::getenv("ENTROPY_TEST_SIMULATE_DISK_FULL");
+            sim && sim[0] == '1' && p.find("SimulateDiskFull") != std::string::npos) {
+            s.setError(FileError::DiskFull, "Disk full or quota exceeded (test seam)", p,
+                       std::error_code(ENOSPC, std::generic_category()));
+            s.complete(FileOpStatus::Failed);
+            return;
+        }
+
+        // Test seam: optionally hold the serialized section to force advisory timeout in tests
+        if (const char* hold = std::getenv("ENTROPY_TEST_HOLD_WRITE_LOCK_MS");
+            hold && p.find("HoldLock") != std::string::npos) {
+            long ms = std::strtol(hold, nullptr, 10);
+            if (ms > 0) std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+        }
+    });
 
     std::error_code ec;
     const bool createParents = options.createParentDirs.value_or(_vfs ? _vfs->_cfg.defaultCreateParentDirs : false);
@@ -764,6 +796,18 @@ FileOperationHandle LocalFileSystemBackend::readFile(const std::string& path, Re
 }
 
 FileOperationHandle LocalFileSystemBackend::writeFile(const std::string& path, std::span<const std::byte> data, WriteOptions options) {
+    // Route backend writes through VFS submitSerialized to honor advisory fallback policy and scope mapping.
+    // Delegate the actual I/O to doWriteFile, which executes synchronously under the serialized section.
+    if (_vfs) {
+        auto buf = std::vector<std::byte>(data.begin(), data.end());
+        return _vfs->submitSerialized(path,
+            [this, buf = std::move(buf), options]
+            (FileOperationHandle::OpState& s, std::shared_ptr<IFileSystemBackend> /*backend*/, const std::string& p, const ExecContext& /*ctx*/) mutable {
+                this->doWriteFile(s, p, std::span<const std::byte>(buf.data(), buf.size()), options);
+            }
+        );
+    }
+    // Fallback: no VFS associated (rare). Execute synchronously via submitWork and doWriteFile.
     return submitWork(path, [this, data = std::vector<std::byte>(data.begin(), data.end()), options]
                             (FileOperationHandle::OpState& s, const std::string& p) mutable {
 
@@ -773,6 +817,23 @@ FileOperationHandle LocalFileSystemBackend::writeFile(const std::string& path, s
             s.complete(FileOpStatus::Failed);
             return;
         }
+
+        ENTROPY_DEBUG_BLOCK({
+            // Test seam: simulate disk full
+            if (const char* sim = std::getenv("ENTROPY_TEST_SIMULATE_DISK_FULL");
+                sim && sim[0] == '1' && p.find("SimulateDiskFull") != std::string::npos) {
+                s.setError(FileError::DiskFull, "Disk full or quota exceeded (test seam)", p,
+                           std::error_code(ENOSPC, std::generic_category()));
+                s.complete(FileOpStatus::Failed);
+                return;
+            }
+            // Test seam: optionally hold to force advisory timeout in tests (for FileHandle path this is redundant)
+            if (const char* hold = std::getenv("ENTROPY_TEST_HOLD_WRITE_LOCK_MS");
+                hold && p.find("HoldLock") != std::string::npos) {
+                long ms = std::strtol(hold, nullptr, 10);
+                if (ms > 0) std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+            }
+        });
 
         std::error_code ec;
         // Determine effective parent creation policy
@@ -1794,6 +1855,15 @@ EntropyEngine::Core::IO::IFileSystemBackend::AcquireWriteScopeResult EntropyEngi
     (void)options;
 
     AcquireWriteScopeResult result;
+    ENTROPY_DEBUG_BLOCK({
+        if (const char* sim = std::getenv("ENTROPY_TEST_FORCE_SCOPE_ERROR");
+            sim && sim[0] == '1' && path.find("SimulateScopeError") != std::string::npos) {
+            result.status = AcquireWriteScopeResult::Status::Error;
+            result.errorCode = std::error_code(EIO, std::generic_category());
+            result.message = "Simulated backend scope acquisition error (test seam)";
+            return result;
+        }
+    });
     result.status = AcquireWriteScopeResult::Status::NotSupported;
     result.message = "flock() disabled - incompatible with atomic file replacement (temp+rename). Using VFS advisory locks.";
     return result;

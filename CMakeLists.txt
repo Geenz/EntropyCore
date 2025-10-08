@@ -236,10 +236,8 @@ if(ENTROPY_WITH_TRACY AND TARGET Tracy::TracyClient)
     )
 endif()
 
-# Add EntropyDebug macro for Debug and Release with Debug Info builds.
-if($<OR:$<CONFIG:Debug>,$<CONFIG:RelWithDebInfo>>)
-    target_compile_definitions(EntropyCore PUBLIC EntropyDebug)
-endif()
+# Add EntropyDebug macro for Debug and RelWithDebInfo builds via generator expression
+target_compile_definitions(EntropyCore PUBLIC $<$<OR:$<CONFIG:Debug>,$<CONFIG:RelWithDebInfo>>:EntropyDebug>)
 
 # Export include directories for dependent projects
 set_target_properties(EntropyCore PROPERTIES

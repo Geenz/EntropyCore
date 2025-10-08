@@ -43,6 +43,13 @@ enum class FileError {
     Unknown
 };
 
+/**
+ * Error details accompanying a failed operation.
+ * systemError should be populated when the failure originates from the OS or a backend/transport
+ * with an error_code (e.g., errno, std::errc, or SDK-provided). For logical failures such as
+ * Conflict, Timeout from advisory locking, or FileNotFound determined by preconditions,
+ * systemError may be empty; message should remain informative.
+ */
 struct FileErrorInfo {
     FileError code = FileError::None;
     std::string message;

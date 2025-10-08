@@ -29,6 +29,8 @@ namespace EntropyEngine::Core::Concurrency { class WorkContractGroup; }
 namespace EntropyEngine::Core::IO {
 
 // Explicit execution context passed through VFS submit paths and backend hooks
+// Backends should execute inline when ctx.group equals the owning VFS WorkContractGroup
+// to avoid same-group nested scheduling; otherwise they may schedule via the VFS group.
 struct ExecContext {
     EntropyEngine::Core::Concurrency::WorkContractGroup* group = nullptr;
 };
@@ -352,6 +354,9 @@ public:
      * - NotSupported: backend does not implement scoping.
      * - Error: backend-specific failure (include errorCode/message).
      */
+    // NOTE: Status::NotSupported indicates the backend lacks a native scoping primitive.
+    // VFS will fall back to its in-process advisory lock. This status is slated for deprecation
+    // in a future pass; backends should plan to implement acquireWriteScope.
     struct AcquireWriteScopeResult {
         enum class Status {
             Acquired,
