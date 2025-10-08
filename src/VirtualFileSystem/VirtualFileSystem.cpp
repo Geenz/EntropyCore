@@ -8,10 +8,12 @@
 #include <filesystem>
 #include <algorithm>
 #include <cctype>
+#include <cassert>
 
 using EntropyEngine::Core::Concurrency::ExecutionType;
 
 namespace EntropyEngine::Core::IO {
+
 
 // Constructor / Destructor
 VirtualFileSystem::VirtualFileSystem(EntropyEngine::Core::Concurrency::WorkContractGroup* group, Config cfg)
@@ -40,14 +42,16 @@ std::shared_ptr<IFileSystemBackend> VirtualFileSystem::getDefaultBackend() const
 }
 
 // VFS submit helper
-FileOperationHandle VirtualFileSystem::submit(std::string path, std::function<void(FileOperationHandle::OpState&, const std::string&)> body) const {
+FileOperationHandle VirtualFileSystem::submit(std::string path, std::function<void(FileOperationHandle::OpState&, const std::string&, const ExecContext&)> body) const {
     auto st = makeState();
     // Set cooperative progress hook so wait() can pump ready work
     st->progress = [grp=_group]() { if (grp) grp->executeAllBackgroundWork(); };
-    auto work = [st, p=std::move(path), body=std::move(body)]() mutable {
+
+    auto work = [this, st, p=std::move(path), body=std::move(body)]() mutable {
         st->st.store(FileOpStatus::Running, std::memory_order_release);
         try {
-            body(*st, p);
+            ExecContext ctx{ _group };
+            body(*st, p, ctx);
             // Ensure complete() was called - if not, call it with success
             // This prevents hanging if body forgets to call complete()
             if (!st->isComplete.load(std::memory_order_acquire)) {
@@ -78,13 +82,13 @@ FileOperationHandle VirtualFileSystem::submit(std::string path, std::function<vo
     return FileOperationHandle{std::move(st)};
 }
 
-FileOperationHandle VirtualFileSystem::submitSerialized(std::string path, std::function<void(FileOperationHandle::OpState&, std::shared_ptr<IFileSystemBackend>, const std::string&)> op) const {
+FileOperationHandle VirtualFileSystem::submitSerialized(std::string path, std::function<void(FileOperationHandle::OpState&, std::shared_ptr<IFileSystemBackend>, const std::string&, const ExecContext&)> op) const {
     auto backend = findBackend(path);
     auto vfsLock = lockForPath(path);
     auto advTimeout = _cfg.advisoryAcquireTimeout;
     auto policy = _cfg.advisoryFallback;
 
-    return submit(std::move(path), [this, backend, vfsLock, advTimeout, policy, op=std::move(op)](FileOperationHandle::OpState& s, const std::string& p) mutable {
+    return submit(std::move(path), [this, backend, vfsLock, advTimeout, policy, op=std::move(op)](FileOperationHandle::OpState& s, const std::string& p, const ExecContext& ctx) mutable {
         // Acquire backend-specific scope first
         std::unique_ptr<void, void(*)(void*)> scopeToken(nullptr, [](void*){});
         IFileSystemBackend::AcquireWriteScopeResult scopeRes;
@@ -142,7 +146,11 @@ FileOperationHandle VirtualFileSystem::submitSerialized(std::string path, std::f
             s.complete(FileOpStatus::Failed);
             return;
         }
-        op(s, backend, p);
+        op(s, backend, p, ctx);
+        // Debug assertion: serialized op must complete inline
+#ifndef NDEBUG
+        assert(s.isComplete.load(std::memory_order_acquire) && "submitSerialized op must call complete() inline");
+#endif
     });
 }
 

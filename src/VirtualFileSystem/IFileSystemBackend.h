@@ -22,6 +22,16 @@ namespace EntropyEngine::Core::IO {
 // Forward declarations
 class FileStream;
 class VirtualFileSystem;
+}
+
+namespace EntropyEngine::Core::Concurrency { class WorkContractGroup; }
+
+namespace EntropyEngine::Core::IO {
+
+// Explicit execution context passed through VFS submit paths and backend hooks
+struct ExecContext {
+    EntropyEngine::Core::Concurrency::WorkContractGroup* group = nullptr;
+};
 
 // Options for various operations
 /**
@@ -333,6 +343,15 @@ public:
     virtual std::string normalizeKey(const std::string& path) const { return path; }
 
     // Backend-provided write-scope acquisition with explicit status and timeout options
+    /**
+     * Backend-specific primitive for write serialization. VFS applies global policy based on this result.
+     * Status meanings:
+     * - Acquired: exclusive scope obtained; hold token until write completes.
+     * - Busy: another writer holds the path; try again after suggestedBackoff.
+     * - TimedOut: bounded attempt expired; no scope acquired.
+     * - NotSupported: backend does not implement scoping.
+     * - Error: backend-specific failure (include errorCode/message).
+     */
     struct AcquireWriteScopeResult {
         enum class Status {
             Acquired,

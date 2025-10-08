@@ -18,6 +18,18 @@ namespace EntropyEngine::Core::IO {
 
 enum class FileOpStatus { Pending, Running, Partial, Complete, Failed };
 
+/**
+ * Public error taxonomy surfaced by VFS operations.
+ * Mapping guidelines:
+ * - FileNotFound: path does not exist when required (read/stat)
+ * - AccessDenied: open/create denied by OS/permissions
+ * - DiskFull: ENOSPC/EDQUOT or equivalent on write/flush
+ * - InvalidPath: malformed path, name too long, or parent missing
+ * - IOError: other local I/O failures (including fsync failures)
+ * - NetworkError: remote/backend transport failure (future backends)
+ * - Timeout: bounded waits exceeded (advisory lock or backend scope)
+ * - Conflict: contention detected (backend Busy without fallback)
+ */
 enum class FileError {
     None = 0,
     FileNotFound,

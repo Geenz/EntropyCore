@@ -56,7 +56,12 @@ public:
 private:
     // Submit work to the VFS work group
     FileOperationHandle submitWork(const std::string& path,
-                                  std::function<void(FileOperationHandle::OpState&, const std::string&)> work);
+                                   std::function<void(FileOperationHandle::OpState&, const std::string&)> work);
+
+    // Context-aware submit, used when called from VFS serialized paths
+    FileOperationHandle submitWork(const std::string& path,
+                                   std::function<void(FileOperationHandle::OpState&, const std::string&, const ExecContext&)> work,
+                                   const ExecContext& ctx);
 
     // No internal write lock map; serialization handled by VFS policy
 };

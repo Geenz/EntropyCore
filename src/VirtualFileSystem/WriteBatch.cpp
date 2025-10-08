@@ -182,7 +182,7 @@ FileOperationHandle WriteBatch::commit(const WriteOptions& opts) {
     auto backend = _vfs->findBackend(_path);
     auto vfsLock = _vfs->lockForPath(_path);
 
-    return _vfs->submit(_path, [this, backend, vfsLock, ops = _operations, opts](FileOperationHandle::OpState& s, const std::string& p) mutable {
+    return _vfs->submit(_path, [this, backend, vfsLock, ops = _operations, opts](FileOperationHandle::OpState& s, const std::string& p, const ExecContext&) mutable {
         // Prefer backend-provided write scope; fall back to VFS advisory lock with policy/timeout
         std::unique_ptr<void, void(*)(void*)> scopeToken(nullptr, [](void*){});
         IFileSystemBackend::AcquireWriteScopeResult scopeRes;
@@ -509,7 +509,7 @@ FileOperationHandle WriteBatch::commit(const WriteOptions& opts) {
 }
 
 FileOperationHandle WriteBatch::preview() const {
-    return _vfs->submit(_path, [this, ops = _operations](FileOperationHandle::OpState& s, const std::string& p) {
+    return _vfs->submit(_path, [this, ops = _operations](FileOperationHandle::OpState& s, const std::string& p, const ExecContext&) {
         // Read the original file
         std::vector<std::string> originalLines;
         {

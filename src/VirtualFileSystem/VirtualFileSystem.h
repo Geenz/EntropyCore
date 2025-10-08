@@ -186,11 +186,22 @@ private:
     std::shared_ptr<std::timed_mutex> lockForPath(const std::string& path) const;
     void evictOldLocks(std::chrono::steady_clock::time_point now) const;
 
-    FileOperationHandle submit(std::string path, std::function<void(FileOperationHandle::OpState&, const std::string&)> body) const;
+    FileOperationHandle submit(std::string path, std::function<void(FileOperationHandle::OpState&, const std::string&, const ExecContext&)> body) const;
     
     // Centralized write-serialization submit used by FileHandle write paths
-    // The operation lambda must perform work INLINE and call s.complete(). It must NOT call async backend methods.
-    FileOperationHandle submitSerialized(std::string path, std::function<void(FileOperationHandle::OpState&, std::shared_ptr<IFileSystemBackend>, const std::string&)> op) const;
+    /**
+     * Executes a serialized write operation under backend scope or VFS advisory lock.
+     * Policy:
+     * 1) Request backend scope with optional timeout (cfg.advisoryAcquireTimeout).
+     * 2) If Acquired: run op inline while holding token.
+     * 3) Else apply fallback (cfg.advisoryFallback):
+     *    - None → fail early (Busy→Conflict, TimedOut→Timeout, Error→IOError)
+     *    - FallbackWithTimeout → try_lock_for(timeout) else Timeout
+     *    - FallbackThenWait → lock() and proceed
+     * Errors include backend message/systemError when provided.
+     * The op must complete inline and call s.complete(). It must NOT schedule nested async work.
+     */
+    FileOperationHandle submitSerialized(std::string path, std::function<void(FileOperationHandle::OpState&, std::shared_ptr<IFileSystemBackend>, const std::string&, const ExecContext&)> op) const;
     
     // Backend storage (reference-counted for thread-safe lifetime management)
     std::shared_ptr<IFileSystemBackend> _defaultBackend;

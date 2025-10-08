@@ -2,6 +2,8 @@
 #include "Concurrency/WorkService.h"
 #include "Concurrency/WorkContractGroup.h"
 #include "VirtualFileSystem/VirtualFileSystem.h"
+#include "VirtualFileSystem/DirectoryHandle.h"
+#include "VirtualFileSystem/FileStream.h"
 #include <iostream>
 #include <vector>
 #include <cstring>

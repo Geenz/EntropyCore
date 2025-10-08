@@ -21,6 +21,7 @@ namespace EntropyEngine::Core::IO {
 
 class VirtualFileSystem; // fwd
 class IFileSystemBackend; // fwd
+struct WriteOptions;      // fwd
 
 /**
  * @brief Copyable handle to a file path routed through a backend
@@ -114,11 +115,19 @@ public:
      */
     FileOperationHandle writeAll(std::string_view text) const;
     /**
+     * @brief Writes full text with explicit WriteOptions
+     */
+    FileOperationHandle writeAll(std::string_view text, const WriteOptions& opts) const;
+    /**
      * @brief Writes raw bytes to the file (overwrites by default)
      * @param bytes Data to write
      * @return Handle for the asynchronous write
      */
     FileOperationHandle writeAll(std::span<const std::byte> bytes) const;
+    /**
+     * @brief Writes raw bytes with explicit WriteOptions
+     */
+    FileOperationHandle writeAll(std::span<const std::byte> bytes, const WriteOptions& opts) const;
     /**
      * @brief Writes bytes starting at a specific offset
      * @param offset Byte offset to begin writing
@@ -126,6 +135,10 @@ public:
      * @return Handle for the asynchronous write
      */
     FileOperationHandle writeRange(uint64_t offset, std::span<const std::byte> bytes) const;
+    /**
+     * @brief Writes bytes at offset with explicit WriteOptions (offset is applied to opts)
+     */
+    FileOperationHandle writeRange(uint64_t offset, std::span<const std::byte> bytes, const WriteOptions& opts) const;
     /**
      * @brief Replaces a single line by index (0-based)
      * 
@@ -136,6 +149,10 @@ public:
      * @return Handle for the asynchronous write
      */
     FileOperationHandle writeLine(size_t lineNumber, std::string_view line) const;
+    /**
+     * @brief Replaces a single line with explicit WriteOptions (currently forwarded)
+     */
+    FileOperationHandle writeLine(size_t lineNumber, std::string_view line, const WriteOptions& opts) const;
 
     // File management
     /**

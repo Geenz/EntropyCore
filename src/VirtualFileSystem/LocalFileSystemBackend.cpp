@@ -335,8 +335,8 @@ LocalFileSystemBackend::LocalFileSystemBackend() {
 }
 
 FileOperationHandle LocalFileSystemBackend::submitWork(const std::string& path,
-    std::function<void(FileOperationHandle::OpState&, const std::string&)> work) {
-    
+    std::function<void(FileOperationHandle::OpState&, const std::string&, const ExecContext&)> work,
+    const ExecContext& ctx) {
     if (!_vfs) {
         // Return a failed handle if no VFS is set - create inline
         auto state = std::make_shared<FileOperationHandle::OpState>();
@@ -344,9 +344,43 @@ FileOperationHandle LocalFileSystemBackend::submitWork(const std::string& path,
         state->complete(FileOpStatus::Failed);
         return FileOperationHandle(state);
     }
-    
-    // Use VFS's submit method to execute work
-    return _vfs->submit(path, work);
+
+    // If we are already executing within the same WorkContractGroup, run inline to avoid nested submission
+    if (ctx.group == _vfs->_group) {
+        auto st = std::make_shared<FileOperationHandle::OpState>();
+        st->progress = [grp=_vfs->_group]() { if (grp) grp->executeAllBackgroundWork(); };
+        try {
+            st->st.store(FileOpStatus::Running, std::memory_order_release);
+            work(*st, path, ctx);
+            if (!st->isComplete.load(std::memory_order_acquire)) {
+                auto expected = FileOpStatus::Running;
+                if (st->st.compare_exchange_strong(expected, FileOpStatus::Complete)) {
+                    st->complete(FileOpStatus::Complete);
+                }
+            }
+        } catch (const std::filesystem::filesystem_error& fe) {
+            st->setError(FileError::IOError, fe.what(), path, fe.code());
+            st->complete(FileOpStatus::Failed);
+        } catch (...) {
+            st->setError(FileError::Unknown, "Unknown error occurred during file operation");
+            st->complete(FileOpStatus::Failed);
+        }
+        return FileOperationHandle(std::move(st));
+    }
+
+    // Otherwise use VFS's submit method to execute work asynchronously
+    return _vfs->submit(path, [work, ctx](FileOperationHandle::OpState& s, const std::string& p, const ExecContext& /*outer*/){
+        work(s, p, ctx);
+    });
+}
+
+FileOperationHandle LocalFileSystemBackend::submitWork(const std::string& path,
+    std::function<void(FileOperationHandle::OpState&, const std::string&)> work) {
+    // Delegate to context-aware overload with no executing group (top-level call)
+    ExecContext ctx{ nullptr };
+    return submitWork(path, 
+        [work](FileOperationHandle::OpState& s, const std::string& p, const ExecContext&){ work(s, p); },
+        ctx);
 }
 
 // Synchronous operations for FileHandle via submitSerialized

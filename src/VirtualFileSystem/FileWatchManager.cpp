@@ -296,7 +296,7 @@ void FileWatchManager::onFileEvent(uint32_t slotIndex, const FileWatchInfo& info
 
     // Dispatch to WorkContractGroup via VFS for thread safety
     if (_vfs && callback) {
-        _vfs->submit(info.path, [callback, info](FileOperationHandle::OpState& s, const std::string&) {
+        _vfs->submit(info.path, [callback, info](FileOperationHandle::OpState& s, const std::string&, const ExecContext&) {
             callback(info);
             s.complete(FileOpStatus::Complete);
         });
