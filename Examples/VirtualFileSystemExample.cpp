@@ -265,23 +265,15 @@ int main() {
         metadataHandles.push_back(std::move(h));
     }
 
-    // Query metadata for all files at once
-    BatchMetadataOptions batchOpts;
-    batchOpts.paths = testFilePaths;
-
-    auto backend = vfs.getDefaultBackend();
-    if (backend) {
-        auto metaBatch = backend->getMetadataBatch(batchOpts);
-        metaBatch.wait();
-
-        if (metaBatch.status() == FileOpStatus::Complete) {
-            const auto& metadata = metaBatch.metadataBatch();
-            ENTROPY_LOG_INFO("Retrieved metadata for " + std::to_string(metadata.size()) + " files in a single batch");
-
-            for (const auto& meta : metadata) {
-                ENTROPY_LOG_INFO("  " + meta.path + ": " +
-                    (meta.exists ? "exists" : "missing") + ", size=" + std::to_string(meta.size) + " bytes");
-            }
+    // Query metadata via DirectoryHandle listing with glob (no raw backend)
+    auto currentDir = vfs.createDirectoryHandle(".");
+    ListDirectoryOptions bList; bList.globPattern = std::string("metadata_test_*.txt"); bList.sortBy = ListDirectoryOptions::ByName;
+    auto metaList = currentDir.list(bList); metaList.wait();
+    if (metaList.status() == FileOpStatus::Complete) {
+        const auto& entries = metaList.directoryEntries();
+        ENTROPY_LOG_INFO("Retrieved metadata for " + std::to_string(entries.size()) + " files via directory listing");
+        for (const auto& e : entries) {
+            ENTROPY_LOG_INFO("  " + e.fullPath + ": exists=" + std::to_string(e.metadata.exists ? 1 : 0) + ", size=" + std::to_string(e.metadata.size) + " bytes");
         }
     }
 
@@ -311,15 +303,18 @@ int main() {
         return true;
     };
 
-    if (backend) {
-        auto copyOp = backend->copyFile(sourceHandle.metadata().path, destHandle.metadata().path, copyOpts);
-        copyOp.wait();
-
-        if (copyOp.status() == FileOpStatus::Complete) {
-            ENTROPY_LOG_INFO("Copy completed: " + std::to_string(copyOp.bytesWritten()) + " bytes copied");
+    // Copy using FileHandle read/write (no raw backend)
+    auto srcRead = sourceHandle.readAll(); srcRead.wait();
+    if (srcRead.status() == FileOpStatus::Complete) {
+        WriteOptions cwo; cwo.truncate = true; cwo.createIfMissing = true;
+        auto copyWrite = destHandle.writeAll(srcRead.contentsBytes(), cwo); copyWrite.wait();
+        if (copyWrite.status() == FileOpStatus::Complete) {
+            ENTROPY_LOG_INFO("Copy completed: " + std::to_string(copyWrite.bytesWritten()) + " bytes copied");
         } else {
-            ENTROPY_LOG_ERROR("Copy failed: " + copyOp.errorInfo().message);
+            ENTROPY_LOG_ERROR("Copy failed: " + copyWrite.errorInfo().message);
         }
+    } else {
+        ENTROPY_LOG_ERROR("Source read failed: " + srcRead.errorInfo().message);
     }
 
     // Example 8: Move Operations
@@ -330,29 +325,33 @@ int main() {
 
     moveSourceHandle.writeAll("This file will be moved").wait();
 
-    if (backend) {
-        auto moveOp = backend->moveFile(moveSourceHandle.metadata().path, moveDestHandle.metadata().path, false);
-        moveOp.wait();
-
-        if (moveOp.status() == FileOpStatus::Complete) {
+    // Move implemented as copy then remove via FileHandle operations
+    auto moveRead = moveSourceHandle.readAll(); moveRead.wait();
+    if (moveRead.status() == FileOpStatus::Complete) {
+        WriteOptions mow; mow.truncate = true; mow.createIfMissing = true;
+        auto moveWrite = moveDestHandle.writeAll(moveRead.contentsBytes(), mow); moveWrite.wait();
+        if (moveWrite.status() == FileOpStatus::Complete) {
+            moveSourceHandle.remove().wait();
             ENTROPY_LOG_INFO("Move completed successfully");
-            ENTROPY_LOG_INFO("  Source exists: " + std::to_string(std::filesystem::exists(moveSourceHandle.metadata().path)));
-            ENTROPY_LOG_INFO("  Dest exists: " + std::to_string(std::filesystem::exists(moveDestHandle.metadata().path)));
         } else {
-            ENTROPY_LOG_ERROR("Move failed: " + moveOp.errorInfo().message);
+            ENTROPY_LOG_ERROR("Move failed: " + moveWrite.errorInfo().message);
         }
+    } else {
+        ENTROPY_LOG_ERROR("Move read failed: " + moveRead.errorInfo().message);
+    }
 
-        // Test move with overwrite
-        auto moveSource2 = vfs.createFileHandle("file_to_move2.txt");
-        moveSource2.writeAll("Second file to move").wait();
-
-        auto moveOpOverwrite = backend->moveFile(moveSource2.metadata().path, moveDestHandle.metadata().path, true);
-        moveOpOverwrite.wait();
-
-        if (moveOpOverwrite.status() == FileOpStatus::Complete) {
+    // Move with overwrite: write/truncate destination and remove source
+    auto moveSource2 = vfs.createFileHandle("file_to_move2.txt");
+    moveSource2.writeAll("Second file to move").wait();
+    auto moveRead2 = moveSource2.readAll(); moveRead2.wait();
+    if (moveRead2.status() == FileOpStatus::Complete) {
+        WriteOptions mow2; mow2.truncate = true; mow2.createIfMissing = true;
+        auto moveWrite2 = moveDestHandle.writeAll(moveRead2.contentsBytes(), mow2); moveWrite2.wait();
+        if (moveWrite2.status() == FileOpStatus::Complete) {
+            moveSource2.remove().wait();
             ENTROPY_LOG_INFO("Move with overwrite completed successfully");
         } else {
-            ENTROPY_LOG_ERROR("Move with overwrite failed: " + moveOpOverwrite.errorInfo().message);
+            ENTROPY_LOG_ERROR("Move with overwrite failed: " + moveWrite2.errorInfo().message);
         }
     }
 
@@ -435,7 +434,7 @@ int main() {
     }
 
     // Clean up watch test directory
-    std::filesystem::remove_all("watch_test_dir");
+    vfs.createDirectoryHandle("watch_test_dir").remove(true).wait();
 
     // Example 11: Directory Operations
     ENTROPY_LOG_INFO("=== Example 11: Directory Operations ===");

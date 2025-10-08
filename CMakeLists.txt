@@ -188,6 +188,22 @@ if(WIN32)
   target_compile_definitions(VirtualFileStreamingExample PRIVATE NOMINMAX)
 endif()
 
+# Focused VFS examples (PR3)
+add_executable(VFS_Basics Examples/VFS_Basics.cpp)
+target_link_libraries(VFS_Basics PRIVATE EntropyCore)
+
+add_executable(VFS_LinesAndBatch Examples/VFS_LinesAndBatch.cpp)
+target_link_libraries(VFS_LinesAndBatch PRIVATE EntropyCore)
+
+add_executable(VFS_Streams Examples/VFS_Streams.cpp)
+target_link_libraries(VFS_Streams PRIVATE EntropyCore)
+
+add_executable(VFS_CopyMove Examples/VFS_CopyMove.cpp)
+target_link_libraries(VFS_CopyMove PRIVATE EntropyCore)
+
+add_executable(VFS_Metadata Examples/VFS_Metadata.cpp)
+target_link_libraries(VFS_Metadata PRIVATE EntropyCore)
+
 # Link Tracy to examples if available
 if(ENTROPY_WITH_TRACY)
   if(TARGET Tracy::TracyClient)
@@ -213,6 +229,12 @@ if(WIN32)
         set_property(TARGET CInteropExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
         set_property(TARGET VirtualFileSystemExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
         set_property(TARGET VirtualFileStreamingExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+        # PR3 examples
+        set_property(TARGET VFS_Basics PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+        set_property(TARGET VFS_LinesAndBatch PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+        set_property(TARGET VFS_Streams PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+        set_property(TARGET VFS_CopyMove PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+        set_property(TARGET VFS_Metadata PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
     endif()
 else()
     # Settings for non-Windows platforms (macOS, Linux)
