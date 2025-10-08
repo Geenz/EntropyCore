@@ -135,6 +135,8 @@ private:
     friend class VirtualFileSystem;
     friend class FileHandle;
     friend class LocalFileSystemBackend;
+    friend class WriteBatch;
+    friend class FileWatchManager;
 };
 
 } // namespace EntropyEngine::Core::IO

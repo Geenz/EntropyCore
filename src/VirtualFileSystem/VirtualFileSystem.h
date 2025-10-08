@@ -42,10 +42,15 @@ public:
         std::chrono::minutes writeLockTimeout;  // Timeout for unused write locks
         bool defaultCreateParentDirs;       // Default behavior for creating parent directories
 
-        // Advisory locking policy
+        // Advisory locking policy (in-process fallback)
         std::chrono::milliseconds advisoryAcquireTimeout; // 5s default
         enum class AdvisoryFallbackPolicy { None, FallbackThenWait, FallbackWithTimeout };
         AdvisoryFallbackPolicy advisoryFallback;
+
+        // Cross-process lock-file serialization (optional)
+        bool defaultUseLockFile;                                    // default: false
+        std::chrono::milliseconds lockAcquireTimeout;               // default: 5s
+        std::string lockSuffix;                                     // default: ".lock"
 
         Config()
             : serializeWritesPerPath(true)
@@ -53,7 +58,10 @@ public:
             , writeLockTimeout(std::chrono::minutes(5))
             , defaultCreateParentDirs(false)
             , advisoryAcquireTimeout(std::chrono::milliseconds(5000))
-            , advisoryFallback(AdvisoryFallbackPolicy::FallbackThenWait) {}
+            , advisoryFallback(AdvisoryFallbackPolicy::FallbackThenWait)
+            , defaultUseLockFile(false)
+            , lockAcquireTimeout(std::chrono::milliseconds(5000))
+            , lockSuffix(".lock") {}
     };
 
     explicit VirtualFileSystem(EntropyEngine::Core::Concurrency::WorkContractGroup* group, Config cfg = {});

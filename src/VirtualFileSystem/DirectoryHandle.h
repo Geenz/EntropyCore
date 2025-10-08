@@ -23,6 +23,10 @@ class IFileSystemBackend; // fwd
  * Construct via VirtualFileSystem::createDirectoryHandle(). Operations are asynchronous;
  * call wait() on the returned FileOperationHandle to block, or chain operations.
  *
+ * Design note: DirectoryHandle is a dumb handle; it does not probe the filesystem and
+ * contains no backend-specific behavior. All operations delegate to the routed backend
+ * through the VirtualFileSystem.
+ *
  * @code
  * WorkContractGroup group(2000);
  * VirtualFileSystem vfs(&group);

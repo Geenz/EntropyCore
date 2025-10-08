@@ -25,9 +25,8 @@ DirectoryHandle::DirectoryHandle(VirtualFileSystem* vfs, std::string path)
         _meta.name = p.filename().string();
     }
 
-    // Check existence at construction time (best-effort)
-    std::error_code ec;
-    _meta.exists = std::filesystem::exists(p, ec) && std::filesystem::is_directory(p, ec);
+    // Do not probe the filesystem here; defer to backend metadata when requested
+    _meta.exists = false;
 
     // Leave _backend null and _normKey empty until VFS factory sets them.
 }

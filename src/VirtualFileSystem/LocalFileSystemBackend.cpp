@@ -6,12 +6,21 @@
 #include <sstream>
 #include <cstring>
 #include <random>
+#include <vector>
 #include <algorithm>
 #include <cctype>
 #include <cerrno>
+#include <thread>
 
 #if defined(_WIN32)
 #include <windows.h>
+#endif
+
+#if defined(__unix__) || defined(__APPLE__)
+#include <sys/file.h>  // flock()
+#include <fcntl.h>     // open(), fcntl()
+#include <unistd.h>    // close(), access(), fsync()
+#include <sys/stat.h>  // stat(), chmod()
 #endif
 
 namespace EntropyEngine::Core::IO {
@@ -51,6 +60,168 @@ namespace {
 
         return p == pattern.size();
     }
+
+    // Map errno to FileError with platform-specific handling
+    FileError mapErrnoToFileError(int err) {
+        switch (err) {
+            case ENOSPC:
+#if defined(__unix__) || defined(__APPLE__)
+            case EDQUOT:  // Disk quota exceeded (POSIX)
+#endif
+                return FileError::DiskFull;
+            case EACCES:
+            case EPERM:
+                return FileError::AccessDenied;
+            case ENOENT:
+                return FileError::FileNotFound;
+            case EINVAL:
+            case ENAMETOOLONG:
+#if defined(__unix__) || defined(__APPLE__)
+            case EISDIR:
+#endif
+                return FileError::InvalidPath;
+#if defined(__unix__) || defined(__APPLE__)
+            case ENETUNREACH:
+            case ENETDOWN:
+            case ETIMEDOUT:
+                return FileError::NetworkError;
+#endif
+            default:
+                return FileError::IOError;
+        }
+    }
+
+    // Check if path points to a special file (FIFO, device, socket)
+    bool isSpecialFile(const std::filesystem::path& p) {
+        std::error_code ec;
+        auto status = std::filesystem::status(p, ec);
+        if (ec) return false;
+
+        return std::filesystem::is_block_file(status) ||
+               std::filesystem::is_character_file(status) ||
+               std::filesystem::is_fifo(status) ||
+               std::filesystem::is_socket(status);
+    }
+
+    // Create secure temporary file path
+    std::filesystem::path createSecureTempPath(const std::filesystem::path& dir,
+                                               const std::string& base) {
+#if defined(__unix__) || defined(__APPLE__)
+        // Use mkstemp for secure temp file creation (avoid mutating std::string buffer)
+        std::string tmpl = (dir / (base + ".XXXXXX")).string();
+        std::vector<char> buf(tmpl.begin(), tmpl.end());
+        buf.push_back('\0');
+        int fd = ::mkstemp(buf.data());
+        if (fd < 0) {
+            // Fallback to random if mkstemp fails
+            return dir / (base + ".tmp" + std::to_string(std::random_device{}()));
+        }
+        ::close(fd);  // We'll reopen with fstream
+        return std::filesystem::path(buf.data());
+#else
+        // Windows: use random device
+        return dir / (base + ".tmp" + std::to_string(std::random_device{}()));
+#endif
+    }
+
+    // Check current process permissions (platform-specific)
+    bool checkCurrentProcessPermissions(const std::filesystem::path& p,
+                                       bool& canRead, bool& canWrite, bool& canExec) {
+#if defined(__unix__) || defined(__APPLE__)
+        // Use access() for current process permissions
+        canRead = (::access(p.c_str(), R_OK) == 0);
+        canWrite = (::access(p.c_str(), W_OK) == 0);
+        canExec = (::access(p.c_str(), X_OK) == 0);
+        return true;
+#else
+        // Windows: use std::filesystem permissions (checks if anyone can access)
+        std::error_code ec;
+        auto st = std::filesystem::status(p, ec);
+        if (ec) {
+            canRead = canWrite = canExec = false;
+            return false;
+        }
+        auto perms = st.permissions();
+        auto has = [&](std::filesystem::perms perm) {
+            return (perms & perm) != std::filesystem::perms::none;
+        };
+        canRead = has(std::filesystem::perms::owner_read) ||
+                 has(std::filesystem::perms::group_read) ||
+                 has(std::filesystem::perms::others_read);
+        canWrite = has(std::filesystem::perms::owner_write) ||
+                  has(std::filesystem::perms::group_write) ||
+                  has(std::filesystem::perms::others_write);
+        canExec = has(std::filesystem::perms::owner_exec) ||
+                 has(std::filesystem::perms::group_exec) ||
+                 has(std::filesystem::perms::others_exec);
+        return true;
+#endif
+    }
+}
+
+// POSIX lock-file helpers and directory fsync for durability
+namespace {
+#if defined(__unix__) || defined(__APPLE__)
+    struct PosixLockFile {
+        int fd = -1;
+        std::filesystem::path path;
+        ~PosixLockFile() {
+            if (fd >= 0) {
+                // Best-effort unlock then close
+                ::flock(fd, LOCK_UN);
+                ::close(fd);
+            }
+        }
+    };
+
+    static std::unique_ptr<PosixLockFile> acquireSiblingLockPOSIX(
+        const std::filesystem::path& dst,
+        std::chrono::milliseconds timeout,
+        const std::string& suffix,
+        std::error_code& ecOut,
+        bool& timedOut)
+    {
+        using clock = std::chrono::steady_clock;
+        timedOut = false;
+        ecOut.clear();
+        auto lockPath = dst.string() + suffix;
+        int fd = ::open(lockPath.c_str(), O_CREAT | O_CLOEXEC | O_RDWR, 0600);
+        if (fd < 0) { ecOut = std::error_code(errno, std::generic_category()); return nullptr; }
+        auto token = std::make_unique<PosixLockFile>();
+        token->fd = fd;
+        token->path = lockPath;
+
+        auto until = clock::now() + timeout;
+        for (;;) {
+            if (::flock(fd, LOCK_EX | LOCK_NB) == 0) {
+                return token;
+            }
+            int e = errno;
+            if (e != EWOULDBLOCK && e != EAGAIN) {
+                ecOut = std::error_code(e, std::generic_category());
+                return nullptr;
+            }
+            if (clock::now() >= until) {
+                timedOut = true;
+                return nullptr;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+    }
+
+    static bool fsyncParentDirectoryPOSIX(const std::filesystem::path& p, std::error_code& ecOut) {
+        ecOut.clear();
+        auto parent = p.parent_path();
+        if (parent.empty()) return true;
+        int dfd = ::open(parent.c_str(), O_RDONLY);
+        if (dfd < 0) { ecOut = std::error_code(errno, std::generic_category()); return false; }
+        bool ok = (::fsync(dfd) == 0);
+        int e = ok ? 0 : errno;
+        ::close(dfd);
+        if (!ok) ecOut = std::error_code(e, std::generic_category());
+        return ok;
+    }
+#endif
 }
 
 // Concrete FileStream implementation for local files
@@ -180,6 +351,13 @@ FileOperationHandle LocalFileSystemBackend::submitWork(const std::string& path,
 
 // Synchronous operations for FileHandle via submitSerialized
 void LocalFileSystemBackend::doWriteFile(FileOperationHandle::OpState& s, const std::string& p, std::span<const std::byte> data, WriteOptions options) {
+    // Check for special files (FIFO, device, socket) that shouldn't be written via file operations
+    if (isSpecialFile(p)) {
+        s.setError(FileError::InvalidPath, "Cannot perform file operations on special files (FIFO, device, socket)", p);
+        s.complete(FileOpStatus::Failed);
+        return;
+    }
+
     std::error_code ec;
     const bool createParents = options.createParentDirs.value_or(_vfs ? _vfs->_cfg.defaultCreateParentDirs : false);
     if (createParents) {
@@ -211,6 +389,7 @@ void LocalFileSystemBackend::doWriteFile(FileOperationHandle::OpState& s, const 
     }
 
     if (!out) {
+        const int saved_errno = errno;  // Capture errno immediately
         std::error_code pec;
         auto parent = std::filesystem::path(p).parent_path();
         if (!parent.empty() && !std::filesystem::exists(parent, pec)) {
@@ -221,7 +400,7 @@ void LocalFileSystemBackend::doWriteFile(FileOperationHandle::OpState& s, const 
             if (stEc) {
                 s.setError(FileError::InvalidPath, "Invalid path or unsupported filename", p, stEc);
             } else {
-                s.setError(FileError::AccessDenied, "Cannot open file for writing", p, std::error_code(errno, std::generic_category()));
+                s.setError(FileError::AccessDenied, "Cannot open file for writing", p, std::error_code(saved_errno, std::generic_category()));
             }
         }
         s.complete(FileOpStatus::Failed);
@@ -251,12 +430,62 @@ void LocalFileSystemBackend::doWriteFile(FileOperationHandle::OpState& s, const 
     }
     out.flush();
     if (!out.good()) {
-        std::error_code e(errno, std::generic_category());
-        auto code = (errno == ENOSPC) ? FileError::DiskFull : FileError::IOError;
-        s.setError(code, code == FileError::DiskFull ? std::string("Disk full or flush failed") : std::string("Write operation failed"), p, e);
+        const int saved_errno = errno;  // Capture errno immediately
+        auto code = mapErrnoToFileError(saved_errno);
+        std::string msg = (code == FileError::DiskFull) ? "Disk full or quota exceeded" : "Write operation failed";
+        s.setError(code, msg, p, std::error_code(saved_errno, std::generic_category()));
         s.complete(FileOpStatus::Failed);
         return;
     }
+
+    // fsync to disk if requested (durability guarantee)
+#if defined(__APPLE__)
+    if (options.fsync) {
+        out.close();
+        int fd = ::open(p.c_str(), O_WRONLY);
+        if (fd >= 0) {
+            if (::fcntl(fd, F_FULLFSYNC) != 0) {
+                const int sync_errno = errno;
+                ::close(fd);
+                s.setError(FileError::IOError, "F_FULLFSYNC failed", p, std::error_code(sync_errno, std::generic_category()));
+                s.complete(FileOpStatus::Failed);
+                return;
+            }
+            ::close(fd);
+        }
+    }
+#elif defined(__linux__)
+    if (options.fsync) {
+        out.close();
+        int fd = ::open(p.c_str(), O_WRONLY);
+        if (fd >= 0) {
+            if (::fdatasync(fd) != 0) {
+                const int sync_errno = errno;
+                ::close(fd);
+                s.setError(FileError::IOError, "fdatasync failed", p, std::error_code(sync_errno, std::generic_category()));
+                s.complete(FileOpStatus::Failed);
+                return;
+            }
+            ::close(fd);
+        }
+    }
+#elif defined(__unix__)
+    if (options.fsync) {
+        out.close();
+        int fd = ::open(p.c_str(), O_WRONLY);
+        if (fd >= 0) {
+            if (::fsync(fd) != 0) {
+                const int sync_errno = errno;
+                ::close(fd);
+                s.setError(FileError::IOError, "fsync failed", p, std::error_code(sync_errno, std::generic_category()));
+                s.complete(FileOpStatus::Failed);
+                return;
+            }
+            ::close(fd);
+        }
+    }
+#endif
+
     s.wrote = wrote;
     s.complete(FileOpStatus::Complete);
 }
@@ -276,7 +505,8 @@ void LocalFileSystemBackend::doDeleteFile(FileOperationHandle::OpState& s, const
 void LocalFileSystemBackend::doCreateFile(FileOperationHandle::OpState& s, const std::string& p) {
     std::ofstream out(p, std::ios::out | std::ios::binary);
     if (!out) {
-        s.setError(FileError::AccessDenied, "Cannot create file", p);
+        const int saved_errno = errno;  // Capture errno immediately
+        s.setError(FileError::AccessDenied, "Cannot create file", p, std::error_code(saved_errno, std::generic_category()));
         s.complete(FileOpStatus::Failed);
     } else {
         s.complete(FileOpStatus::Complete);
@@ -301,10 +531,30 @@ void LocalFileSystemBackend::doWriteLine(FileOperationHandle::OpState& s, const 
     auto targetPath = std::filesystem::path(p);
     auto dir = targetPath.parent_path();
     auto base = targetPath.filename().string();
-    auto tempPath = dir / (base + ".tmp" + std::to_string(std::random_device{}()));
+
+    // Optional cross-process serialization via sibling lock file (POSIX)
+#if defined(__unix__) || defined(__APPLE__)
+    std::unique_ptr<PosixLockFile> lockToken;
+    if (_vfs && _vfs->_cfg.defaultUseLockFile) {
+        std::error_code lockEc; bool timedOut = false;
+        lockToken = acquireSiblingLockPOSIX(targetPath, _vfs->_cfg.lockAcquireTimeout, _vfs->_cfg.lockSuffix, lockEc, timedOut);
+        if (!lockToken) {
+            if (timedOut) {
+                s.setError(FileError::Timeout, "Lock acquisition timed out", p);
+            } else if (lockEc) {
+                s.setError(mapErrnoToFileError(lockEc.value()), "Failed to acquire lock file", p, lockEc);
+            } else {
+                s.setError(FileError::IOError, "Failed to acquire lock file", p);
+            }
+            s.complete(FileOpStatus::Failed);
+            return;
+        }
+    }
+#endif
+
+    auto tempPath = createSecureTempPath(dir, base);
 
     std::string data;
-    bool originalExists = false;
     bool originalFinalNewline = false;
     std::string eol;
 #if defined(_WIN32)
@@ -315,7 +565,6 @@ void LocalFileSystemBackend::doWriteLine(FileOperationHandle::OpState& s, const 
     {
         std::ifstream inBin(p, std::ios::in | std::ios::binary);
         if (inBin) {
-            originalExists = true;
             std::ostringstream ss; ss << inBin.rdbuf();
             data = ss.str();
             if (data.empty() || data.back() == '\n') {
@@ -409,6 +658,13 @@ void LocalFileSystemBackend::doWriteLine(FileOperationHandle::OpState& s, const 
         return;
     }
 #else
+    // Preserve destination permissions if it exists
+    {
+        struct stat st;
+        if (::stat(targetPath.c_str(), &st) == 0) {
+            ::chmod(tempPath.c_str(), st.st_mode & 07777);
+        }
+    }
     std::filesystem::rename(tempPath, targetPath, ec);
     if (ec) {
         std::filesystem::remove(tempPath, ec);
@@ -424,8 +680,16 @@ void LocalFileSystemBackend::doWriteLine(FileOperationHandle::OpState& s, const 
 
 FileOperationHandle LocalFileSystemBackend::readFile(const std::string& path, ReadOptions options) {
     return submitWork(path, [options](FileOperationHandle::OpState& s, const std::string& p) {
+        // Check for special files (FIFO, device, socket)
+        if (isSpecialFile(p)) {
+            s.setError(FileError::InvalidPath, "Cannot perform file operations on special files (FIFO, device, socket)", p);
+            s.complete(FileOpStatus::Failed);
+            return;
+        }
+
         std::ifstream in(p, std::ios::in | std::ios::binary);
         if (!in) {
+            const int saved_errno = errno;  // Capture errno immediately
             std::error_code ec1;
             bool ex = std::filesystem::exists(p, ec1);
             if (ec1) {
@@ -433,7 +697,7 @@ FileOperationHandle LocalFileSystemBackend::readFile(const std::string& path, Re
             } else if (!ex) {
                 s.setError(FileError::FileNotFound, "File not found", p);
             } else {
-                s.setError(FileError::AccessDenied, "Cannot open file for reading", p, std::error_code(errno, std::generic_category()));
+                s.setError(FileError::AccessDenied, "Cannot open file for reading", p, std::error_code(saved_errno, std::generic_category()));
             }
             s.complete(FileOpStatus::Failed);
             return;
@@ -468,7 +732,14 @@ FileOperationHandle LocalFileSystemBackend::readFile(const std::string& path, Re
 FileOperationHandle LocalFileSystemBackend::writeFile(const std::string& path, std::span<const std::byte> data, WriteOptions options) {
     return submitWork(path, [this, data = std::vector<std::byte>(data.begin(), data.end()), options]
                             (FileOperationHandle::OpState& s, const std::string& p) mutable {
-        
+
+        // Check for special files (FIFO, device, socket)
+        if (isSpecialFile(p)) {
+            s.setError(FileError::InvalidPath, "Cannot perform file operations on special files (FIFO, device, socket)", p);
+            s.complete(FileOpStatus::Failed);
+            return;
+        }
+
         std::error_code ec;
         // Determine effective parent creation policy
         const bool createParents = options.createParentDirs.value_or(_vfs ? _vfs->_cfg.defaultCreateParentDirs : false);
@@ -483,7 +754,7 @@ FileOperationHandle LocalFileSystemBackend::writeFile(const std::string& path, s
                 }
             }
         }
-        
+
         std::ios_base::openmode mode = std::ios::out | std::ios::binary;
         if (options.append) {
             mode |= std::ios::app;
@@ -492,7 +763,7 @@ FileOperationHandle LocalFileSystemBackend::writeFile(const std::string& path, s
         } else {
             mode |= std::ios::in;  // Need read mode to seek
         }
-        
+
         std::fstream out(p, mode);
         if (!out && options.createIfMissing) {
             // Try to create the file
@@ -500,8 +771,9 @@ FileOperationHandle LocalFileSystemBackend::writeFile(const std::string& path, s
             out.close();
             out.open(p, mode);
         }
-        
+
         if (!out) {
+            const int saved_errno = errno;  // Capture errno immediately
             std::error_code pec;
             auto parent = std::filesystem::path(p).parent_path();
             if (!parent.empty() && !std::filesystem::exists(parent, pec)) {
@@ -512,21 +784,21 @@ FileOperationHandle LocalFileSystemBackend::writeFile(const std::string& path, s
                 if (stEc) {
                     s.setError(FileError::InvalidPath, "Invalid path or unsupported filename", p, stEc);
                 } else {
-                    s.setError(FileError::AccessDenied, "Cannot open file for writing", p, std::error_code(errno, std::generic_category()));
+                    s.setError(FileError::AccessDenied, "Cannot open file for writing", p, std::error_code(saved_errno, std::generic_category()));
                 }
             }
             s.complete(FileOpStatus::Failed);
             return;
         }
-        
+
         if (options.offset > 0 && !options.append) {
             out.seekp(options.offset, std::ios::beg);
         }
-        
+
         // Perform write, honoring ensureFinalNewline for whole-file rewrites
         out.write(reinterpret_cast<const char*>(data.data()), data.size());
         size_t wrote = data.size();
-        
+
         // If ensureFinalNewline is requested and this is a whole-file write (truncate or offset==0 and not append),
         // add a platform-default newline if the payload does not already end with '\n'.
         if (options.ensureFinalNewline.value_or(false) && !options.append && (options.truncate || options.offset == 0)) {
@@ -545,12 +817,62 @@ FileOperationHandle LocalFileSystemBackend::writeFile(const std::string& path, s
         }
         out.flush();
         if (!out.good()) {
-            std::error_code e(errno, std::generic_category());
-            auto code = (errno == ENOSPC) ? FileError::DiskFull : FileError::IOError;
-            s.setError(code, code == FileError::DiskFull ? std::string("Disk full or flush failed") : std::string("Write operation failed"), p, e);
+            const int saved_errno = errno;  // Capture errno immediately
+            auto code = mapErrnoToFileError(saved_errno);
+            std::string msg = (code == FileError::DiskFull) ? "Disk full or quota exceeded" : "Write operation failed";
+            s.setError(code, msg, p, std::error_code(saved_errno, std::generic_category()));
             s.complete(FileOpStatus::Failed);
             return;
         }
+
+        // fsync to disk if requested (durability guarantee)
+#if defined(__APPLE__)
+        if (options.fsync) {
+            out.close();
+            int fd = ::open(p.c_str(), O_WRONLY);
+            if (fd >= 0) {
+                if (::fcntl(fd, F_FULLFSYNC) != 0) {
+                    const int sync_errno = errno;
+                    ::close(fd);
+                    s.setError(FileError::IOError, "F_FULLFSYNC failed", p, std::error_code(sync_errno, std::generic_category()));
+                    s.complete(FileOpStatus::Failed);
+                    return;
+                }
+                ::close(fd);
+            }
+        }
+#elif defined(__linux__)
+        if (options.fsync) {
+            out.close();
+            int fd = ::open(p.c_str(), O_WRONLY);
+            if (fd >= 0) {
+                if (::fdatasync(fd) != 0) {
+                    const int sync_errno = errno;
+                    ::close(fd);
+                    s.setError(FileError::IOError, "fdatasync failed", p, std::error_code(sync_errno, std::generic_category()));
+                    s.complete(FileOpStatus::Failed);
+                    return;
+                }
+                ::close(fd);
+            }
+        }
+#elif defined(__unix__)
+        if (options.fsync) {
+            out.close();
+            int fd = ::open(p.c_str(), O_WRONLY);
+            if (fd >= 0) {
+                if (::fsync(fd) != 0) {
+                    const int sync_errno = errno;
+                    ::close(fd);
+                    s.setError(FileError::IOError, "fsync failed", p, std::error_code(sync_errno, std::generic_category()));
+                    s.complete(FileOpStatus::Failed);
+                    return;
+                }
+                ::close(fd);
+            }
+        }
+#endif
+
         s.wrote = wrote;
         s.complete(FileOpStatus::Complete);
     });
@@ -622,31 +944,23 @@ FileOperationHandle LocalFileSystemBackend::getMetadata(const std::string& path)
 
         meta.exists = std::filesystem::exists(status);
 
+        // Determine whether the path itself is a symlink (do not follow)
+        std::error_code ssec;
+        auto ss = std::filesystem::symlink_status(p, ssec);
+        meta.isSymlink = !ssec && std::filesystem::is_symlink(ss);
+
         if (meta.exists) {
             meta.isDirectory = std::filesystem::is_directory(status);
             meta.isRegularFile = std::filesystem::is_regular_file(status);
-            meta.isSymlink = std::filesystem::is_symlink(status);
 
-            // Get file size for regular files
+            // Get file size for regular files (follow target)
             if (meta.isRegularFile) {
                 meta.size = std::filesystem::file_size(p, ec);
                 if (ec) meta.size = 0;
             }
 
-            // Get permissions
-            auto perms = status.permissions();
-            auto has = [&](std::filesystem::perms perm) {
-                return (perms & perm) != std::filesystem::perms::none;
-            };
-            meta.readable = has(std::filesystem::perms::owner_read) ||
-                           has(std::filesystem::perms::group_read) ||
-                           has(std::filesystem::perms::others_read);
-            meta.writable = has(std::filesystem::perms::owner_write) ||
-                           has(std::filesystem::perms::group_write) ||
-                           has(std::filesystem::perms::others_write);
-            meta.executable = has(std::filesystem::perms::owner_exec) ||
-                             has(std::filesystem::perms::group_exec) ||
-                             has(std::filesystem::perms::others_exec);
+            // Get permissions - use platform-specific check for current process
+            checkCurrentProcessPermissions(p, meta.readable, meta.writable, meta.executable);
 
             // Get last modified time
             auto lwt = std::filesystem::last_write_time(p, ec);
@@ -1018,6 +1332,10 @@ FileOperationHandle LocalFileSystemBackend::readLine(const std::string& path, si
         size_t currentLine = 0;
         while (std::getline(in, line)) {
             if (currentLine == lineNumber) {
+                // Strip trailing \r if present (for CRLF line endings on Unix)
+                if (!line.empty() && line.back() == '\r') {
+                    line.pop_back();
+                }
                 s.bytes.resize(line.size());
                 std::memcpy(s.bytes.data(), line.data(), line.size());
                 s.complete(FileOpStatus::Complete);
@@ -1054,11 +1372,10 @@ FileOperationHandle LocalFileSystemBackend::writeLine(const std::string& path, s
         auto targetPath = std::filesystem::path(p);
         auto dir = targetPath.parent_path();
         auto base = targetPath.filename().string();
-        auto tempPath = dir / (base + ".tmp" + std::to_string(std::random_device{}()));
+        auto tempPath = createSecureTempPath(dir, base);
         
         // Determine existing file content and line-ending style
         std::string data;
-        bool originalExists = false;
         bool originalFinalNewline = false;
         std::string eol;
 #if defined(_WIN32)
@@ -1069,7 +1386,6 @@ FileOperationHandle LocalFileSystemBackend::writeLine(const std::string& path, s
         {
             std::ifstream inBin(p, std::ios::in | std::ios::binary);
             if (inBin) {
-                originalExists = true;
                 std::ostringstream ss; ss << inBin.rdbuf();
                 data = ss.str();
                 if (!data.empty()) {
@@ -1424,4 +1740,27 @@ std::string EntropyEngine::Core::IO::LocalFileSystemBackend::normalizeKey(const 
     std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
 #endif
     return s;
+}
+
+// Cross-process file locking implementation (Unix/POSIX only)
+//
+// NOTE: flock() is currently DISABLED because it's incompatible with atomic file replacement.
+// When we use temp file + rename for atomic writes (doWriteLine, WriteBatch), flock() locks
+// the original inode, but rename() changes which inode the path points to, breaking the lock.
+//
+// We return NotSupported to fall back to VFS in-process advisory locks. For true cross-process
+// locking with atomic replacement, we'd need to:
+// 1. Lock a separate .lock file (adds complexity)
+// 2. Use directory-based locking
+// 3. Use a lock server/database
+//
+// For now, VFS provides in-process serialization which is sufficient for most use cases.
+EntropyEngine::Core::IO::IFileSystemBackend::AcquireWriteScopeResult EntropyEngine::Core::IO::LocalFileSystemBackend::acquireWriteScope(const std::string& path, EntropyEngine::Core::IO::IFileSystemBackend::AcquireScopeOptions options) {
+    (void)path;
+    (void)options;
+
+    AcquireWriteScopeResult result;
+    result.status = AcquireWriteScopeResult::Status::NotSupported;
+    result.message = "flock() disabled - incompatible with atomic file replacement (temp+rename). Using VFS advisory locks.";
+    return result;
 }

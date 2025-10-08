@@ -10,6 +10,12 @@
 #if defined(_WIN32)
 #include <windows.h>
 #endif
+#if defined(__unix__) || defined(__APPLE__)
+#include <unistd.h>     // mkstemp(), close(), fsync()
+#include <sys/stat.h>   // stat(), chmod()
+#include <sys/file.h>   // flock()
+#include <fcntl.h>      // open(), O_*
+#endif
 
 namespace EntropyEngine::Core::IO {
 
@@ -175,10 +181,8 @@ FileOperationHandle WriteBatch::commit(const WriteOptions& opts) {
     
     auto backend = _vfs->findBackend(_path);
     auto vfsLock = _vfs->lockForPath(_path);
-    auto advTimeout = _vfs ? _vfs->_cfg.advisoryAcquireTimeout : std::chrono::milliseconds(5000);
-    auto fallbackPolicy = _vfs ? _vfs->_cfg.advisoryFallback : VirtualFileSystem::Config::AdvisoryFallbackPolicy::FallbackWithTimeout;
-    
-    return _vfs->submit(_path, [this, backend, vfsLock, advTimeout, fallbackPolicy, ops = _operations, opts](FileOperationHandle::OpState& s, const std::string& p) mutable {
+
+    return _vfs->submit(_path, [this, backend, vfsLock, ops = _operations, opts](FileOperationHandle::OpState& s, const std::string& p) mutable {
         // Prefer backend-provided write scope; fall back to VFS advisory lock with policy/timeout
         std::unique_ptr<void, void(*)(void*)> scopeToken(nullptr, [](void*){});
         IFileSystemBackend::AcquireWriteScopeResult scopeRes;
@@ -292,11 +296,29 @@ FileOperationHandle WriteBatch::commit(const WriteOptions& opts) {
         // Apply all operations to get final content
         std::vector<std::string> finalLines = applyOperations(originalLines);
         
-        // Generate temporary filename
+        // Generate secure temporary filename in the same directory as destination
         auto targetPath = std::filesystem::path(p);
         auto dir = targetPath.parent_path();
         auto base = targetPath.filename().string();
+
+#if defined(__unix__) || defined(__APPLE__)
+        // Use mkstemp for secure temp file creation (avoid mutating std::string buffer)
+        std::string tmpl = (dir / (base + ".XXXXXX")).string();
+        std::vector<char> buf(tmpl.begin(), tmpl.end());
+        buf.push_back('\0');
+        int fd = ::mkstemp(buf.data());
+        std::filesystem::path tempPath;
+        if (fd < 0) {
+            // Fallback to random if mkstemp fails
+            tempPath = dir / (base + ".tmp" + std::to_string(std::random_device{}()));
+        } else {
+            ::close(fd);  // We'll reopen with fstream
+            tempPath = std::filesystem::path(buf.data());
+        }
+#else
+        // Windows: use random device
         auto tempPath = dir / (base + ".tmp" + std::to_string(std::random_device{}()));
+#endif
         
         // Ensure parent directory exists if configured (effective option)
         const bool createParents = opts.createParentDirs.value_or(_vfs ? _vfs->_cfg.defaultCreateParentDirs : false);
@@ -312,6 +334,57 @@ FileOperationHandle WriteBatch::commit(const WriteOptions& opts) {
             }
         }
         
+        // Optional cross-process serialization via sibling lock file (POSIX)
+#if defined(__unix__) || defined(__APPLE__)
+        struct LockFileToken { int fd = -1; ~LockFileToken(){ if (fd >= 0) { ::flock(fd, LOCK_UN); ::close(fd); } } };
+        std::unique_ptr<LockFileToken> lockToken;
+        const bool useLockFile = opts.useLockFile.value_or(_vfs ? _vfs->_cfg.defaultUseLockFile : false);
+        if (useLockFile) {
+            auto timeout = opts.lockTimeout.value_or(_vfs ? _vfs->_cfg.lockAcquireTimeout : std::chrono::milliseconds(5000));
+            auto suffix = opts.lockSuffix.value_or(_vfs ? _vfs->_cfg.lockSuffix : std::string(".lock"));
+            std::error_code lockEc;
+            bool timedOut = false;
+            // Ensure parent directory exists for the lock file
+            (void)createParents; // already handled above
+            auto lockPath = (dir / (base + suffix)).string();
+            int fd = ::open(lockPath.c_str(), O_CREAT | O_CLOEXEC | O_RDWR, 0600);
+            if (fd < 0) {
+                lockEc = std::error_code(errno, std::generic_category());
+            } else {
+                auto until = std::chrono::steady_clock::now() + timeout;
+                for (;;) {
+                    if (::flock(fd, LOCK_EX | LOCK_NB) == 0) {
+                        lockToken = std::make_unique<LockFileToken>();
+                        lockToken->fd = fd;
+                        break;
+                    }
+                    int e = errno;
+                    if (e != EWOULDBLOCK && e != EAGAIN) {
+                        lockEc = std::error_code(e, std::generic_category());
+                        break;
+                    }
+                    if (std::chrono::steady_clock::now() >= until) {
+                        timedOut = true;
+                        break;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                }
+                if (!lockToken && fd >= 0) { ::close(fd); }
+            }
+            if (!lockToken) {
+                if (timedOut) {
+                    s.setError(FileError::Timeout, "Lock acquisition timed out", p);
+                } else if (lockEc) {
+                    s.setError(FileError::IOError, "Failed to acquire lock file", p, lockEc);
+                } else {
+                    s.setError(FileError::IOError, "Failed to acquire lock file", p);
+                }
+                s.complete(FileOpStatus::Failed);
+                return;
+            }
+        }
+#endif
+
         // Decide final newline presence
         const bool finalNewline = opts.ensureFinalNewline.has_value()
             ? opts.ensureFinalNewline.value()
@@ -379,12 +452,41 @@ FileOperationHandle WriteBatch::commit(const WriteOptions& opts) {
                 return;
             }
         #else
+            // Preserve destination permissions if it exists
+            {
+                struct stat st;
+                if (::stat(targetPath.c_str(), &st) == 0) {
+                    ::chmod(tempPath.c_str(), st.st_mode & 07777);
+                }
+            }
             std::filesystem::rename(tempPath, targetPath, ec);
             if (ec) {
                 std::filesystem::remove(tempPath, ec);
                 s.setError(FileError::IOError, "Failed to rename temp file", p, ec);
                 s.complete(FileOpStatus::Failed);
                 return;
+            }
+            // If durability requested, fsync the parent directory to persist the rename
+            if (opts.fsync) {
+                std::error_code dirSyncEc;
+                // Reuse same logic as POSIX helper locally
+                auto parent = targetPath.parent_path();
+                if (!parent.empty()) {
+                    int dfd = ::open(parent.c_str(), O_RDONLY);
+                    if (dfd >= 0) {
+                        if (::fsync(dfd) != 0) {
+                            dirSyncEc = std::error_code(errno, std::generic_category());
+                        }
+                        ::close(dfd);
+                    } else {
+                        dirSyncEc = std::error_code(errno, std::generic_category());
+                    }
+                }
+                if (dirSyncEc) {
+                    s.setError(FileError::IOError, "Directory fsync failed after rename", parent.string(), dirSyncEc);
+                    s.complete(FileOpStatus::Failed);
+                    return;
+                }
             }
         #endif
         

@@ -27,6 +27,10 @@ class IFileSystemBackend; // fwd
  * 
  * Construct via VirtualFileSystem::createFileHandle(). Operations are asynchronous;
  * call wait() on the returned FileOperationHandle to block, or chain operations.
+ *
+ * Design note: FileHandle is a dumb handle that delegates all I/O and policy decisions
+ * to the routed backend through the VirtualFileSystem. It avoids filesystem probing and
+ * contains no backend-specific logic; semantics are defined by the backend implementation.
  * 
  * @code
  * WorkContractGroup group(2000);

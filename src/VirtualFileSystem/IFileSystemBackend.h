@@ -52,6 +52,12 @@ struct WriteOptions {
     bool truncate = false;
     std::optional<bool> createParentDirs;     // per-operation override; nullopt => use VFS default
     std::optional<bool> ensureFinalNewline;   // for whole-file rewrites; nullopt => preserve prior
+    bool fsync = false;                       // Force data to disk (durability guarantee, Unix/POSIX only)
+
+    // Optional cross-process serialization via sibling lock file (compatible with atomic replace)
+    std::optional<bool> useLockFile;          // If true, acquire <path> + lockSuffix as exclusive lock
+    std::optional<std::chrono::milliseconds> lockTimeout; // Timeout for acquiring lock (overrides VFS default)
+    std::optional<std::string> lockSuffix;    // Suffix for lock file (default from VFS config)
 };
 
 /**
@@ -160,20 +166,32 @@ public:
      * @param path Path to read
      * @param options ReadOptions (offset/length, binary)
      * @return Handle whose contents are available after wait()
+     *
+     * @note **Symlink behavior**: File operations follow symlinks by default on Unix systems.
+     * @note Dangling symlinks cause FileError::FileNotFound.
+     * @note Use getMetadata() with FileMetadata::isSymlink to detect symlinks before operations.
+     * @note Special files (FIFO, device, socket) are rejected with FileError::InvalidPath on Unix.
      */
     virtual FileOperationHandle readFile(const std::string& path, ReadOptions options = {}) = 0;
     /**
      * @brief Writes file contents
      * @param path Target path
      * @param data Bytes to write
-     * @param options WriteOptions (append/offset/truncate, parent dirs, final newline)
+     * @param options WriteOptions (append/offset/truncate, parent dirs, final newline, fsync)
      * @return Handle representing the async write
+     *
+     * @note **Symlink behavior**: Writes follow symlinks and modify the target file.
+     * @note Dangling symlinks cause FileError::FileNotFound.
+     * @note Special files (FIFO, device, socket) are rejected with FileError::InvalidPath on Unix.
+     * @note Set options.fsync=true for durability guarantee (Unix/POSIX only; forces data to disk).
      */
     virtual FileOperationHandle writeFile(const std::string& path, std::span<const std::byte> data, WriteOptions options = {}) = 0;
     /**
      * @brief Deletes a file
      * @param path Target path
      * @return Handle representing the delete operation
+     *
+     * @note **Symlink behavior**: Deletes the symlink itself, not the target.
      */
     virtual FileOperationHandle deleteFile(const std::string& path) = 0;
     /**

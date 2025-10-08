@@ -44,6 +44,9 @@ public:
     // Backend-aware normalization for identity/locking
     std::string normalizeKey(const std::string& path) const override;
 
+    // Cross-process file locking (Unix/POSIX only)
+    AcquireWriteScopeResult acquireWriteScope(const std::string& path, AcquireScopeOptions options = {}) override;
+
     // Synchronous operations for use by VFS submitSerialized (these execute inline, no async work)
     void doWriteFile(FileOperationHandle::OpState& s, const std::string& path, std::span<const std::byte> data, WriteOptions options);
     void doDeleteFile(FileOperationHandle::OpState& s, const std::string& path);
