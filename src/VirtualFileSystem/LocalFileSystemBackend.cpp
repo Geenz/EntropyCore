@@ -303,7 +303,7 @@ void LocalFileSystemBackend::doWriteLine(FileOperationHandle::OpState& s, const 
             originalExists = true;
             std::ostringstream ss; ss << inBin.rdbuf();
             data = ss.str();
-            if (!data.empty() && data.back() == '\n') {
+            if (data.empty() || data.back() == '\n') {
                 originalFinalNewline = true;
             }
             size_t crlf = 0, lf = 0;
@@ -314,7 +314,9 @@ void LocalFileSystemBackend::doWriteLine(FileOperationHandle::OpState& s, const 
             }
             if (crlf > lf) eol = "\r\n"; else if (lf > crlf) eol = "\n"; else eol = platformDefaultEol;
         } else {
+            // File does not exist yet: adopt platform default EOL and default to final newline present
             eol = platformDefaultEol;
+            originalFinalNewline = true; // backend default for new files: end with a newline
         }
     }
     if (eol.empty()) eol = platformDefaultEol;
