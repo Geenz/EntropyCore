@@ -1,3 +1,11 @@
+/**
+ * @file IFileSystemBackend.h
+ * @brief Backend interface for VirtualFileSystem
+ * 
+ * Implementations provide concrete file operations (local filesystem, remote stores, etc.).
+ * VFS routes operations to a backend selected by path mounting. Backends may override
+ * normalizeKey() to define identity/locking keys and can ignore options they do not support.
+ */
 #pragma once
 #include <string>
 #include <memory>
@@ -15,12 +23,27 @@ class FileStream;
 class VirtualFileSystem;
 
 // Options for various operations
+/**
+ * @brief Options controlling file reads
+ * @param offset Starting byte offset (default 0)
+ * @param length Optional max bytes to read (reads to EOF if not set)
+ * @param binary Open in binary mode (platform newline translation off)
+ */
 struct ReadOptions {
     uint64_t offset = 0;
     std::optional<size_t> length;
     bool binary = true;
 };
 
+/**
+ * @brief Options controlling file writes
+ * @param offset Starting byte offset (ignored if append=true)
+ * @param append Append to end of file
+ * @param createIfMissing Create the file if it does not exist
+ * @param truncate Truncate file before writing (overrides offset)
+ * @param createParentDirs Per-op override to create parent directories
+ * @param ensureFinalNewline Force presence/absence of final newline for whole-file rewrites
+ */
 struct WriteOptions {
     uint64_t offset = 0;
     bool append = false;
@@ -30,6 +53,12 @@ struct WriteOptions {
     std::optional<bool> ensureFinalNewline;   // for whole-file rewrites; nullopt => preserve prior
 };
 
+/**
+ * @brief Options for opening streams
+ * @param mode Access mode (read/write/read-write)
+ * @param buffered If true, backend may buffer; BufferedFileStream provides explicit buffering
+ * @param bufferSize Suggested buffer size when applicable
+ */
 struct StreamOptions {
     enum Mode { Read, Write, ReadWrite };
     Mode mode = Read;
@@ -38,6 +67,10 @@ struct StreamOptions {
 };
 
 // Backend capabilities
+/**
+ * @brief Capabilities advertised by a backend
+ * @note VFS may adjust behavior based on these (e.g., advisory locking, atomic writes)
+ */
 struct BackendCapabilities {
     bool supportsStreaming = true;
     bool supportsRandomAccess = true;
@@ -52,6 +85,14 @@ struct BackendCapabilities {
 // FileMetadata and DirectoryEntry are now defined in FileOperationHandle.h
 
 // Options for directory listing
+/**
+ * @brief Options controlling directory listings
+ * @param recursive If true, recurse into subdirectories
+ * @param followSymlinks Whether to follow symlinks during traversal
+ * @param maxDepth Maximum recursion depth
+ * @param globPattern Optional simple glob filter (e.g., *.txt)
+ * @param filter Optional predicate to include/exclude entries
+ */
 struct ListDirectoryOptions {
     bool recursive = false;
     bool followSymlinks = true;
@@ -61,6 +102,12 @@ struct ListDirectoryOptions {
 };
 
 // Options for batch metadata queries
+/**
+ * @brief Options to retrieve metadata for multiple paths
+ * @param paths Paths to query
+ * @param includeExtendedAttributes Include extended attributes if supported
+ * @param cacheTTL Optional cache TTL (0 = no caching)
+ */
 struct BatchMetadataOptions {
     std::vector<std::string> paths;
     bool includeExtendedAttributes = false;
@@ -68,6 +115,13 @@ struct BatchMetadataOptions {
 };
 
 // Options for copy operations
+/**
+ * @brief Options controlling file copy behavior
+ * @param overwriteExisting Replace destination if it exists
+ * @param preserveAttributes Preserve timestamps/permissions where supported
+ * @param useReflink Use copy-on-write cloning if available
+ * @param progressCallback Optional progress callback; return false to cancel
+ */
 struct CopyOptions {
     bool overwriteExisting = false;
     bool preserveAttributes = true;
@@ -76,6 +130,11 @@ struct CopyOptions {
 };
 
 // Options for large file operations with progress
+/**
+ * @brief Options for chunked operations with progress
+ * @param chunkSize Preferred chunk size in bytes
+ * @param progressCallback Optional progress callback; return false to cancel
+ */
 struct ProgressOptions {
     size_t chunkSize = 1024 * 1024;  // 1MB default
     std::function<bool(size_t processed, size_t total)> progressCallback;  // Return false to cancel
@@ -87,13 +146,46 @@ public:
     virtual ~IFileSystemBackend() = default;
     
     // Core file operations
+    /**
+     * @brief Reads file contents
+     * @param path Path to read
+     * @param options ReadOptions (offset/length, binary)
+     * @return Handle whose contents are available after wait()
+     */
     virtual FileOperationHandle readFile(const std::string& path, ReadOptions options = {}) = 0;
+    /**
+     * @brief Writes file contents
+     * @param path Target path
+     * @param data Bytes to write
+     * @param options WriteOptions (append/offset/truncate, parent dirs, final newline)
+     * @return Handle representing the async write
+     */
     virtual FileOperationHandle writeFile(const std::string& path, std::span<const std::byte> data, WriteOptions options = {}) = 0;
+    /**
+     * @brief Deletes a file
+     * @param path Target path
+     * @return Handle representing the delete operation
+     */
     virtual FileOperationHandle deleteFile(const std::string& path) = 0;
+    /**
+     * @brief Creates an empty file
+     * @param path Target path
+     * @return Handle representing the create operation
+     */
     virtual FileOperationHandle createFile(const std::string& path) = 0;
     
     // Metadata operations
+    /**
+     * @brief Retrieves metadata for a file
+     * @param path Target path
+     * @return Handle whose metadata() is populated after wait()
+     */
     virtual FileOperationHandle getMetadata(const std::string& path) = 0;
+    /**
+     * @brief Checks existence of a path
+     * @param path Target path
+     * @return true if path exists, false otherwise
+     */
     virtual bool exists(const std::string& path) = 0;
 
     // Batch metadata query (Phase 2)
@@ -103,22 +195,65 @@ public:
     }
     
     // Directory operations (optional)
+    /**
+     * @brief Creates a directory at the given path
+     * 
+     * Default implementation is not supported and returns an empty handle.
+     * @param path Directory to create
+     * @return A FileOperationHandle; status() will be Pending for default impl
+     */
     virtual FileOperationHandle createDirectory(const std::string& path) {
+        (void)path; // Suppress unused warning
         return FileOperationHandle{}; // Default: not supported
     }
+    /**
+     * @brief Removes a directory at the given path
+     * 
+     * Default implementation is not supported and returns an empty handle.
+     * @param path Directory to remove
+     * @return A FileOperationHandle; status() will be Pending for default impl
+     */
     virtual FileOperationHandle removeDirectory(const std::string& path) {
+        (void)path; // Suppress unused warning
         return FileOperationHandle{}; // Default: not supported
     }
+    /**
+     * @brief Lists entries in the given directory
+     * 
+     * Default implementation is not supported and returns an empty handle.
+     * @param path Directory to list
+     * @param options Listing options (recursion, filters)
+     * @return A FileOperationHandle; status() will be Pending for default impl
+     */
     virtual FileOperationHandle listDirectory(const std::string& path, ListDirectoryOptions options = {}) {
-        (void)options;  // Suppress unused warning
+        (void)path; (void)options;  // Suppress unused warnings
         return FileOperationHandle{}; // Default: not supported
     }
     
     // Stream support
+    /**
+     * @brief Opens a stream for the given path
+     * @param path Target path
+     * @param options StreamOptions (mode, buffering)
+     * @return Unique pointer to FileStream, or null on failure
+     */
     virtual std::unique_ptr<FileStream> openStream(const std::string& path, StreamOptions options = {}) = 0;
     
     // Line operations
+    /**
+     * @brief Reads a single line by index (0-based)
+     * @param path Target file
+     * @param lineNumber Line index
+     * @return Handle with contentsBytes/Text containing the line
+     */
     virtual FileOperationHandle readLine(const std::string& path, size_t lineNumber) = 0;
+    /**
+     * @brief Replaces a single line by index (0-based)
+     * @param path Target file
+     * @param lineNumber Line index
+     * @param line New content without newline
+     * @return Handle representing the write
+     */
     virtual FileOperationHandle writeLine(const std::string& path, size_t lineNumber, std::string_view line) = 0;
 
     // Copy/Move operations (Phase 2)

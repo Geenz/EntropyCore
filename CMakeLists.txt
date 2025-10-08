@@ -271,8 +271,11 @@ if(ENTROPY_BUILD_TESTS)
             Tests/WorkGraphMainThreadTest.cpp
             Tests/SignalTreeTests.cpp
             Tests/WorkContractGroupAccountingTests.cpp
+            Tests/WorkContractGroupLifetimeTests.cpp
             Tests/EntropyObjectTests.cpp
             Tests/VirtualFileSystemStreamingTests.cpp
+            Tests/VirtualFileSystemTextFidelityTests.cpp
+            Tests/VirtualFileSystemExampleParityTests.cpp
     )
 
     target_link_libraries(EntropyCoreTests 

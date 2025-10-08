@@ -208,9 +208,13 @@ FileOperationHandle LocalFileSystemBackend::readFile(const std::string& path, Re
         }
         
         if (options.length.has_value()) {
-            s.bytes.resize(options.length.value());
-            in.read(reinterpret_cast<char*>(s.bytes.data()), options.length.value());
-            s.bytes.resize(static_cast<size_t>(in.gcount()));
+            const size_t requested = options.length.value();
+            s.bytes.resize(requested);
+            in.read(reinterpret_cast<char*>(s.bytes.data()), requested);
+            const auto got = static_cast<size_t>(in.gcount());
+            s.bytes.resize(got);
+            s.complete(got < requested ? FileOpStatus::Partial : FileOpStatus::Complete);
+            return;
         } else {
             // Read entire file from offset
             in.seekg(0, std::ios::end);
@@ -274,8 +278,27 @@ FileOperationHandle LocalFileSystemBackend::writeFile(const std::string& path, s
             out.seekp(options.offset, std::ios::beg);
         }
         
+        // Perform write, honoring ensureFinalNewline for whole-file rewrites
         out.write(reinterpret_cast<const char*>(data.data()), data.size());
-        s.wrote = data.size();
+        size_t wrote = data.size();
+        
+        // If ensureFinalNewline is requested and this is a whole-file write (truncate or offset==0 and not append),
+        // add a platform-default newline if the payload does not already end with '\n'.
+        if (options.ensureFinalNewline.value_or(false) && !options.append && (options.truncate || options.offset == 0)) {
+        #if defined(_WIN32)
+            const char* eol = "\r\n";
+            const size_t eolLen = 2;
+        #else
+            const char* eol = "\n";
+            const size_t eolLen = 1;
+        #endif
+            bool endsWithLF = (!data.empty() && reinterpret_cast<const char*>(data.data())[data.size() - 1] == '\n');
+            if (!endsWithLF) {
+                out.write(eol, static_cast<std::streamsize>(eolLen));
+                wrote += eolLen;
+            }
+        }
+        s.wrote = wrote;
         
         if (!out.good()) {
             s.setError(FileError::IOError, "Write operation failed", p);
@@ -728,15 +751,11 @@ FileOperationHandle LocalFileSystemBackend::writeLine(const std::string& path, s
             }
         }
         
-        // Generate temporary filename
-        auto tempPath = std::filesystem::temp_directory_path(ec) / 
-                       (std::filesystem::path(p).filename().string() + ".tmp" + std::to_string(std::random_device{}()));
-        
-        if (ec) {
-            s.setError(FileError::IOError, "Failed to get temp directory", p, ec);
-            s.complete(FileOpStatus::Failed);
-            return;
-        }
+        // Generate temporary filename in the same directory as destination for atomic replace
+        auto targetPath = std::filesystem::path(p);
+        auto dir = targetPath.parent_path();
+        auto base = targetPath.filename().string();
+        auto tempPath = dir / (base + ".tmp" + std::to_string(std::random_device{}()));
         
         // Determine existing file content and line-ending style
         std::string data;
@@ -815,15 +834,17 @@ FileOperationHandle LocalFileSystemBackend::writeLine(const std::string& path, s
                 s.complete(FileOpStatus::Failed);
                 return;
             }
+            // Decide final newline presence: if original had no content, default to true; otherwise preserve prior policy
+            const bool finalNewline = data.empty() ? true : originalFinalNewline;
             for (size_t i = 0; i < linesVec.size(); ++i) {
                 out.write(linesVec[i].data(), static_cast<std::streamsize>(linesVec[i].size()));
-                // Add EOL if not last line, or if last line and originalFinalNewline was true
-                if (i < linesVec.size() - 1 || (i == linesVec.size() - 1 && originalFinalNewline)) {
+                // Add EOL if not last line, or if last line and policy requires final newline
+                if (i < linesVec.size() - 1 || (i == linesVec.size() - 1 && finalNewline)) {
                     out.write(eol.data(), static_cast<std::streamsize>(eol.size()));
                 }
             }
-            if (linesVec.empty() && originalFinalNewline) {
-                // Edge case: empty file but original had final newline -> preserve by writing one EOL
+            if (linesVec.empty() && finalNewline) {
+                // Edge case: empty file but policy requires final newline -> write one EOL
                 out.write(eol.data(), static_cast<std::streamsize>(eol.size()));
             }
             out.flush();
@@ -835,14 +856,41 @@ FileOperationHandle LocalFileSystemBackend::writeLine(const std::string& path, s
             }
         }
         
-        // Atomic rename
-        std::filesystem::rename(tempPath, p, ec);
-        if (ec) {
-            std::filesystem::remove(tempPath, ec);
-            s.setError(FileError::IOError, "Failed to rename temp file", p, ec);
-            s.complete(FileOpStatus::Failed);
-            return;
-        }
+        // Atomic replace/rename
+        #if defined(_WIN32)
+            // Use Windows-specific atomic rename with retry logic (to avoid sharing violations)
+            auto wsrc = tempPath.wstring();
+            auto wdst = targetPath.wstring();
+            
+            const int maxRetries = 50;
+            const int retryDelayMs = 10;
+            bool success = false;
+            for (int i = 0; i < maxRetries; ++i) {
+                if (MoveFileExW(wsrc.c_str(), wdst.c_str(), 
+                               MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0) {
+                    success = true; break;
+                }
+                DWORD error = GetLastError();
+                if (error == ERROR_SHARING_VIOLATION || error == ERROR_ACCESS_DENIED || error == ERROR_LOCK_VIOLATION) {
+                    Sleep(retryDelayMs); continue;
+                }
+                break;
+            }
+            if (!success) {
+                std::filesystem::remove(tempPath, ec);
+                s.setError(FileError::IOError, "Failed to replace destination file", p);
+                s.complete(FileOpStatus::Failed);
+                return;
+            }
+        #else
+            std::filesystem::rename(tempPath, targetPath, ec);
+            if (ec) {
+                std::filesystem::remove(tempPath, ec);
+                s.setError(FileError::IOError, "Failed to rename temp file", p, ec);
+                s.complete(FileOpStatus::Failed);
+                return;
+            }
+        #endif
         
         s.wrote = line.size();
         s.complete(FileOpStatus::Complete);
