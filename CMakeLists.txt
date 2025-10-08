@@ -253,32 +253,53 @@ if(ENTROPY_BUILD_TESTS)
     enable_testing()
     
     # Test executable
+    # Test helper sources
+    set(TEST_HELPERS
+            Tests/TestHelpers/VFSTestHelpers.cpp
+    )
+
+    # Core utility tests
+    set(CORE_TESTS
+            Tests/Core/LoggingTests.cpp
+            Tests/Core/DebugInterfaceTests.cpp
+            Tests/Core/GraphTests.cpp
+            Tests/Core/TypeSystemTests.cpp
+            Tests/Core/SignalTreeTests.cpp
+            Tests/Core/EntropyObjectTests.cpp
+    )
+
+    # Concurrency tests
+    set(CONCURRENCY_TESTS
+            Tests/Concurrency/WorkContractGroupTests.cpp
+            Tests/Concurrency/WorkContractGroupAccountingTests.cpp
+            Tests/Concurrency/WorkContractGroupLifetimeTests.cpp
+            Tests/Concurrency/WorkContractHighContentionTests.cpp
+            Tests/Concurrency/MainThreadWorkTests.cpp
+            Tests/Concurrency/WorkServiceTests.cpp
+    )
+
+    # WorkGraph tests
+    set(WORKGRAPH_TESTS
+            Tests/Concurrency/WorkGraph/WorkGraphTests.cpp
+            Tests/Concurrency/WorkGraph/WorkGraphArchitectureTests.cpp
+            Tests/Concurrency/WorkGraph/WorkGraphServiceIntegrationTests.cpp
+            Tests/Concurrency/WorkGraph/WorkGraphRegressionTests.cpp
+            Tests/Concurrency/WorkGraph/WorkGraphSpecializedTests.cpp
+    )
+
+    # VirtualFileSystem tests
+    set(VFS_TESTS
+            Tests/VirtualFileSystem/VFSTests.cpp
+            Tests/VirtualFileSystem/VFSTextFidelityTests.cpp
+            Tests/VirtualFileSystem/VFSErrorMappingTests.cpp
+    )
+
     add_executable(EntropyCoreTests
-            Tests/LoggingTests.cpp
-            Tests/DebugInterfaceTests.cpp
-            Tests/GraphTests.cpp
-            Tests/TypeSystemTests.cpp
-            Tests/WorkContractGroupTests.cpp
-            Tests/WorkContractHighContentionTest.cpp
-            Tests/MainThreadWorkTest.cpp
-            Tests/WorkGraphTests.cpp
-            Tests/WorkServiceTests.cpp
-            Tests/WorkGraphArchitectureTests.cpp
-            Tests/WorkGraphServiceIntegrationTests.cpp
-            Tests/WorkGraphMemoryTest.cpp
-            Tests/WorkGraphDebugTest.cpp
-            Tests/WorkGraphSimpleTest.cpp
-            Tests/WorkGraphVectorTest.cpp
-            Tests/WorkGraphIsolatedHangTest.cpp
-            Tests/WorkGraphMainThreadTest.cpp
-            Tests/SignalTreeTests.cpp
-            Tests/WorkContractGroupAccountingTests.cpp
-            Tests/WorkContractGroupLifetimeTests.cpp
-            Tests/EntropyObjectTests.cpp
-            Tests/VirtualFileSystemStreamingTests.cpp
-            Tests/VirtualFileSystemTextFidelityTests.cpp
-            Tests/VirtualFileSystemExampleParityTests.cpp
-            Tests/VirtualFileSystemErrorMappingTests.cpp
+            ${TEST_HELPERS}
+            ${CORE_TESTS}
+            ${CONCURRENCY_TESTS}
+            ${WORKGRAPH_TESTS}
+            ${VFS_TESTS}
     )
 
     target_link_libraries(EntropyCoreTests 

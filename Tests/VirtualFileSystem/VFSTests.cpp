@@ -5,6 +5,7 @@
 #include "VirtualFileSystem/VirtualFileSystem.h"
 #include "VirtualFileSystem/WriteBatch.h"
 #include "VirtualFileSystem/DirectoryHandle.h"
+#include "../TestHelpers/VFSTestHelpers.h"
 #include <vector>
 #include <unordered_set>
 #include <cstring>
@@ -15,29 +16,7 @@
 using namespace EntropyEngine::Core;
 using namespace EntropyEngine::Core::Concurrency;
 using namespace EntropyEngine::Core::IO;
-
-static std::filesystem::path makeTempPathEx(const std::string& base) {
-    auto dir = std::filesystem::temp_directory_path();
-    std::random_device rd;
-    for (int i = 0; i < 8; ++i) {
-        auto now = std::chrono::high_resolution_clock::now().time_since_epoch().count();
-        auto name = base + "-" + std::to_string(now) + "-" + std::to_string(rd());
-        auto p = dir / name;
-        if (!std::filesystem::exists(p)) return p;
-    }
-    return dir / (base + "-" + std::to_string(rd()));
-}
-
-static void startService(WorkService& svc, WorkContractGroup& group) {
-    svc.start();
-    svc.addWorkContractGroup(&group);
-}
-
-static std::string readAllBytes(const std::filesystem::path& p) {
-    std::ifstream in(p, std::ios::in | std::ios::binary);
-    std::ostringstream ss; ss << in.rdbuf();
-    return ss.str();
-}
+using namespace EntropyTestHelpers;
 
 TEST_CASE("VFS basic create/write/read/remove flows", "[vfs][basic]") {
     WorkService svc({});
@@ -443,4 +422,167 @@ TEST_CASE("Directory listing on non-existent path returns FileNotFound", "[vfs][
     REQUIRE(listing.errorInfo().code == FileError::FileNotFound);
 
     svc.stop();
+}
+
+
+TEST_CASE("Copy progress is monotonic and completes to total", "[vfs][copy][progress]") {
+    WorkService svc({});
+    WorkContractGroup group(256, "VfsCopyProg");
+    startService(svc, group);
+    VirtualFileSystem vfs(&group);
+
+    auto src = makeTempPathEx("vfs_copy_prog_src");
+    auto dst = makeTempPathEx("vfs_copy_prog_dst");
+    auto fh = vfs.createFileHandle(src.string());
+
+    // Create a reasonably large file to exercise chunked copy path
+    std::string content;
+    for (int i = 0; i < 2048; ++i) content += "Block line " + std::to_string(i) + "\n";
+    fh.writeAll(content).wait();
+
+    auto backend = vfs.getDefaultBackend(); REQUIRE(backend);
+    std::vector<size_t> samples;
+    CopyOptions cop; cop.overwriteExisting = true; cop.preserveAttributes = true;
+    cop.progressCallback = [&samples](size_t copied, size_t total){
+        if (!samples.empty()) REQUIRE(copied >= samples.back());
+        REQUIRE(copied <= total);
+        samples.push_back(copied);
+        return true;
+    };
+
+    auto op = backend->copyFile(src.string(), dst.string(), cop); op.wait();
+    REQUIRE(op.status() == FileOpStatus::Complete);
+    REQUIRE(std::filesystem::exists(dst));
+    REQUIRE(readAllBytes(src) == readAllBytes(dst));
+    REQUIRE_FALSE(samples.empty());
+    REQUIRE(samples.back() == (size_t)std::filesystem::file_size(src));
+
+    svc.stop();
+    std::error_code ec; (void)std::filesystem::remove(src, ec); (void)std::filesystem::remove(dst, ec);
+}
+
+TEST_CASE("Copy cancellation via progress callback cleans up partial and fails", "[vfs][copy][cancel]") {
+    WorkService svc({});
+    WorkContractGroup group(256, "VfsCopyCancel");
+    startService(svc, group);
+    VirtualFileSystem vfs(&group);
+
+    auto src = makeTempPathEx("vfs_copy_cancel_src");
+    auto dst = makeTempPathEx("vfs_copy_cancel_dst");
+    auto fh = vfs.createFileHandle(src.string());
+
+    // Large content to ensure multiple chunks
+    std::string content;
+    for (int i = 0; i < 4096; ++i) content += "Cancel line " + std::to_string(i) + "\n";
+    fh.writeAll(content).wait();
+
+    auto backend = vfs.getDefaultBackend(); REQUIRE(backend);
+    std::atomic<bool> cancelled{false};
+    CopyOptions cop; cop.overwriteExisting = true;
+    cop.progressCallback = [&cancelled](size_t copied, size_t total){
+        (void)total;
+        if (!cancelled.load(std::memory_order_relaxed) && copied > 0) {
+            cancelled.store(true, std::memory_order_relaxed);
+            return false; // cancel at first chunk
+        }
+        return true;
+    };
+
+    auto op = backend->copyFile(src.string(), dst.string(), cop); op.wait();
+    REQUIRE(op.status() == FileOpStatus::Failed);
+    REQUIRE_FALSE(std::filesystem::exists(dst));
+
+    svc.stop();
+    std::error_code ec; (void)std::filesystem::remove(src, ec); (void)std::filesystem::remove(dst, ec);
+}
+
+// ============================================================================
+// Streaming Tests (merged from VFSStreamingTests.cpp)
+// ============================================================================
+
+TEST_CASE("VFS streaming unbuffered roundtrip", "[vfs][stream]") {
+    WorkService svc({});
+    WorkContractGroup group(128, "TestGroup");
+    startService(svc, group);
+    VirtualFileSystem vfs(&group);
+
+    auto temp = makeTempPathEx("vfs_test_stream_unbuffered");
+    auto fh = vfs.createFileHandle(temp.string());
+    fh.createEmpty().wait();
+
+    auto stream = fh.openReadWriteStream();
+    REQUIRE(stream);
+
+    const char* msg = "Hello via stream\n";
+    stream->seek(0, std::ios::end);
+    auto wrote = stream->write(std::span<const std::byte>(reinterpret_cast<const std::byte*>(msg), strlen(msg)));
+    stream->flush();
+    REQUIRE(wrote.bytesTransferred == strlen(msg));
+
+    stream->seek(0, std::ios::beg);
+    std::vector<std::byte> buf(64);
+    auto read = stream->read(buf);
+    REQUIRE(read.bytesTransferred >= wrote.bytesTransferred);
+
+    svc.stop();
+    std::error_code ec; (void)std::filesystem::remove(temp, ec);
+}
+
+TEST_CASE("VFS streaming buffered roundtrip", "[vfs][stream][buffered]") {
+    WorkService svc({});
+    WorkContractGroup group(128, "TestGroup");
+    startService(svc, group);
+    VirtualFileSystem vfs(&group);
+
+    auto temp = makeTempPathEx("vfs_test_stream_buffered");
+    auto fh = vfs.createFileHandle(temp.string());
+    fh.createEmpty().wait();
+
+    auto base = fh.openReadWriteStream();
+    REQUIRE(base);
+    BufferedFileStream buffered(std::move(base), 8192);
+
+    const char* msg = "Buffered hello\n";
+    buffered.seek(0, std::ios::end);
+    auto wrote = buffered.write(std::span<const std::byte>(reinterpret_cast<const std::byte*>(msg), strlen(msg)));
+    buffered.flush();
+    REQUIRE(wrote.bytesTransferred == strlen(msg));
+
+    buffered.seek(0, std::ios::beg);
+    std::vector<std::byte> buf(64);
+    auto read = buffered.read(buf);
+    REQUIRE(read.bytesTransferred >= wrote.bytesTransferred);
+
+    svc.stop();
+    std::error_code ec; (void)std::filesystem::remove(temp, ec);
+}
+
+TEST_CASE("VFS readLine trims CRLF and writeLine atomic replace", "[vfs][line]") {
+    WorkService svc({});
+    WorkContractGroup group(128, "TestGroup");
+    startService(svc, group);
+    VirtualFileSystem vfs(&group);
+
+    auto temp = makeTempPathEx("vfs_test_lines");
+    auto fh = vfs.createFileHandle(temp.string());
+    auto w = fh.writeAll("Line1\r\nLine2\r\n");
+    w.wait();
+    REQUIRE(w.status() == FileOpStatus::Complete);
+
+    auto l1 = fh.readLine(0);
+    l1.wait();
+    REQUIRE(l1.status() == FileOpStatus::Complete);
+    REQUIRE(l1.contentsText() == std::string("Line1"));
+
+    auto wl = fh.writeLine(1, "ReplacedLine2");
+    wl.wait();
+    REQUIRE(wl.status() == FileOpStatus::Complete);
+
+    auto l2 = fh.readLine(1);
+    l2.wait();
+    REQUIRE(l2.status() == FileOpStatus::Complete);
+    REQUIRE(l2.contentsText() == std::string("ReplacedLine2"));
+
+    svc.stop();
+    std::error_code ec; (void)std::filesystem::remove(temp, ec);
 }

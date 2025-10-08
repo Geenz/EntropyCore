@@ -1274,6 +1274,8 @@ FileOperationHandle LocalFileSystemBackend::copyFile(const std::string& src, con
 
                     // Call progress callback - if it returns false, cancel
                     if (!options.progressCallback(totalCopied, fileSize)) {
+                        // Ensure streams are closed before cleanup on Windows
+                        out.flush(); out.close(); in.close();
                         s.setError(FileError::Unknown, "Copy cancelled by user", src);
                         s.complete(FileOpStatus::Failed);
                         std::filesystem::remove(dst, ec);  // Clean up partial copy
@@ -1283,6 +1285,8 @@ FileOperationHandle LocalFileSystemBackend::copyFile(const std::string& src, con
             }
 
             if (!out.good()) {
+                // Close streams before attempting cleanup
+                out.flush(); out.close(); in.close();
                 s.setError(FileError::IOError, "Write error during copy", dst);
                 s.complete(FileOpStatus::Failed);
                 std::filesystem::remove(dst, ec);
