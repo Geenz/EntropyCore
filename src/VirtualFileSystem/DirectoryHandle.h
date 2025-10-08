@@ -10,6 +10,7 @@
 #include <string>
 #include <memory>
 #include "FileOperationHandle.h"
+#include "IFileSystemBackend.h"
 
 namespace EntropyEngine::Core::IO {
 

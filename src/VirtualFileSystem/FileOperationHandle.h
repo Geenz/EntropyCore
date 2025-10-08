@@ -26,6 +26,8 @@ enum class FileError {
     InvalidPath,
     IOError,
     NetworkError,
+    Timeout,
+    Conflict,
     Unknown
 };
 

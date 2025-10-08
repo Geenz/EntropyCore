@@ -1,6 +1,7 @@
 #include "FileHandle.h"
 #include "VirtualFileSystem.h"
 #include "IFileSystemBackend.h"
+#include "LocalFileSystemBackend.h"
 #include "FileStream.h"
 #include <fstream>
 #include <filesystem>
@@ -86,387 +87,160 @@ FileHandle::FileHandle(VirtualFileSystem* vfs, std::string path)
 }
 
 FileOperationHandle FileHandle::readAll() const {
-    // Use backend if available
+    ReadOptions opts;
     if (_backend) {
-        ReadOptions opts;
         return _backend->readFile(_meta.path, opts);
     }
-    
-    // Fallback to direct implementation
-    return _vfs->submit(_meta.path, [](FileOperationHandle::OpState& s, const std::string& p){
-        std::ifstream in(p, std::ios::in | std::ios::binary);
-        if (!in) {
-            s.setError(FileError::FileNotFound, "File not found or cannot be opened", p);
-            s.complete(FileOpStatus::Failed);
-            return;
-        }
-        
-        // Get file size
-        in.seekg(0, std::ios::end);
-        auto sizePos = in.tellg();
-        if (sizePos < 0) {
-            s.setError(FileError::IOError, "Failed to get file size", p);
-            s.complete(FileOpStatus::Failed);
-            return;
-        }
-        auto size = static_cast<std::streamsize>(sizePos);
-        in.seekg(0, std::ios::beg);
-        
-        // Read directly into bytes
-        s.bytes.resize(static_cast<size_t>(size));
-        if (size > 0) {
-            in.read(reinterpret_cast<char*>(s.bytes.data()), size);
-        }
-        
-        if (!in.good() && !in.eof()) {
-            s.setError(FileError::IOError, "Failed to read file", p);
-            s.complete(FileOpStatus::Failed);
-            return;
-        }
-        
-        s.complete(FileOpStatus::Complete);
-    });
+    // Should not happen: VFS must attach a backend for FileHandle
+    return FileOperationHandle::immediate(FileOpStatus::Failed);
 }
 
 FileOperationHandle FileHandle::readRange(uint64_t offset, size_t length) const {
-    // Use backend if available
+    ReadOptions opts;
+    opts.offset = offset;
+    opts.length = length;
     if (_backend) {
-        ReadOptions opts;
-        opts.offset = offset;
-        opts.length = length;
         return _backend->readFile(_meta.path, opts);
     }
-    
-    // Fallback to direct implementation
-    return _vfs->submit(_meta.path, [offset, length](FileOperationHandle::OpState& s, const std::string& p){
-        std::ifstream in(p, std::ios::in | std::ios::binary);
-        if (!in) {
-            s.setError(FileError::FileNotFound, "File not found or cannot be opened", p);
-            s.complete(FileOpStatus::Failed);
-            return;
-        }
-        in.seekg(0, std::ios::end);
-        auto endPos = in.tellg();
-        if (endPos < 0) {
-            s.setError(FileError::IOError, "Failed to get file size", p);
-            s.complete(FileOpStatus::Failed);
-            return;
-        }
-        auto end = static_cast<uint64_t>(static_cast<std::make_unsigned_t<std::streamoff>>(endPos));
-        if (offset > end) {
-            s.bytes.clear();
-            s.complete(FileOpStatus::Partial);
-            return;
-        }
-        in.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
-        size_t toRead = static_cast<size_t>(std::min<uint64_t>(length, end - offset));
-        s.bytes.resize(toRead);
-        if (toRead > 0) {
-            in.read(reinterpret_cast<char*>(s.bytes.data()), static_cast<std::streamsize>(toRead));
-        }
-        size_t got = static_cast<size_t>(in.gcount());
-        s.bytes.resize(got);
-        s.complete(got < length ? FileOpStatus::Partial : FileOpStatus::Complete);
-    });
+    return FileOperationHandle::immediate(FileOpStatus::Failed);
 }
 
 FileOperationHandle FileHandle::readLine(size_t lineNumber) const {
-    // Use backend if available
     if (_backend) {
         return _backend->readLine(_meta.path, lineNumber);
     }
-    
-    // Fallback to direct implementation
-    return _vfs->submit(_meta.path, [lineNumber](FileOperationHandle::OpState& s, const std::string& p){
-        std::ifstream in(p, std::ios::in);
-        if (!in) {
-            s.setError(FileError::FileNotFound, "File not found or cannot be opened", p);
-            s.complete(FileOpStatus::Failed);
-            return;
-        }
-        std::string line;
-        size_t idx = 0;
-        while (idx <= lineNumber && std::getline(in, line)) {
-            if (idx == lineNumber) break;
-            ++idx;
-        }
-        if (idx != lineNumber) {
-            s.complete(FileOpStatus::Partial);
-            return;
-        }
-        // Strip trailing CR for Windows CRLF if present
-        if (!line.empty() && line.back() == '\r') {
-            line.pop_back();
-        }
-        s.bytes.resize(line.size());
-        std::memcpy(s.bytes.data(), line.data(), line.size());
-        s.complete(FileOpStatus::Complete);
-    });
+    return FileOperationHandle::immediate(FileOpStatus::Failed);
 }
 
 FileOperationHandle FileHandle::readLineBinary(size_t lineNumber, std::byte delimiter) const {
-    return _vfs->submit(_meta.path, [lineNumber, delimiter](FileOperationHandle::OpState& s, const std::string& p){
-        std::ifstream in(p, std::ios::in | std::ios::binary);
-        if (!in) {
-            s.setError(FileError::FileNotFound, "File not found or cannot be opened", p);
+    if (!_backend) {
+        return FileOperationHandle::immediate(FileOpStatus::Failed);
+    }
+    auto backend = _backend;
+    return _vfs->submit(_meta.path, [backend, lineNumber, delimiter](FileOperationHandle::OpState& s, const std::string& p){
+        ReadOptions ro{}; ro.binary = true; // read all bytes
+        auto rh = backend->readFile(p, ro);
+        rh.wait();
+        if (rh.status() != FileOpStatus::Complete && rh.status() != FileOpStatus::Partial) {
+            // Surface backend error if any
+            const auto& err = rh.errorInfo();
+            s.setError(err.code == FileError::None ? FileError::IOError : err.code,
+                       err.message.empty() ? std::string("Failed to read for readLineBinary") : err.message,
+                       err.path);
             s.complete(FileOpStatus::Failed);
             return;
         }
+        auto buf = rh.contentsBytes();
         size_t idx = 0;
         std::vector<std::byte> line;
-        int c;
-        while (idx <= lineNumber && (c = in.get()) != EOF) {
-            if (static_cast<std::byte>(c) == delimiter) {
+        for (size_t i = 0; i < buf.size(); ++i) {
+            if (buf[i] == delimiter) {
                 if (idx == lineNumber) break; else { line.clear(); ++idx; continue; }
             }
-            line.push_back(static_cast<std::byte>(c));
+            line.push_back(buf[i]);
         }
-        if (idx != lineNumber) {
-            s.complete(FileOpStatus::Partial);
-            return;
-        }
+        if (idx != lineNumber) { s.complete(FileOpStatus::Partial); return; }
         s.bytes = std::move(line);
         s.complete(FileOpStatus::Complete);
     });
 }
 
 FileOperationHandle FileHandle::writeAll(std::span<const std::byte> bytes) const {
-    // Use backend if available
-    if (_backend) {
-        WriteOptions opts;
-        opts.truncate = true;
-        return _backend->writeFile(_meta.path, bytes, opts);
+    if (_backend && _vfs) {
+        WriteOptions opts; opts.truncate = true;
+        auto data = std::vector<std::byte>(bytes.begin(), bytes.end());
+        return _vfs->submitSerialized(_meta.path, [opts, data=std::move(data)](FileOperationHandle::OpState& s, std::shared_ptr<IFileSystemBackend> backend, const std::string& p) mutable {
+            auto* localBackend = dynamic_cast<LocalFileSystemBackend*>(backend.get());
+            if (localBackend) {
+                localBackend->doWriteFile(s, p, std::span<const std::byte>(data.data(), data.size()), opts);
+            } else {
+                s.setError(FileError::Unknown, "Backend does not support synchronous operations", p);
+                s.complete(FileOpStatus::Failed);
+            }
+        });
     }
-    
-    // Fallback to direct implementation
-    auto lock = _vfs->lockForPath(_meta.path);
-    return _vfs->submit(_meta.path, [lock, copy=std::vector<std::byte>(bytes.begin(), bytes.end())](FileOperationHandle::OpState& s, const std::string& p) mutable {
-        std::unique_lock<std::mutex> pathLock; if (lock) pathLock = std::unique_lock<std::mutex>(*lock);
-        std::ofstream out(p, std::ios::out | std::ios::binary | std::ios::trunc);
-        if (!out) { 
-            s.setError(FileError::AccessDenied, "Cannot create or write to file", p);
-            s.complete(FileOpStatus::Failed); 
-            return; 
-        }
-        if (!copy.empty()) out.write(reinterpret_cast<const char*>(copy.data()), static_cast<std::streamsize>(copy.size()));
-        out.flush();
-        if (!out.good()) {
-            s.setError(FileError::IOError, "Failed to flush file (disk full?)", p);
-            s.complete(FileOpStatus::Failed);
-            return;
-        }
-        s.wrote = copy.size();
-        s.complete(FileOpStatus::Complete);
-    });
+    return FileOperationHandle::immediate(FileOpStatus::Failed);
 }
 
 FileOperationHandle FileHandle::writeRange(uint64_t offset, std::span<const std::byte> bytes) const {
-    // Use backend if available
-    if (_backend) {
-        WriteOptions opts;
-        opts.offset = offset;
-        opts.truncate = false;
-        return _backend->writeFile(_meta.path, bytes, opts);
+    WriteOptions opts; opts.offset = offset; opts.truncate = false;
+    if (_backend && _vfs) {
+        auto data = std::vector<std::byte>(bytes.begin(), bytes.end());
+        return _vfs->submitSerialized(_meta.path, [opts, data=std::move(data)](FileOperationHandle::OpState& s, std::shared_ptr<IFileSystemBackend> backend, const std::string& p) mutable {
+            auto* localBackend = dynamic_cast<LocalFileSystemBackend*>(backend.get());
+            if (localBackend) {
+                localBackend->doWriteFile(s, p, std::span<const std::byte>(data.data(), data.size()), opts);
+            } else {
+                s.setError(FileError::Unknown, "Backend does not support synchronous operations", p);
+                s.complete(FileOpStatus::Failed);
+            }
+        });
     }
-    
-    // Fallback to direct implementation
-    auto lock = _vfs->lockForPath(_meta.path);
-    return _vfs->submit(_meta.path, [lock, offset, copy=std::vector<std::byte>(bytes.begin(), bytes.end())](FileOperationHandle::OpState& s, const std::string& p) mutable {
-        std::unique_lock<std::mutex> pathLock; if (lock) pathLock = std::unique_lock<std::mutex>(*lock);
-        std::fstream io(p, std::ios::in | std::ios::out | std::ios::binary);
-        if (!io) { // try create
-            io = std::fstream(p, std::ios::out | std::ios::binary);
-            io.close();
-            io.open(p, std::ios::in | std::ios::out | std::ios::binary);
-        }
-        if (!io) { 
-            s.setError(FileError::IOError, "Cannot open file for writing", p);
-            s.complete(FileOpStatus::Failed); 
-            return; 
-        }
-        io.seekp(static_cast<std::streamoff>(offset), std::ios::beg);
-        if (!copy.empty()) io.write(reinterpret_cast<const char*>(copy.data()), static_cast<std::streamsize>(copy.size()));
-        io.flush();
-        if (!io.good()) {
-            s.setError(FileError::IOError, "Failed to flush file (disk full?)", p);
-            s.complete(FileOpStatus::Failed);
-            return;
-        }
-        s.wrote = copy.size();
-        s.complete(FileOpStatus::Complete);
-    });
+    return FileOperationHandle::immediate(FileOpStatus::Failed);
 }
 
 FileOperationHandle FileHandle::writeLine(size_t lineNumber, std::string_view line) const {
-    // Use backend if available
-    if (_backend) {
-        return _backend->writeLine(_meta.path, lineNumber, line);
+    if (_backend && _vfs) {
+        auto lineCopy = std::string(line);
+        return _vfs->submitSerialized(_meta.path, [lineNumber, lineCopy=std::move(lineCopy)](FileOperationHandle::OpState& s, std::shared_ptr<IFileSystemBackend> backend, const std::string& p) mutable {
+            auto* localBackend = dynamic_cast<LocalFileSystemBackend*>(backend.get());
+            if (localBackend) {
+                localBackend->doWriteLine(s, p, lineNumber, lineCopy);
+            } else {
+                s.setError(FileError::Unknown, "Backend does not support synchronous operations", p);
+                s.complete(FileOpStatus::Failed);
+            }
+        });
     }
-    
-    // Fallback to direct implementation
-    auto lock = _vfs->lockForPath(_meta.path);
-    return _vfs->submit(_meta.path, [lock, lineNumber, line = std::string(line)](FileOperationHandle::OpState& s, const std::string& p) mutable {
-        std::unique_lock<std::mutex> pathLock; if (lock) pathLock = std::unique_lock<std::mutex>(*lock);
-        
-        std::error_code ec;
-        
-        // Generate temporary filename in the same directory as destination
-        auto targetPath = std::filesystem::path(p);
-        auto dir = targetPath.parent_path();
-        auto base = targetPath.filename().string();
-        auto tempPath = dir / (base + ".tmp" + std::to_string(std::random_device{}()));
-        
-        // Read from original and write to temp file
-        {
-            std::ifstream in(p, std::ios::in);
-            std::ofstream out(tempPath, std::ios::out | std::ios::trunc);
-            
-            if (!out) {
-                s.setError(FileError::IOError, "Failed to create temp file", tempPath.string());
-                s.complete(FileOpStatus::Failed);
-                return;
-            }
-            
-            std::string currentLine;
-            size_t currentLineNum = 0;
-            bool fileExists = in.is_open();
-            
-            // Process existing lines or create new file
-            if (fileExists) {
-                while (std::getline(in, currentLine)) {
-                    if (currentLineNum == lineNumber) {
-                        out << line;
-                    } else {
-                        out << currentLine;
-                    }
-                    out << "\n";  // Always add newline after each line
-                    currentLineNum++;
-                }
-            }
-            
-            // Add empty lines if needed
-            while (currentLineNum < lineNumber) {
-                out << "\n";
-                currentLineNum++;
-            }
-            
-            // Add the target line if we haven't yet
-            if (currentLineNum == lineNumber) {
-                out << line << "\n";  // Add newline after the new line too
-                currentLineNum++;
-            }
-            
-            out.flush();
-            if (!out.good()) {
-                std::filesystem::remove(tempPath, ec);
-                s.setError(FileError::IOError, "Failed to write temp file", tempPath.string());
-                s.complete(FileOpStatus::Failed);
-                return;
-            }
-        }
-        
-        // Atomic replace/rename
-        ec.clear();
-    #if defined(_WIN32)
-        if (!win_replace_file(tempPath, targetPath)) {
-            std::filesystem::remove(tempPath, ec);
-            s.setError(FileError::IOError, "Failed to replace destination file", p);
-            s.complete(FileOpStatus::Failed);
-            return;
-        }
-    #else
-        std::filesystem::rename(tempPath, targetPath, ec);
-        if (ec) {
-            std::filesystem::remove(tempPath, ec);  // Clean up temp file
-            s.setError(FileError::IOError, "Failed to rename temp file", p, ec);
-            s.complete(FileOpStatus::Failed);
-            return;
-        }
-    #endif
-        
-        s.wrote = line.size();
-        s.complete(FileOpStatus::Complete);
-    });
+    return FileOperationHandle::immediate(FileOpStatus::Failed);
 }
 
 FileOperationHandle FileHandle::writeAll(std::string_view text) const {
-    // Use backend if available
-    if (_backend) {
-        WriteOptions opts;
-        opts.truncate = true;
-        return _backend->writeFile(_meta.path, 
-            std::span<const std::byte>(reinterpret_cast<const std::byte*>(text.data()), text.size()), opts);
+    if (_backend && _vfs) {
+        WriteOptions opts; opts.truncate = true;
+        auto textCopy = std::string(text);
+        return _vfs->submitSerialized(_meta.path, [opts, textCopy=std::move(textCopy)](FileOperationHandle::OpState& s, std::shared_ptr<IFileSystemBackend> backend, const std::string& p) mutable {
+            auto* localBackend = dynamic_cast<LocalFileSystemBackend*>(backend.get());
+            if (localBackend) {
+                auto spanBytes = std::span<const std::byte>(reinterpret_cast<const std::byte*>(textCopy.data()), textCopy.size());
+                localBackend->doWriteFile(s, p, spanBytes, opts);
+            } else {
+                s.setError(FileError::Unknown, "Backend does not support synchronous operations", p);
+                s.complete(FileOpStatus::Failed);
+            }
+        });
     }
-    
-    // Fallback to direct implementation
-    auto lock = _vfs->lockForPath(_meta.path);
-    return _vfs->submit(_meta.path, [lock, txt = std::string(text)](FileOperationHandle::OpState& s, const std::string& p) mutable {
-        std::unique_lock<std::mutex> pathLock; if (lock) pathLock = std::unique_lock<std::mutex>(*lock);
-        std::ofstream out(p, std::ios::out | std::ios::binary | std::ios::trunc);
-        if (!out) { 
-            s.setError(FileError::AccessDenied, "Cannot create or write to file", p);
-            s.complete(FileOpStatus::Failed); 
-            return; 
-        }
-        if (!txt.empty()) out.write(txt.data(), static_cast<std::streamsize>(txt.size()));
-        out.flush();
-        if (!out.good()) {
-            s.setError(FileError::IOError, "Failed to flush file (disk full?)", p);
-            s.complete(FileOpStatus::Failed);
-            return;
-        }
-        s.wrote = txt.size();
-        s.complete(FileOpStatus::Complete);
-    });
+    return FileOperationHandle::immediate(FileOpStatus::Failed);
 }
 
 FileOperationHandle FileHandle::createEmpty() const {
-    // Use backend if available
-    if (_backend) {
-        return _backend->createFile(_meta.path);
+    if (_backend && _vfs) {
+        return _vfs->submitSerialized(_meta.path, [](FileOperationHandle::OpState& s, std::shared_ptr<IFileSystemBackend> backend, const std::string& p) mutable {
+            auto* localBackend = dynamic_cast<LocalFileSystemBackend*>(backend.get());
+            if (localBackend) {
+                localBackend->doCreateFile(s, p);
+            } else {
+                s.setError(FileError::Unknown, "Backend does not support synchronous operations", p);
+                s.complete(FileOpStatus::Failed);
+            }
+        });
     }
-    
-    // Fallback to direct implementation
-    auto lock = _vfs->lockForPath(_meta.path);
-    return _vfs->submit(_meta.path, [lock](FileOperationHandle::OpState& s, const std::string& p) mutable {
-        std::unique_lock<std::mutex> pathLock; if (lock) pathLock = std::unique_lock<std::mutex>(*lock);
-        std::ofstream out(p, std::ios::out | std::ios::binary | std::ios::trunc);
-        if (!out) { 
-            s.setError(FileError::AccessDenied, "Cannot create file", p);
-            s.complete(FileOpStatus::Failed); 
-            return; 
-        }
-        out.flush();
-        if (!out.good()) {
-            s.setError(FileError::IOError, "Failed to create/truncate file", p);
-            s.complete(FileOpStatus::Failed);
-            return;
-        }
-        s.wrote = 0;
-        s.complete(FileOpStatus::Complete);
-    });
+    return FileOperationHandle::immediate(FileOpStatus::Failed);
 }
 
 FileOperationHandle FileHandle::remove() const {
-    // Use backend if available
-    if (_backend) {
-        return _backend->deleteFile(_meta.path);
+    if (_backend && _vfs) {
+        return _vfs->submitSerialized(_meta.path, [](FileOperationHandle::OpState& s, std::shared_ptr<IFileSystemBackend> backend, const std::string& p) mutable {
+            auto* localBackend = dynamic_cast<LocalFileSystemBackend*>(backend.get());
+            if (localBackend) {
+                localBackend->doDeleteFile(s, p);
+            } else {
+                s.setError(FileError::Unknown, "Backend does not support synchronous operations", p);
+                s.complete(FileOpStatus::Failed);
+            }
+        });
     }
-    
-    // Fallback to direct implementation
-    auto lock = _vfs->lockForPath(_meta.path);
-    return _vfs->submit(_meta.path, [lock](FileOperationHandle::OpState& s, const std::string& p) mutable {
-        std::unique_lock<std::mutex> pathLock; if (lock) pathLock = std::unique_lock<std::mutex>(*lock);
-        std::error_code ec;
-        (void)std::filesystem::remove(p, ec);
-        if (ec) { 
-            s.setError(FileError::IOError, "Failed to remove file", p, ec);
-            s.complete(FileOpStatus::Failed); 
-            return; 
-        }
-        s.wrote = 0;
-        s.complete(FileOpStatus::Complete);
-    });
+    return FileOperationHandle::immediate(FileOpStatus::Failed);
 }
 
 // Stream factory methods - FileHandle acts as factory

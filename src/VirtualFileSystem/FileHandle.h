@@ -52,15 +52,19 @@ public:
         std::optional<std::string> owner; // platform-specific; may be empty
     };
 
+private:
     /**
      * @brief Constructs a handle bound to a VirtualFileSystem and path
      * 
      * Use VirtualFileSystem::createFileHandle() to obtain instances. The handle is copyable and
      * cheap to pass by value. Operations are asynchronous; call wait() on returned handles.
+     * Only VirtualFileSystem may construct FileHandle to ensure a backend is attached.
      * @param vfs VFS instance that will execute operations
      * @param path Target file path (routed to a backend)
      */
     explicit FileHandle(VirtualFileSystem* vfs, std::string path);
+
+public:
 
     // Reads
     /**

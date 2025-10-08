@@ -64,6 +64,72 @@ FileOperationHandle VirtualFileSystem::submit(std::string path, std::function<vo
     return FileOperationHandle{std::move(st)};
 }
 
+FileOperationHandle VirtualFileSystem::submitSerialized(std::string path, std::function<void(FileOperationHandle::OpState&, std::shared_ptr<IFileSystemBackend>, const std::string&)> op) const {
+    auto backend = findBackend(path);
+    auto vfsLock = lockForPath(path);
+    auto advTimeout = _cfg.advisoryAcquireTimeout;
+    auto policy = _cfg.advisoryFallback;
+
+    return submit(std::move(path), [this, backend, vfsLock, advTimeout, policy, op=std::move(op)](FileOperationHandle::OpState& s, const std::string& p) mutable {
+        // Acquire backend-specific scope first
+        std::unique_ptr<void, void(*)(void*)> scopeToken(nullptr, [](void*){});
+        IFileSystemBackend::AcquireWriteScopeResult scopeRes;
+        if (backend) {
+            IFileSystemBackend::AcquireScopeOptions opts;
+            opts.nonBlocking = false;
+            if (policy == Config::AdvisoryFallbackPolicy::FallbackWithTimeout || policy == Config::AdvisoryFallbackPolicy::None) {
+                opts.timeout = advTimeout;
+            }
+            scopeRes = backend->acquireWriteScope(p, opts);
+            if (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::Acquired) {
+                scopeToken = std::move(scopeRes.token);
+            }
+        }
+        std::unique_lock<std::timed_mutex> pathLock;
+        if (!scopeToken && vfsLock) {
+            bool needFallback = (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::NotSupported) ||
+                                (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::Acquired && !scopeToken) ||
+                                (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::Busy) ||
+                                (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::TimedOut);
+            if (needFallback) {
+                if ((scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::Busy) ||
+                    (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::TimedOut)) {
+                    if (policy == Config::AdvisoryFallbackPolicy::None) {
+                        FileError code;
+                        if (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::TimedOut) code = FileError::Timeout;
+                        else if (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::Busy) code = FileError::Conflict;
+                        else code = FileError::IOError;
+                        s.setError(code, scopeRes.message.empty() ? std::string("Backend write scope unavailable") : scopeRes.message, p, scopeRes.errorCode);
+                        s.complete(FileOpStatus::Failed);
+                        return;
+                    }
+                }
+                if (policy == Config::AdvisoryFallbackPolicy::FallbackWithTimeout) {
+                    if (!vfsLock->try_lock_for(advTimeout)) {
+                        auto key = backend ? backend->normalizeKey(p) : this->normalizePath(p);
+                        auto ms = advTimeout.count();
+                        s.setError(FileError::Timeout, std::string("Advisory lock acquisition timed out after ") + std::to_string(ms) + " ms (key=" + key + ")", p);
+                        s.complete(FileOpStatus::Failed);
+                        return;
+                    }
+                    pathLock = std::unique_lock<std::timed_mutex>(*vfsLock, std::adopt_lock);
+                } else { // FallbackThenWait
+                    vfsLock->lock();
+                    pathLock = std::unique_lock<std::timed_mutex>(*vfsLock, std::adopt_lock);
+                }
+            }
+        }
+
+        // Execute backend operation inline (caller must not call async backend methods)
+        if (!backend) {
+            s.setError(FileError::Unknown, "No backend available for path", p);
+            s.complete(FileOpStatus::Failed);
+            return;
+        }
+        op(s, backend, p);
+    });
+}
+
 // Factory
 FileHandle VirtualFileSystem::createFileHandle(std::string path) {
     // Find the appropriate backend for this path
@@ -89,8 +155,20 @@ FileHandle VirtualFileSystem::createFileHandle(std::string path) {
 }
 
 DirectoryHandle VirtualFileSystem::createDirectoryHandle(std::string path) {
-    // Create directory handle - backend will be determined inside DirectoryHandle constructor
+    // Ensure a backend is available (create default local if necessary)
+    auto backend = findBackend(path);
+    if (!backend) {
+        backend = getDefaultBackend();
+        if (!backend) {
+            auto localBackend = std::make_shared<LocalFileSystemBackend>();
+            localBackend->setVirtualFileSystem(this);
+            setDefaultBackend(localBackend);
+            backend = localBackend;
+        }
+    }
     DirectoryHandle handle(this, std::move(path));
+    handle._backend = backend;
+    handle._normKey = backend ? backend->normalizeKey(handle._meta.path) : normalizePath(handle._meta.path);
     return handle;
 }
 
@@ -157,7 +235,7 @@ std::string VirtualFileSystem::normalizePath(const std::string& path) const {
 }
 
 // Lock management for write serialization
-std::shared_ptr<std::mutex> VirtualFileSystem::lockForPath(const std::string& path) const {
+std::shared_ptr<std::timed_mutex> VirtualFileSystem::lockForPath(const std::string& path) const {
     if (!_cfg.serializeWritesPerPath) return {};
     
     std::lock_guard lk(_mapMutex);
@@ -186,7 +264,7 @@ std::shared_ptr<std::mutex> VirtualFileSystem::lockForPath(const std::string& pa
     }
     
     // Create new lock entry
-    auto m = std::make_shared<std::mutex>();
+    auto m = std::make_shared<std::timed_mutex>();
     _lruList.push_front(key);
     LockEntry entry{m, now, _lruList.begin()};
     _writeLocks.emplace(key, std::move(entry));

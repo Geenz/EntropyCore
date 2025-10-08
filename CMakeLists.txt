@@ -299,6 +299,14 @@ if(ENTROPY_BUILD_TESTS)
         include(Catch)
         catch_discover_tests(EntropyCoreTests)
     endif()
+
+    # Convenience target: build tests and run them in one step. This prevents running stale binaries
+    # because the test execution only happens if EntropyCoreTests builds successfully.
+    add_custom_target(RunAllTests
+        COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -C $<CONFIG>
+        DEPENDS EntropyCoreTests
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    )
 endif()
 
 # Installation

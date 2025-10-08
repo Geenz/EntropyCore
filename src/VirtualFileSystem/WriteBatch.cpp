@@ -173,11 +173,66 @@ FileOperationHandle WriteBatch::commit(const WriteOptions& opts) {
         return FileOperationHandle::immediate(FileOpStatus::Complete);
     }
     
-    auto lock = _vfs->lockForPath(_path);
+    auto backend = _vfs->findBackend(_path);
+    auto vfsLock = _vfs->lockForPath(_path);
+    auto advTimeout = _vfs ? _vfs->_cfg.advisoryAcquireTimeout : std::chrono::milliseconds(5000);
+    auto fallbackPolicy = _vfs ? _vfs->_cfg.advisoryFallback : VirtualFileSystem::Config::AdvisoryFallbackPolicy::FallbackWithTimeout;
     
-    return _vfs->submit(_path, [this, lock, ops = _operations, opts](FileOperationHandle::OpState& s, const std::string& p) mutable {
-        std::unique_lock<std::mutex> pathLock;
-        if (lock) pathLock = std::unique_lock<std::mutex>(*lock);
+    return _vfs->submit(_path, [this, backend, vfsLock, advTimeout, fallbackPolicy, ops = _operations, opts](FileOperationHandle::OpState& s, const std::string& p) mutable {
+        // Prefer backend-provided write scope; fall back to VFS advisory lock with policy/timeout
+        std::unique_ptr<void, void(*)(void*)> scopeToken(nullptr, [](void*){});
+        IFileSystemBackend::AcquireWriteScopeResult scopeRes;
+        if (backend) {
+            IFileSystemBackend::AcquireScopeOptions scopeOpts;
+            scopeOpts.nonBlocking = false;
+            auto pol = _vfs ? _vfs->_cfg.advisoryFallback : VirtualFileSystem::Config::AdvisoryFallbackPolicy::FallbackThenWait;
+            if (pol == VirtualFileSystem::Config::AdvisoryFallbackPolicy::FallbackWithTimeout || pol == VirtualFileSystem::Config::AdvisoryFallbackPolicy::None) {
+                scopeOpts.timeout = _vfs ? std::optional<std::chrono::milliseconds>(_vfs->_cfg.advisoryAcquireTimeout) : std::nullopt;
+            }
+            scopeRes = backend->acquireWriteScope(p, scopeOpts);
+            if (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::Acquired) {
+                scopeToken = std::move(scopeRes.token);
+            }
+        }
+        std::unique_lock<std::timed_mutex> pathLock;
+        auto fallbackPolicy = _vfs ? _vfs->_cfg.advisoryFallback : VirtualFileSystem::Config::AdvisoryFallbackPolicy::FallbackWithTimeout;
+        if (!scopeToken && vfsLock) {
+            bool needFallback = (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::NotSupported) ||
+                                (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::Acquired && !scopeToken) ||
+                                (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::Busy) ||
+                                (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::TimedOut);
+            if (needFallback) {
+                if ((scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::Busy) ||
+                    (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::TimedOut)) {
+                    if (fallbackPolicy == VirtualFileSystem::Config::AdvisoryFallbackPolicy::None) {
+                        FileError code;
+                        if (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::TimedOut) code = FileError::Timeout;
+                        else if (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::Busy) code = FileError::Conflict;
+                        else code = FileError::IOError;
+                        s.setError(code, scopeRes.message.empty() ? std::string("Backend write scope unavailable") : scopeRes.message, p, scopeRes.errorCode);
+                        s.complete(FileOpStatus::Failed);
+                        return;
+                    }
+                }
+                if (fallbackPolicy == VirtualFileSystem::Config::AdvisoryFallbackPolicy::FallbackWithTimeout) {
+                    if (!vfsLock->try_lock_for(_vfs->_cfg.advisoryAcquireTimeout)) {
+                        auto key = backend ? backend->normalizeKey(p) : _vfs->normalizePath(p);
+                        auto ms = _vfs->_cfg.advisoryAcquireTimeout.count();
+                        s.setError(FileError::Timeout, std::string("Advisory lock acquisition timed out after ") + std::to_string(ms) + " ms (key=" + key + ")", p);
+                        s.complete(FileOpStatus::Failed);
+                        return;
+                    }
+                    pathLock = std::unique_lock<std::timed_mutex>(*vfsLock, std::adopt_lock);
+                } else { // FallbackThenWait
+                    vfsLock->lock();
+                    pathLock = std::unique_lock<std::timed_mutex>(*vfsLock, std::adopt_lock);
+                }
+            }
+        } else if (!scopeToken && !vfsLock) {
+            // No serialization available; proceed best-effort
+        } else {
+            // scopeToken acquired; no advisory lock
+        }
         
         std::error_code ec;
         

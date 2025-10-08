@@ -37,10 +37,23 @@ class DirectoryHandle; // fwd
 class VirtualFileSystem {
 public:
     struct Config { 
-        bool serializeWritesPerPath = true;
-        size_t maxWriteLocksCached = 1024;  // Maximum number of write locks to cache
-        std::chrono::minutes writeLockTimeout{5};  // Timeout for unused write locks
-        bool defaultCreateParentDirs = false;       // Default behavior for creating parent directories
+        bool serializeWritesPerPath;
+        size_t maxWriteLocksCached;  // Maximum number of write locks to cache
+        std::chrono::minutes writeLockTimeout;  // Timeout for unused write locks
+        bool defaultCreateParentDirs;       // Default behavior for creating parent directories
+
+        // Advisory locking policy
+        std::chrono::milliseconds advisoryAcquireTimeout; // 5s default
+        enum class AdvisoryFallbackPolicy { None, FallbackThenWait, FallbackWithTimeout };
+        AdvisoryFallbackPolicy advisoryFallback;
+
+        Config()
+            : serializeWritesPerPath(true)
+            , maxWriteLocksCached(1024)
+            , writeLockTimeout(std::chrono::minutes(5))
+            , defaultCreateParentDirs(false)
+            , advisoryAcquireTimeout(std::chrono::milliseconds(5000))
+            , advisoryFallback(AdvisoryFallbackPolicy::FallbackThenWait) {}
     };
 
     explicit VirtualFileSystem(EntropyEngine::Core::Concurrency::WorkContractGroup* group, Config cfg = {});
@@ -150,7 +163,7 @@ private:
 
     // LRU cache for write serialization per path
     struct LockEntry {
-        std::shared_ptr<std::mutex> mutex;
+        std::shared_ptr<std::timed_mutex> mutex;
         std::chrono::steady_clock::time_point lastAccess;
         std::list<std::string>::iterator lruIt;
     };
@@ -165,10 +178,14 @@ private:
     std::string normalizePath(const std::string& path) const;
     
     // Lock management
-    std::shared_ptr<std::mutex> lockForPath(const std::string& path) const;
+    std::shared_ptr<std::timed_mutex> lockForPath(const std::string& path) const;
     void evictOldLocks(std::chrono::steady_clock::time_point now) const;
 
     FileOperationHandle submit(std::string path, std::function<void(FileOperationHandle::OpState&, const std::string&)> body) const;
+    
+    // Centralized write-serialization submit used by FileHandle write paths
+    // The operation lambda must perform work INLINE and call s.complete(). It must NOT call async backend methods.
+    FileOperationHandle submitSerialized(std::string path, std::function<void(FileOperationHandle::OpState&, std::shared_ptr<IFileSystemBackend>, const std::string&)> op) const;
     
     // Backend storage (reference-counted for thread-safe lifetime management)
     std::shared_ptr<IFileSystemBackend> _defaultBackend;

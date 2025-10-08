@@ -43,18 +43,19 @@ public:
 
     // Backend-aware normalization for identity/locking
     std::string normalizeKey(const std::string& path) const override;
-    
+
+    // Synchronous operations for use by VFS submitSerialized (these execute inline, no async work)
+    void doWriteFile(FileOperationHandle::OpState& s, const std::string& path, std::span<const std::byte> data, WriteOptions options);
+    void doDeleteFile(FileOperationHandle::OpState& s, const std::string& path);
+    void doCreateFile(FileOperationHandle::OpState& s, const std::string& path);
+    void doWriteLine(FileOperationHandle::OpState& s, const std::string& path, size_t lineNumber, std::string_view line);
+
 private:
-    // Helper to get a write lock for a path if needed
-    std::shared_ptr<std::mutex> getWriteLock(const std::string& path);
-    
     // Submit work to the VFS work group
-    FileOperationHandle submitWork(const std::string& path, 
+    FileOperationHandle submitWork(const std::string& path,
                                   std::function<void(FileOperationHandle::OpState&, const std::string&)> work);
-                                  
-    // Write lock management (similar to what VFS had)
-    mutable std::mutex _lockMapMutex;
-    mutable std::unordered_map<std::string, std::shared_ptr<std::mutex>> _writeLocks;
+
+    // No internal write lock map; serialization handled by VFS policy
 };
 
 } // namespace EntropyEngine::Core::IO

@@ -177,21 +177,232 @@ FileOperationHandle LocalFileSystemBackend::submitWork(const std::string& path,
     return _vfs->submit(path, work);
 }
 
-std::shared_ptr<std::mutex> LocalFileSystemBackend::getWriteLock(const std::string& path) {
-    // Prefer VFS advisory lock cache to centralize serialization and respect backend-aware normalization.
-    if (_vfs) {
-        return _vfs->lockForPath(path);
+// Synchronous operations for FileHandle via submitSerialized
+void LocalFileSystemBackend::doWriteFile(FileOperationHandle::OpState& s, const std::string& p, std::span<const std::byte> data, WriteOptions options) {
+    std::error_code ec;
+    const bool createParents = options.createParentDirs.value_or(_vfs ? _vfs->_cfg.defaultCreateParentDirs : false);
+    if (createParents) {
+        const auto parent = std::filesystem::path(p).parent_path();
+        if (!parent.empty()) {
+            std::filesystem::create_directories(parent, ec);
+            if (ec) {
+                s.setError(FileError::IOError, "Failed to create parent directories", p, ec);
+                s.complete(FileOpStatus::Failed);
+                return;
+            }
+        }
     }
-    // Fallback: local map if no VFS is set (should be rare/testing only)
-    std::lock_guard<std::mutex> lock(_lockMapMutex);
-    auto key = path;
-    auto it = _writeLocks.find(key);
-    if (it != _writeLocks.end()) {
-        return it->second;
+
+    std::ios_base::openmode mode = std::ios::out | std::ios::binary;
+    if (options.append) {
+        mode |= std::ios::app;
+    } else if (options.truncate || options.offset == 0) {
+        mode |= std::ios::trunc;
+    } else {
+        mode |= std::ios::in;
     }
-    auto mutex = std::make_shared<std::mutex>();
-    _writeLocks[key] = mutex;
-    return mutex;
+
+    std::fstream out(p, mode);
+    if (!out && options.createIfMissing) {
+        out.open(p, std::ios::out | std::ios::binary);
+        out.close();
+        out.open(p, mode);
+    }
+
+    if (!out) {
+        s.setError(FileError::AccessDenied, "Cannot open file for writing", p);
+        s.complete(FileOpStatus::Failed);
+        return;
+    }
+
+    if (options.offset > 0 && !options.append) {
+        out.seekp(options.offset, std::ios::beg);
+    }
+
+    out.write(reinterpret_cast<const char*>(data.data()), data.size());
+    size_t wrote = data.size();
+
+    if (options.ensureFinalNewline.value_or(false) && !options.append && (options.truncate || options.offset == 0)) {
+    #if defined(_WIN32)
+        const char* eol = "\r\n";
+        const size_t eolLen = 2;
+    #else
+        const char* eol = "\n";
+        const size_t eolLen = 1;
+    #endif
+        bool endsWithLF = (!data.empty() && reinterpret_cast<const char*>(data.data())[data.size() - 1] == '\n');
+        if (!endsWithLF) {
+            out.write(eol, static_cast<std::streamsize>(eolLen));
+            wrote += eolLen;
+        }
+    }
+    s.wrote = wrote;
+
+    if (!out.good()) {
+        s.setError(FileError::IOError, "Write operation failed", p);
+        s.complete(FileOpStatus::Failed);
+    } else {
+        s.complete(FileOpStatus::Complete);
+    }
+}
+
+void LocalFileSystemBackend::doDeleteFile(FileOperationHandle::OpState& s, const std::string& p) {
+    std::error_code ec;
+    std::filesystem::remove(p, ec);
+
+    if (ec && std::filesystem::exists(p)) {
+        s.setError(FileError::IOError, "Failed to delete file", p, ec);
+        s.complete(FileOpStatus::Failed);
+    } else {
+        s.complete(FileOpStatus::Complete);
+    }
+}
+
+void LocalFileSystemBackend::doCreateFile(FileOperationHandle::OpState& s, const std::string& p) {
+    std::ofstream out(p, std::ios::out | std::ios::binary);
+    if (!out) {
+        s.setError(FileError::AccessDenied, "Cannot create file", p);
+        s.complete(FileOpStatus::Failed);
+    } else {
+        s.complete(FileOpStatus::Complete);
+    }
+}
+
+void LocalFileSystemBackend::doWriteLine(FileOperationHandle::OpState& s, const std::string& p, size_t lineNumber, std::string_view line) {
+    std::error_code ec;
+    const bool createParents = _vfs ? _vfs->_cfg.defaultCreateParentDirs : false;
+    if (createParents) {
+        const auto parent = std::filesystem::path(p).parent_path();
+        if (!parent.empty()) {
+            std::filesystem::create_directories(parent, ec);
+            if (ec) {
+                s.setError(FileError::IOError, "Failed to create parent directories", p, ec);
+                s.complete(FileOpStatus::Failed);
+                return;
+            }
+        }
+    }
+
+    auto targetPath = std::filesystem::path(p);
+    auto dir = targetPath.parent_path();
+    auto base = targetPath.filename().string();
+    auto tempPath = dir / (base + ".tmp" + std::to_string(std::random_device{}()));
+
+    std::string data;
+    bool originalExists = false;
+    bool originalFinalNewline = false;
+    std::string eol;
+#if defined(_WIN32)
+    const std::string platformDefaultEol = "\r\n";
+#else
+    const std::string platformDefaultEol = "\n";
+#endif
+    {
+        std::ifstream inBin(p, std::ios::in | std::ios::binary);
+        if (inBin) {
+            originalExists = true;
+            std::ostringstream ss; ss << inBin.rdbuf();
+            data = ss.str();
+            if (!data.empty() && data.back() == '\n') {
+                originalFinalNewline = true;
+            }
+            size_t crlf = 0, lf = 0;
+            for (size_t i = 0; i < data.size(); ++i) {
+                if (data[i] == '\n') {
+                    if (i > 0 && data[i-1] == '\r') ++crlf; else ++lf;
+                }
+            }
+            if (crlf > lf) eol = "\r\n"; else if (lf > crlf) eol = "\n"; else eol = platformDefaultEol;
+        } else {
+            eol = platformDefaultEol;
+        }
+    }
+    if (eol.empty()) eol = platformDefaultEol;
+
+    std::vector<std::string> linesVec;
+    if (!data.empty()) {
+        std::string cur;
+        for (size_t i = 0; i < data.size(); ++i) {
+            char c = data[i];
+            if (c == '\n') {
+                if (!cur.empty() && cur.back() == '\r') cur.pop_back();
+                linesVec.push_back(std::move(cur));
+                cur.clear();
+            } else {
+                cur.push_back(c);
+            }
+        }
+        if (!originalFinalNewline) {
+            linesVec.push_back(std::move(cur));
+        }
+    }
+
+    if (lineNumber >= linesVec.size()) {
+        linesVec.resize(lineNumber + 1);
+    }
+    linesVec[lineNumber] = std::string(line);
+
+    std::ostringstream oss;
+    for (size_t i = 0; i < linesVec.size(); ++i) {
+        oss << linesVec[i];
+        if (i < linesVec.size() - 1 || originalFinalNewline) oss << eol;
+    }
+    std::string finalData = oss.str();
+
+    {
+        std::ofstream tmp(tempPath, std::ios::out | std::ios::binary);
+        if (!tmp) {
+            s.setError(FileError::IOError, "Cannot create temp file for writeLine", p);
+            s.complete(FileOpStatus::Failed);
+            return;
+        }
+        tmp << finalData;
+        if (!tmp.good()) {
+            std::filesystem::remove(tempPath, ec);
+            s.setError(FileError::IOError, "Failed to write temp file for writeLine", p);
+            s.complete(FileOpStatus::Failed);
+            return;
+        }
+    }
+
+#if defined(_WIN32)
+    auto wsrc = tempPath.wstring();
+    auto wdst = targetPath.wstring();
+    const int maxRetries = 50;
+    const int retryDelayMs = 10;
+    bool replaced = false;
+    for (int i = 0; i < maxRetries; ++i) {
+        if (MoveFileExW(wsrc.c_str(), wdst.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0) {
+            replaced = true;
+            break;
+        }
+        DWORD error = GetLastError();
+        if (error == ERROR_SHARING_VIOLATION || error == ERROR_ACCESS_DENIED || error == ERROR_LOCK_VIOLATION) {
+            if (i < maxRetries - 1) {
+                Sleep(retryDelayMs);
+                continue;
+            }
+        }
+        break;
+    }
+    if (!replaced) {
+        std::filesystem::remove(tempPath, ec);
+        s.setError(FileError::IOError, "Failed to replace file with temp file for writeLine", p);
+        s.complete(FileOpStatus::Failed);
+        return;
+    }
+#else
+    std::filesystem::rename(tempPath, targetPath, ec);
+    if (ec) {
+        std::filesystem::remove(tempPath, ec);
+        s.setError(FileError::IOError, "Failed to replace file with temp file for writeLine", p, ec);
+        s.complete(FileOpStatus::Failed);
+        return;
+    }
+#endif
+
+    s.wrote = finalData.size();
+    s.complete(FileOpStatus::Complete);
 }
 
 FileOperationHandle LocalFileSystemBackend::readFile(const std::string& path, ReadOptions options) {
@@ -230,11 +441,8 @@ FileOperationHandle LocalFileSystemBackend::readFile(const std::string& path, Re
 }
 
 FileOperationHandle LocalFileSystemBackend::writeFile(const std::string& path, std::span<const std::byte> data, WriteOptions options) {
-    auto lock = getWriteLock(path);
-    
-    return submitWork(path, [this, lock, data = std::vector<std::byte>(data.begin(), data.end()), options]
+    return submitWork(path, [this, data = std::vector<std::byte>(data.begin(), data.end()), options]
                             (FileOperationHandle::OpState& s, const std::string& p) mutable {
-        std::unique_lock<std::mutex> pathLock(*lock);
         
         std::error_code ec;
         // Determine effective parent creation policy
@@ -310,10 +518,7 @@ FileOperationHandle LocalFileSystemBackend::writeFile(const std::string& path, s
 }
 
 FileOperationHandle LocalFileSystemBackend::deleteFile(const std::string& path) {
-    auto lock = getWriteLock(path);
-    
-    return submitWork(path, [lock](FileOperationHandle::OpState& s, const std::string& p) {
-        std::unique_lock<std::mutex> pathLock(*lock);
+    return submitWork(path, [](FileOperationHandle::OpState& s, const std::string& p) {
         
         std::error_code ec;
         std::filesystem::remove(p, ec);
@@ -328,10 +533,7 @@ FileOperationHandle LocalFileSystemBackend::deleteFile(const std::string& path) 
 }
 
 FileOperationHandle LocalFileSystemBackend::createFile(const std::string& path) {
-    auto lock = getWriteLock(path);
-    
-    return submitWork(path, [this, lock](FileOperationHandle::OpState& s, const std::string& p) {
-        std::unique_lock<std::mutex> pathLock(*lock);
+    return submitWork(path, [this](FileOperationHandle::OpState& s, const std::string& p) {
         
         std::error_code ec;
         const bool createParents = _vfs ? _vfs->_cfg.defaultCreateParentDirs : false;
@@ -784,11 +986,8 @@ FileOperationHandle LocalFileSystemBackend::readLine(const std::string& path, si
 }
 
 FileOperationHandle LocalFileSystemBackend::writeLine(const std::string& path, size_t lineNumber, std::string_view line) {
-    auto lock = getWriteLock(path);
-    
-    return submitWork(path, [this, lock, lineNumber, line = std::string(line)]
+    return submitWork(path, [this, lineNumber, line = std::string(line)]
                             (FileOperationHandle::OpState& s, const std::string& p) mutable {
-        std::unique_lock<std::mutex> pathLock(*lock);
         
         std::error_code ec;
         
@@ -1072,10 +1271,7 @@ FileOperationHandle LocalFileSystemBackend::copyFile(const std::string& src, con
 }
 
 FileOperationHandle LocalFileSystemBackend::moveFile(const std::string& src, const std::string& dst, bool overwriteExisting) {
-    auto lock = getWriteLock(src);
-
-    return submitWork(src, [this, lock, src, dst, overwriteExisting](FileOperationHandle::OpState& s, const std::string&) {
-        std::unique_lock<std::mutex> pathLock(*lock);
+    return submitWork(src, [this, src, dst, overwriteExisting](FileOperationHandle::OpState& s, const std::string&) {
         std::error_code ec;
 
         // Ensure destination parent directory exists if configured

@@ -14,6 +14,7 @@
 #include <functional>
 #include <chrono>
 #include <vector>
+#include <system_error>
 #include "FileOperationHandle.h"
 
 namespace EntropyEngine::Core::IO {
@@ -312,6 +313,34 @@ public:
     // Default: pass-through (no normalization).
     // Backends should override to implement their own canonicalization (e.g., case-insensitive on Windows local FS).
     virtual std::string normalizeKey(const std::string& path) const { return path; }
+
+    // Backend-provided write-scope acquisition with explicit status and timeout options
+    struct AcquireWriteScopeResult {
+        enum class Status {
+            Acquired,
+            Busy,
+            TimedOut,
+            NotSupported,
+            Error
+        } status = Status::NotSupported;
+        std::unique_ptr<void, void(*)(void*)> token{nullptr, [](void*){}}; // Opaque RAII token
+        std::error_code errorCode{};   // Provider/system error code if any
+        std::string message;           // Human-readable context
+        std::chrono::milliseconds suggestedBackoff{0}; // Hint for retry/backoff on Busy
+    };
+
+    struct AcquireScopeOptions {
+        std::optional<std::chrono::milliseconds> timeout; // nullopt => backend default
+        bool nonBlocking; // true => do not wait
+        AcquireScopeOptions() : timeout(std::nullopt), nonBlocking(false) {}
+    };
+
+    // Default implementation: not supported, VFS may fall back to advisory lock
+    virtual AcquireWriteScopeResult acquireWriteScope(const std::string& path, AcquireScopeOptions options = {}) {
+        (void)path; (void)options;
+        return AcquireWriteScopeResult{}; // NotSupported by default
+    }
+
     
     // Set the parent VFS for callbacks
     void setVirtualFileSystem(VirtualFileSystem* vfs) { _vfs = vfs; }

@@ -10,12 +10,8 @@ namespace EntropyEngine::Core::IO {
 
 DirectoryHandle::DirectoryHandle(VirtualFileSystem* vfs, std::string path)
     : _vfs(vfs) {
-
-    // Find the appropriate backend for this path
-    _backend = vfs->findBackend(path);
-    if (!_backend) {
-        _backend = vfs->getDefaultBackend();
-    }
+    // Do not resolve or attach a backend here; DirectoryHandle is a dumb value handle.
+    // Backend attachment and normalized key computation are performed by VirtualFileSystem::createDirectoryHandle.
 
     // Initialize metadata
     _meta.path = path;
@@ -29,12 +25,11 @@ DirectoryHandle::DirectoryHandle(VirtualFileSystem* vfs, std::string path)
         _meta.name = p.filename().string();
     }
 
-    // Check existence
+    // Check existence at construction time (best-effort)
     std::error_code ec;
     _meta.exists = std::filesystem::exists(p, ec) && std::filesystem::is_directory(p, ec);
 
-    // Capture backend-normalized key for value identity
-    _normKey = _backend ? _backend->normalizeKey(_meta.path) : _meta.path;
+    // Leave _backend null and _normKey empty until VFS factory sets them.
 }
 
 FileOperationHandle DirectoryHandle::create(bool createParents) const {
