@@ -92,13 +92,21 @@ struct BackendCapabilities {
  * @param maxDepth Maximum recursion depth
  * @param globPattern Optional simple glob filter (e.g., *.txt)
  * @param filter Optional predicate to include/exclude entries
+ * @param includeHidden Include hidden files/directories (default false)
+ * @param sortBy Sort order for results (none, name, size, modified)
+ * @param maxResults Maximum number of results (for pagination; 0 = unlimited)
  */
 struct ListDirectoryOptions {
+    enum SortOrder { None, ByName, BySize, ByModifiedTime };
+
     bool recursive = false;
     bool followSymlinks = true;
     size_t maxDepth = SIZE_MAX;
     std::optional<std::string> globPattern;  // Simple glob matching (*.txt, file?.dat, etc)
     std::function<bool(const DirectoryEntry&)> filter;  // Optional filter callback
+    bool includeHidden = false;  // Show hidden files/directories
+    SortOrder sortBy = None;     // Sort order for results
+    size_t maxResults = 0;       // Max results for pagination (0 = unlimited)
 };
 
 // Options for batch metadata queries
@@ -197,8 +205,17 @@ public:
     // Directory operations (optional)
     /**
      * @brief Creates a directory at the given path
-     * 
-     * Default implementation is not supported and returns an empty handle.
+     *
+     * **Backend-specific semantics:**
+     * - **LocalFileSystemBackend**: Creates all parent directories (like `mkdir -p`). Always succeeds
+     *   if directory already exists.
+     * - **S3Backend** (future): Creates a 0-byte marker object with "/" suffix for compatibility with
+     *   tools expecting directory markers. This is optional; S3 has no native directory concept.
+     * - **AzureBlobBackend** (future): With hierarchical namespace (HNS) enabled, creates a true
+     *   directory object. Without HNS, creates a 0-byte blob with "/" suffix (like S3).
+     * - **WebDAVBackend** (future): Issues HTTP `MKCOL` request to create collection (directory).
+     * - **HTTPBackend** (non-WebDAV): Not supported. Returns empty handle.
+     *
      * @param path Directory to create
      * @return A FileOperationHandle; status() will be Pending for default impl
      */
@@ -208,8 +225,18 @@ public:
     }
     /**
      * @brief Removes a directory at the given path
-     * 
-     * Default implementation is not supported and returns an empty handle.
+     *
+     * **Backend-specific semantics:**
+     * - **LocalFileSystemBackend**: Removes directory and all contents recursively (like `rm -rf`).
+     *   Succeeds even if directory doesn't exist (idempotent).
+     * - **S3Backend** (future): Deletes all objects with this prefix. **Warning**: Potentially expensive
+     *   for deep hierarchies. May require pagination and multiple requests.
+     * - **AzureBlobBackend** (future): Similar to S3. Deletes all blobs matching prefix. With HNS,
+     *   can delete directory object itself if empty.
+     * - **WebDAVBackend** (future): Issues HTTP `DELETE` on collection. May fail if collection is
+     *   non-empty depending on server implementation (RFC 4918 allows but doesn't require recursive delete).
+     * - **HTTPBackend** (non-WebDAV): Not supported. Returns empty handle.
+     *
      * @param path Directory to remove
      * @return A FileOperationHandle; status() will be Pending for default impl
      */
@@ -219,10 +246,20 @@ public:
     }
     /**
      * @brief Lists entries in the given directory
-     * 
-     * Default implementation is not supported and returns an empty handle.
+     *
+     * **Backend-specific semantics:**
+     * - **LocalFileSystemBackend**: Native filesystem iteration using `std::filesystem::directory_iterator`.
+     *   Supports recursion, glob patterns, hidden file filtering, sorting, and pagination.
+     * - **S3Backend** (future): Uses `ListObjectsV2` with delimiter="/" to simulate directory listing.
+     *   Recursion requires multiple requests. Pagination is native (continuation tokens).
+     * - **AzureBlobBackend** (future): Uses `List Blobs` API with delimiter="/". Similar to S3.
+     *   With HNS enabled, can use true hierarchical listing APIs.
+     * - **WebDAVBackend** (future): Issues HTTP `PROPFIND` request with `Depth: 1` header for
+     *   non-recursive, `Depth: infinity` for recursive. Parses XML response (RFC 4918 multistatus).
+     * - **HTTPBackend** (non-WebDAV): Not supported. Returns empty handle.
+     *
      * @param path Directory to list
-     * @param options Listing options (recursion, filters)
+     * @param options Listing options (recursion, filters, sorting, pagination)
      * @return A FileOperationHandle; status() will be Pending for default impl
      */
     virtual FileOperationHandle listDirectory(const std::string& path, ListDirectoryOptions options = {}) {

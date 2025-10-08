@@ -435,6 +435,126 @@ int main() {
     // Clean up watch test directory
     std::filesystem::remove_all("watch_test_dir");
 
+    // Example 11: Directory Operations
+    ENTROPY_LOG_INFO("=== Example 11: Directory Operations ===");
+
+    // Create a directory handle
+    auto testDir = vfs.createDirectoryHandle("example_directory");
+
+    // Create the directory
+    auto createOp = testDir.create();
+    createOp.wait();
+    if (createOp.status() == FileOpStatus::Complete) {
+        ENTROPY_LOG_INFO("Created directory: " + testDir.metadata().path);
+    } else {
+        ENTROPY_LOG_ERROR("Failed to create directory: " + createOp.errorInfo().message);
+    }
+
+    // Create some files inside the directory
+    auto file1 = vfs.createFileHandle("example_directory/file1.txt");
+    file1.writeAll("Content of file 1").wait();
+
+    auto file2 = vfs.createFileHandle("example_directory/file2.log");
+    file2.writeAll("Log content").wait();
+
+    auto file3 = vfs.createFileHandle("example_directory/.hidden");
+    file3.writeAll("Hidden file content").wait();
+
+    // Create a subdirectory
+    auto subDir = vfs.createDirectoryHandle("example_directory/subdir");
+    subDir.create().wait();
+
+    auto file4 = vfs.createFileHandle("example_directory/subdir/nested.txt");
+    file4.writeAll("Nested file content").wait();
+
+    // List directory contents (non-recursive, no hidden files)
+    ListDirectoryOptions listOpts;
+    listOpts.includeHidden = false;
+    listOpts.sortBy = ListDirectoryOptions::ByName;
+
+    auto listing = testDir.list(listOpts);
+    listing.wait();
+
+    if (listing.status() == FileOpStatus::Complete) {
+        const auto& entries = listing.directoryEntries();
+        ENTROPY_LOG_INFO("Directory contains " + std::to_string(entries.size()) + " visible entries (sorted by name):");
+        for (const auto& entry : entries) {
+            std::string type = entry.metadata.isDirectory ? "[DIR] " : "[FILE]";
+            ENTROPY_LOG_INFO("  " + type + entry.name + " (" + std::to_string(entry.metadata.size) + " bytes)");
+        }
+    }
+
+    // List with hidden files included
+    listOpts.includeHidden = true;
+    auto listingWithHidden = testDir.list(listOpts);
+    listingWithHidden.wait();
+
+    if (listingWithHidden.status() == FileOpStatus::Complete) {
+        ENTROPY_LOG_INFO("Directory contains " + std::to_string(listingWithHidden.directoryEntries().size()) +
+                        " total entries (including hidden)");
+    }
+
+    // Recursive listing
+    listOpts.recursive = true;
+    listOpts.includeHidden = false;
+    auto recursiveListing = testDir.list(listOpts);
+    recursiveListing.wait();
+
+    if (recursiveListing.status() == FileOpStatus::Complete) {
+        ENTROPY_LOG_INFO("Recursive listing found " + std::to_string(recursiveListing.directoryEntries().size()) + " entries:");
+        for (const auto& entry : recursiveListing.directoryEntries()) {
+            ENTROPY_LOG_INFO("  " + entry.fullPath);
+        }
+    }
+
+    // List with glob pattern filter
+    listOpts.recursive = false;
+    listOpts.globPattern = "*.txt";
+    auto filteredListing = testDir.list(listOpts);
+    filteredListing.wait();
+
+    if (filteredListing.status() == FileOpStatus::Complete) {
+        ENTROPY_LOG_INFO("Files matching *.txt: " + std::to_string(filteredListing.directoryEntries().size()));
+        for (const auto& entry : filteredListing.directoryEntries()) {
+            ENTROPY_LOG_INFO("  " + entry.name);
+        }
+    }
+
+    // List with pagination (max 2 results)
+    listOpts.globPattern = std::nullopt;
+    listOpts.maxResults = 2;
+    listOpts.sortBy = ListDirectoryOptions::BySize;
+    auto paginatedListing = testDir.list(listOpts);
+    paginatedListing.wait();
+
+    if (paginatedListing.status() == FileOpStatus::Complete) {
+        ENTROPY_LOG_INFO("First 2 entries (sorted by size):");
+        for (const auto& entry : paginatedListing.directoryEntries()) {
+            ENTROPY_LOG_INFO("  " + entry.name + " - " + std::to_string(entry.metadata.size) + " bytes");
+        }
+    }
+
+    // Get directory metadata
+    auto dirMeta = testDir.getMetadata();
+    dirMeta.wait();
+    if (dirMeta.status() == FileOpStatus::Complete && dirMeta.metadata().has_value()) {
+        const auto& meta = dirMeta.metadata().value();
+        ENTROPY_LOG_INFO("Directory metadata:");
+        ENTROPY_LOG_INFO("  Exists: " + std::to_string(meta.exists));
+        ENTROPY_LOG_INFO("  Is directory: " + std::to_string(meta.isDirectory));
+        ENTROPY_LOG_INFO("  Readable: " + std::to_string(meta.readable));
+        ENTROPY_LOG_INFO("  Writable: " + std::to_string(meta.writable));
+    }
+
+    // Remove directory (recursive)
+    auto removeOp = testDir.remove(true);
+    removeOp.wait();
+    if (removeOp.status() == FileOpStatus::Complete) {
+        ENTROPY_LOG_INFO("Removed directory: " + testDir.metadata().path);
+    } else {
+        ENTROPY_LOG_ERROR("Failed to remove directory: " + removeOp.errorInfo().message);
+    }
+
     // Clean up test files
     ENTROPY_LOG_INFO("Cleaning up test files...");
     for (auto& h : metadataHandles) {

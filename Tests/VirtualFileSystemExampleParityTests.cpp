@@ -4,6 +4,7 @@
 #include "Concurrency/WorkContractGroup.h"
 #include "VirtualFileSystem/VirtualFileSystem.h"
 #include "VirtualFileSystem/WriteBatch.h"
+#include "VirtualFileSystem/DirectoryHandle.h"
 #include <vector>
 #include <unordered_set>
 #include <cstring>
@@ -379,4 +380,67 @@ TEST_CASE("Watch directory smoke test (skips if unavailable)", "[vfs][watch]") {
 
     svc.stop();
     std::error_code ec; std::filesystem::remove_all(dir, ec);
+}
+
+
+TEST_CASE("Directory listing sorting and pagination are applied after collection", "[vfs][dir][list]") {
+    WorkService svc({});
+    WorkContractGroup group(128, "DirListGroup");
+    startService(svc, group);
+    VirtualFileSystem vfs(&group);
+
+    // Create temp directory and files
+    auto tempDir = makeTempPathEx("vfs_dir_list");
+    std::filesystem::create_directories(tempDir);
+
+    auto makeFile = [&](const std::string& name, const std::string& content){
+        auto p = tempDir / name;
+        std::ofstream out(p, std::ios::binary); out << content; out.close();
+        return p;
+    };
+
+    makeFile("b.txt", std::string(2, 'b'));
+    makeFile("a.txt", std::string(1, 'a'));
+    makeFile("c.txt", std::string(3, 'c'));
+
+    auto dh = vfs.createDirectoryHandle(tempDir.string());
+
+    // Sort by name, take first 2
+    ListDirectoryOptions optByName; optByName.sortBy = ListDirectoryOptions::ByName; optByName.maxResults = 2;
+    auto listByName = dh.list(optByName); listByName.wait();
+    REQUIRE(listByName.status() == FileOpStatus::Complete);
+    const auto& e1 = listByName.directoryEntries();
+    REQUIRE(e1.size() == 2);
+    REQUIRE(e1[0].name == "a.txt");
+    REQUIRE(e1[1].name == "b.txt");
+
+    // Sort by size (ascending), take first 2 (smallest two)
+    ListDirectoryOptions optBySize; optBySize.sortBy = ListDirectoryOptions::BySize; optBySize.maxResults = 2;
+    auto listBySize = dh.list(optBySize); listBySize.wait();
+    REQUIRE(listBySize.status() == FileOpStatus::Complete);
+    const auto& e2 = listBySize.directoryEntries();
+    REQUIRE(e2.size() == 2);
+    // Expect sizes 1, then 2
+    REQUIRE(e2[0].metadata.size <= e2[1].metadata.size);
+
+    svc.stop();
+    std::error_code ec; std::filesystem::remove_all(tempDir, ec);
+}
+
+TEST_CASE("Directory listing on non-existent path returns FileNotFound", "[vfs][dir][errors]") {
+    WorkService svc({});
+    WorkContractGroup group(64, "DirErrGroup");
+    startService(svc, group);
+    VirtualFileSystem vfs(&group);
+
+    auto bogus = makeTempPathEx("vfs_dir_missing");
+    // Ensure it doesn't exist
+    std::error_code ec; std::filesystem::remove_all(bogus, ec);
+
+    auto dh = vfs.createDirectoryHandle(bogus.string());
+    auto listing = dh.list(); listing.wait();
+    REQUIRE(listing.status() == FileOpStatus::Failed);
+    REQUIRE(listing.errorInfo().code == FileError::FileNotFound);
+
+    svc.stop();
 }

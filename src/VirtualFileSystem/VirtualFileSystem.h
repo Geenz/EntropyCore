@@ -32,6 +32,7 @@ class BufferedFileStream; // fwd
 class WriteBatch; // fwd
 class FileWatchManager; // fwd
 class FileWatch; // fwd
+class DirectoryHandle; // fwd
 
 class VirtualFileSystem {
 public:
@@ -64,6 +65,16 @@ public:
      * @brief Functor shorthand for createFileHandle(path)
      */
     FileHandle operator()(std::string path) { return createFileHandle(std::move(path)); }
+
+    /**
+     * @brief Creates a value-semantic handle for a directory path
+     *
+     * Routes the path to the appropriate backend (mounted or default). The handle is copyable and
+     * caches a backend-normalized identity key for equality purposes.
+     * @param path Target directory path
+     * @return DirectoryHandle bound to this VFS
+     */
+    DirectoryHandle createDirectoryHandle(std::string path);
     
     // Streaming convenience
     /**

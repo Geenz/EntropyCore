@@ -575,6 +575,13 @@ FileOperationHandle LocalFileSystemBackend::listDirectory(const std::string& pat
             std::vector<DirectoryEntry> entries;
             std::error_code ec;
 
+            // Fail fast if directory does not exist
+            if (!std::filesystem::exists(p, ec)) {
+                s.setError(FileError::FileNotFound, "Directory not found", p, ec);
+                s.complete(FileOpStatus::Failed);
+                return;
+            }
+
             // Helper to populate DirectoryEntry from filesystem::directory_entry
             auto populateEntry = [&](const std::filesystem::directory_entry& fsEntry, size_t depth) -> bool {
                 // Check depth limit
@@ -638,6 +645,23 @@ FileOperationHandle LocalFileSystemBackend::listDirectory(const std::string& pat
                     meta.lastModified = sctp;
                 }
 
+                // Filter hidden files if requested
+                if (!options.includeHidden) {
+                    // Check if file is hidden (platform-specific)
+#if defined(_WIN32)
+                    // On Windows, check FILE_ATTRIBUTE_HIDDEN
+                    auto attrs = GetFileAttributesW(fsEntry.path().c_str());
+                    if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_HIDDEN)) {
+                        return true;  // Skip hidden file
+                    }
+#else
+                    // On Unix-like systems, files starting with '.' are hidden
+                    if (!entry.name.empty() && entry.name[0] == '.') {
+                        return true;  // Skip hidden file
+                    }
+#endif
+                }
+
                 // Apply glob pattern filter if specified
                 if (options.globPattern.has_value()) {
                     // Simple glob matching: * matches any sequence, ? matches single char
@@ -653,15 +677,15 @@ FileOperationHandle LocalFileSystemBackend::listDirectory(const std::string& pat
                 }
 
                 entries.push_back(std::move(entry));
+
                 return true;
             };
 
             // Iterate directory
             if (options.recursive) {
                 auto dirOptions = std::filesystem::directory_options::skip_permission_denied;
-                if (!options.followSymlinks) {
-                    // This prevents following symlinks during recursion
-                    dirOptions = std::filesystem::directory_options::skip_permission_denied;
+                if (options.followSymlinks) {
+                    dirOptions |= std::filesystem::directory_options::follow_directory_symlink;
                 }
 
                 size_t currentDepth = 0;
@@ -671,7 +695,8 @@ FileOperationHandle LocalFileSystemBackend::listDirectory(const std::string& pat
                     // Calculate depth
                     auto relativePath = std::filesystem::relative(fsEntry.path(), p, ec);
                     if (!ec) {
-                        currentDepth = std::distance(relativePath.begin(), relativePath.end()) - 1;
+                        auto segments = static_cast<size_t>(std::distance(relativePath.begin(), relativePath.end()));
+                        currentDepth = segments > 0 ? segments - 1 : 0;
                     }
 
                     populateEntry(fsEntry, currentDepth);
@@ -687,6 +712,36 @@ FileOperationHandle LocalFileSystemBackend::listDirectory(const std::string& pat
                 s.setError(FileError::IOError, "Cannot iterate directory", p, ec);
                 s.complete(FileOpStatus::Failed);
                 return;
+            }
+
+            // Sort results if requested
+            if (options.sortBy != ListDirectoryOptions::None) {
+                switch (options.sortBy) {
+                    case ListDirectoryOptions::ByName:
+                        std::sort(entries.begin(), entries.end(), [](const DirectoryEntry& a, const DirectoryEntry& b) {
+                            return a.name < b.name;
+                        });
+                        break;
+                    case ListDirectoryOptions::BySize:
+                        std::sort(entries.begin(), entries.end(), [](const DirectoryEntry& a, const DirectoryEntry& b) {
+                            return a.metadata.size < b.metadata.size;
+                        });
+                        break;
+                    case ListDirectoryOptions::ByModifiedTime:
+                        std::sort(entries.begin(), entries.end(), [](const DirectoryEntry& a, const DirectoryEntry& b) {
+                            if (!a.metadata.lastModified.has_value()) return false;
+                            if (!b.metadata.lastModified.has_value()) return true;
+                            return a.metadata.lastModified.value() < b.metadata.lastModified.value();
+                        });
+                        break;
+                    default:
+                        break;
+                }
+            }
+
+            // Apply pagination after sorting to ensure top-N by requested order
+            if (options.maxResults > 0 && entries.size() > options.maxResults) {
+                entries.resize(options.maxResults);
             }
 
             s.directoryEntries = std::move(entries);

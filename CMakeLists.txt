@@ -57,6 +57,7 @@ set(ENTROPY_CORE_SOURCES
         src/VirtualFileSystem/VirtualFileSystem.cpp
         src/VirtualFileSystem/FileOperationHandle.cpp
         src/VirtualFileSystem/FileHandle.cpp
+        src/VirtualFileSystem/DirectoryHandle.cpp
         src/VirtualFileSystem/LocalFileSystemBackend.cpp
         src/VirtualFileSystem/FileStream.cpp
         src/VirtualFileSystem/WriteBatch.cpp
@@ -107,6 +108,7 @@ set(ENTROPY_CORE_HEADERS
         src/VirtualFileSystem/VirtualFileSystem.h
         src/VirtualFileSystem/FileOperationHandle.h
         src/VirtualFileSystem/FileHandle.h
+        src/VirtualFileSystem/DirectoryHandle.h
 )
 
 # Create the core library

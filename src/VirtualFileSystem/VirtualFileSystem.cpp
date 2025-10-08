@@ -1,6 +1,7 @@
 #include "VirtualFileSystem.h"
 #include "FileOperationHandle.h"
 #include "FileHandle.h"
+#include "DirectoryHandle.h"
 #include "LocalFileSystemBackend.h"
 #include "WriteBatch.h"
 #include "FileWatchManager.h"
@@ -84,6 +85,12 @@ FileHandle VirtualFileSystem::createFileHandle(std::string path) {
     handle._backend = backend;
     // Capture backend-normalized key for value identity
     handle._normKey = backend ? backend->normalizeKey(handle._meta.path) : normalizePath(handle._meta.path);
+    return handle;
+}
+
+DirectoryHandle VirtualFileSystem::createDirectoryHandle(std::string path) {
+    // Create directory handle - backend will be determined inside DirectoryHandle constructor
+    DirectoryHandle handle(this, std::move(path));
     return handle;
 }
 
