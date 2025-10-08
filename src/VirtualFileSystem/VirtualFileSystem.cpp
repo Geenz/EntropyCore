@@ -25,6 +25,20 @@ VirtualFileSystem::~VirtualFileSystem() {
     _watchManager.reset();
 }
 
+std::shared_ptr<IFileSystemBackend> VirtualFileSystem::getDefaultBackend() const {
+    {
+        std::shared_lock rlock(_backendMutex);
+        if (_defaultBackend) return _defaultBackend;
+    }
+    std::unique_lock wlock(_backendMutex);
+    if (!_defaultBackend) {
+        auto localBackend = std::make_shared<LocalFileSystemBackend>();
+        localBackend->setVirtualFileSystem(const_cast<VirtualFileSystem*>(this));
+        const_cast<VirtualFileSystem*>(this)->_defaultBackend = localBackend;
+    }
+    return _defaultBackend;
+}
+
 // VFS submit helper
 FileOperationHandle VirtualFileSystem::submit(std::string path, std::function<void(FileOperationHandle::OpState&, const std::string&)> body) const {
     auto st = makeState();
@@ -90,10 +104,12 @@ FileOperationHandle VirtualFileSystem::submitSerialized(std::string path, std::f
             bool needFallback = (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::NotSupported) ||
                                 (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::Acquired && !scopeToken) ||
                                 (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::Busy) ||
-                                (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::TimedOut);
+                                (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::TimedOut) ||
+                                (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::Error);
             if (needFallback) {
                 if ((scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::Busy) ||
-                    (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::TimedOut)) {
+                    (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::TimedOut) ||
+                    (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::Error)) {
                     if (policy == Config::AdvisoryFallbackPolicy::None) {
                         FileError code;
                         if (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::TimedOut) code = FileError::Timeout;

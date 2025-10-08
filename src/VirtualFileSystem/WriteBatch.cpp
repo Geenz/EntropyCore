@@ -200,10 +200,12 @@ FileOperationHandle WriteBatch::commit(const WriteOptions& opts) {
             bool needFallback = (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::NotSupported) ||
                                 (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::Acquired && !scopeToken) ||
                                 (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::Busy) ||
-                                (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::TimedOut);
+                                (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::TimedOut) ||
+                                (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::Error);
             if (needFallback) {
                 if ((scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::Busy) ||
-                    (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::TimedOut)) {
+                    (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::TimedOut) ||
+                    (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::Error)) {
                     if (fallbackPolicy == VirtualFileSystem::Config::AdvisoryFallbackPolicy::None) {
                         FileError code;
                         if (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::TimedOut) code = FileError::Timeout;

@@ -151,10 +151,7 @@ public:
      * @brief Gets the current default backend
      * @return Shared pointer to default backend (may be null)
      */
-    std::shared_ptr<IFileSystemBackend> getDefaultBackend() const {
-        std::shared_lock lock(_backendMutex);
-        return _defaultBackend;
-    }
+    std::shared_ptr<IFileSystemBackend> getDefaultBackend() const;
 
 private:
     using Group = EntropyEngine::Core::Concurrency::WorkContractGroup;

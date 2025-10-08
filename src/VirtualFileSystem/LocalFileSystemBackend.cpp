@@ -8,6 +8,7 @@
 #include <random>
 #include <algorithm>
 #include <cctype>
+#include <cerrno>
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -210,7 +211,19 @@ void LocalFileSystemBackend::doWriteFile(FileOperationHandle::OpState& s, const 
     }
 
     if (!out) {
-        s.setError(FileError::AccessDenied, "Cannot open file for writing", p);
+        std::error_code pec;
+        auto parent = std::filesystem::path(p).parent_path();
+        if (!parent.empty() && !std::filesystem::exists(parent, pec)) {
+            s.setError(FileError::InvalidPath, "Parent directory does not exist", p, pec);
+        } else {
+            std::error_code stEc;
+            (void)std::filesystem::status(p, stEc);
+            if (stEc) {
+                s.setError(FileError::InvalidPath, "Invalid path or unsupported filename", p, stEc);
+            } else {
+                s.setError(FileError::AccessDenied, "Cannot open file for writing", p, std::error_code(errno, std::generic_category()));
+            }
+        }
         s.complete(FileOpStatus::Failed);
         return;
     }
@@ -236,14 +249,16 @@ void LocalFileSystemBackend::doWriteFile(FileOperationHandle::OpState& s, const 
             wrote += eolLen;
         }
     }
-    s.wrote = wrote;
-
+    out.flush();
     if (!out.good()) {
-        s.setError(FileError::IOError, "Write operation failed", p);
+        std::error_code e(errno, std::generic_category());
+        auto code = (errno == ENOSPC) ? FileError::DiskFull : FileError::IOError;
+        s.setError(code, code == FileError::DiskFull ? std::string("Disk full or flush failed") : std::string("Write operation failed"), p, e);
         s.complete(FileOpStatus::Failed);
-    } else {
-        s.complete(FileOpStatus::Complete);
+        return;
     }
+    s.wrote = wrote;
+    s.complete(FileOpStatus::Complete);
 }
 
 void LocalFileSystemBackend::doDeleteFile(FileOperationHandle::OpState& s, const std::string& p) {
@@ -411,7 +426,15 @@ FileOperationHandle LocalFileSystemBackend::readFile(const std::string& path, Re
     return submitWork(path, [options](FileOperationHandle::OpState& s, const std::string& p) {
         std::ifstream in(p, std::ios::in | std::ios::binary);
         if (!in) {
-            s.setError(FileError::FileNotFound, "File not found or cannot be opened", p);
+            std::error_code ec1;
+            bool ex = std::filesystem::exists(p, ec1);
+            if (ec1) {
+                s.setError(FileError::InvalidPath, "Invalid path or unsupported filename", p, ec1);
+            } else if (!ex) {
+                s.setError(FileError::FileNotFound, "File not found", p);
+            } else {
+                s.setError(FileError::AccessDenied, "Cannot open file for reading", p, std::error_code(errno, std::generic_category()));
+            }
             s.complete(FileOpStatus::Failed);
             return;
         }
@@ -479,7 +502,19 @@ FileOperationHandle LocalFileSystemBackend::writeFile(const std::string& path, s
         }
         
         if (!out) {
-            s.setError(FileError::AccessDenied, "Cannot open file for writing", p);
+            std::error_code pec;
+            auto parent = std::filesystem::path(p).parent_path();
+            if (!parent.empty() && !std::filesystem::exists(parent, pec)) {
+                s.setError(FileError::InvalidPath, "Parent directory does not exist", p, pec);
+            } else {
+                std::error_code stEc;
+                (void)std::filesystem::status(p, stEc);
+                if (stEc) {
+                    s.setError(FileError::InvalidPath, "Invalid path or unsupported filename", p, stEc);
+                } else {
+                    s.setError(FileError::AccessDenied, "Cannot open file for writing", p, std::error_code(errno, std::generic_category()));
+                }
+            }
             s.complete(FileOpStatus::Failed);
             return;
         }
@@ -508,14 +543,16 @@ FileOperationHandle LocalFileSystemBackend::writeFile(const std::string& path, s
                 wrote += eolLen;
             }
         }
-        s.wrote = wrote;
-        
+        out.flush();
         if (!out.good()) {
-            s.setError(FileError::IOError, "Write operation failed", p);
+            std::error_code e(errno, std::generic_category());
+            auto code = (errno == ENOSPC) ? FileError::DiskFull : FileError::IOError;
+            s.setError(code, code == FileError::DiskFull ? std::string("Disk full or flush failed") : std::string("Write operation failed"), p, e);
             s.complete(FileOpStatus::Failed);
-        } else {
-            s.complete(FileOpStatus::Complete);
+            return;
         }
+        s.wrote = wrote;
+        s.complete(FileOpStatus::Complete);
     });
 }
 
@@ -553,7 +590,13 @@ FileOperationHandle LocalFileSystemBackend::createFile(const std::string& path) 
         
         std::ofstream out(p, std::ios::out | std::ios::binary | std::ios::trunc);
         if (!out) {
-            s.setError(FileError::AccessDenied, "Cannot create file", p);
+            std::error_code stEc;
+            (void)std::filesystem::status(p, stEc);
+            if (stEc) {
+                s.setError(FileError::InvalidPath, "Invalid path or unsupported filename", p, stEc);
+            } else {
+                s.setError(FileError::AccessDenied, "Cannot create file", p, std::error_code(errno, std::generic_category()));
+            }
             s.complete(FileOpStatus::Failed);
         } else {
             s.complete(FileOpStatus::Complete);

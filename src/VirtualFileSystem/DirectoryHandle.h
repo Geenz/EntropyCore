@@ -44,6 +44,7 @@ public:
         bool exists = false;    // whether directory exists at construction time
     };
 
+private:
     /**
      * @brief Constructs a handle bound to a VirtualFileSystem and path
      *
@@ -53,6 +54,8 @@ public:
      * @param path Target directory path (routed to a backend)
      */
     explicit DirectoryHandle(VirtualFileSystem* vfs, std::string path);
+    DirectoryHandle() = delete;
+public:
 
     // Directory operations
     /**

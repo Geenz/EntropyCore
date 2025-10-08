@@ -33,10 +33,7 @@ DirectoryHandle::DirectoryHandle(VirtualFileSystem* vfs, std::string path)
 }
 
 FileOperationHandle DirectoryHandle::create(bool createParents) const {
-    if (!_backend) {
-        return FileOperationHandle::immediate(FileOpStatus::Failed);
-    }
-
+    assert(_backend && "DirectoryHandle must have backend (constructed by VFS)");
     // Use backend's createDirectory, which should handle createParents appropriately
     // For LocalFileSystemBackend, this calls std::filesystem::create_directories (always creates parents)
     (void)createParents; // Currently not used - backend decides behavior
@@ -44,10 +41,7 @@ FileOperationHandle DirectoryHandle::create(bool createParents) const {
 }
 
 FileOperationHandle DirectoryHandle::remove(bool recursive) const {
-    if (!_backend) {
-        return FileOperationHandle::immediate(FileOpStatus::Failed);
-    }
-
+    assert(_backend && "DirectoryHandle must have backend (constructed by VFS)");
     // Backend's removeDirectory should handle recursive flag appropriately
     // For LocalFileSystemBackend, this calls std::filesystem::remove_all (always recursive)
     (void)recursive; // Currently not used - backend decides behavior
@@ -55,10 +49,7 @@ FileOperationHandle DirectoryHandle::remove(bool recursive) const {
 }
 
 FileOperationHandle DirectoryHandle::list(const ListDirectoryOptions& options) const {
-    if (!_backend) {
-        return FileOperationHandle::immediate(FileOpStatus::Failed);
-    }
-
+    assert(_backend && "DirectoryHandle must have backend (constructed by VFS)");
     return _backend->listDirectory(_meta.path, options);
 }
 

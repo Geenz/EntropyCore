@@ -278,6 +278,7 @@ if(ENTROPY_BUILD_TESTS)
             Tests/VirtualFileSystemStreamingTests.cpp
             Tests/VirtualFileSystemTextFidelityTests.cpp
             Tests/VirtualFileSystemExampleParityTests.cpp
+            Tests/VirtualFileSystemErrorMappingTests.cpp
     )
 
     target_link_libraries(EntropyCoreTests 
