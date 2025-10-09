@@ -128,6 +128,7 @@ set(ENTROPY_C_API_SOURCES
         src/entropy/entropy_work_contract_handle_c.cpp
         src/entropy/entropy_work_contract_group_c.cpp
         src/entropy/entropy_work_service_c.cpp
+        src/entropy/entropy_work_graph_c.cpp
 )
 
 set(ENTROPY_C_API_HEADERS
@@ -135,6 +136,7 @@ set(ENTROPY_C_API_HEADERS
         include/entropy/entropy_work_contract_handle.h
         include/entropy/entropy_work_contract_group.h
         include/entropy/entropy_work_service.h
+        include/entropy/entropy_work_graph.h
 )
 
 # VFS C API sources and headers
@@ -239,6 +241,13 @@ set_property(TARGET VFSCAPIExample PROPERTY LINKER_LANGUAGE CXX)
 # Link core
 target_link_libraries(VFSCAPIExample PRIVATE EntropyCore)
 
+# WorkGraph C API example (pure C)
+add_executable(WorkGraphCAPIExample Examples/WorkGraphCAPIExample.c)
+# Ensure C++ linker is used (C target linking against C++ library)
+set_property(TARGET WorkGraphCAPIExample PROPERTY LINKER_LANGUAGE CXX)
+# Link core
+target_link_libraries(WorkGraphCAPIExample PRIVATE EntropyCore)
+
 add_executable(VirtualFileSystemExample Examples/VirtualFileSystemExample.cpp)
 target_link_libraries(VirtualFileSystemExample PRIVATE EntropyCore)
 # Avoid Windows min/max macro pollution
@@ -311,10 +320,11 @@ if(WIN32)
         set_property(TARGET VFS_Metadata PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
         set_property(TARGET EntropyMainExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
         set_property(TARGET EntropyCppAppExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+        set_property(TARGET WorkGraphCAPIExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
         # Optionally disable RTTI if requested
         if(ENTROPY_REQUIRE_NO_RTTI)
             target_compile_options(EntropyCore PRIVATE /GR-)
-            foreach(tgt IN ITEMS WorkContractExample WorkGraphYieldableExample EntropyObjectExample EntropyObjectHandleExample CInteropExample EntropyMainExample EntropyCppAppExample)
+            foreach(tgt IN ITEMS WorkContractExample WorkGraphYieldableExample EntropyObjectExample EntropyObjectHandleExample CInteropExample EntropyMainExample EntropyCppAppExample WorkGraphCAPIExample)
                 if(TARGET ${tgt})
                     target_compile_options(${tgt} PRIVATE /GR-)
                 endif()
@@ -335,7 +345,7 @@ else()
     # Optionally disable RTTI if requested
     if(ENTROPY_REQUIRE_NO_RTTI)
         target_compile_options(EntropyCore PRIVATE -fno-rtti)
-        foreach(tgt IN ITEMS WorkContractExample WorkGraphYieldableExample EntropyObjectExample EntropyObjectHandleExample CInteropExample EntropyMainExample EntropyCppAppExample)
+        foreach(tgt IN ITEMS WorkContractExample WorkGraphYieldableExample EntropyObjectExample EntropyObjectHandleExample CInteropExample EntropyMainExample EntropyCppAppExample WorkGraphCAPIExample)
             if(TARGET ${tgt})
                 target_compile_options(${tgt} PRIVATE -fno-rtti)
             endif()
