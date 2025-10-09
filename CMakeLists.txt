@@ -137,7 +137,28 @@ set(ENTROPY_C_API_HEADERS
         include/entropy/entropy_work_service.h
 )
 
+# VFS C API sources and headers
+set(ENTROPY_VFS_C_API_SOURCES
+        src/entropy/entropy_vfs_types_c.cpp
+        src/entropy/entropy_virtual_file_system_c.cpp
+        src/entropy/entropy_file_handle_c.cpp
+        src/entropy/entropy_directory_handle_c.cpp
+        src/entropy/entropy_file_operation_handle_c.cpp
+        src/entropy/entropy_write_batch_c.cpp
+)
+
+set(ENTROPY_VFS_C_API_HEADERS
+        include/entropy/entropy_vfs_types.h
+        include/entropy/entropy_virtual_file_system.h
+        include/entropy/entropy_file_handle.h
+        include/entropy/entropy_directory_handle.h
+        include/entropy/entropy_file_operation_handle.h
+        include/entropy/entropy_write_batch.h
+)
+
 # Append to main lists
+list(APPEND ENTROPY_C_API_SOURCES ${ENTROPY_VFS_C_API_SOURCES})
+list(APPEND ENTROPY_C_API_HEADERS ${ENTROPY_VFS_C_API_HEADERS})
 list(APPEND ENTROPY_CORE_SOURCES ${ENTROPY_C_API_SOURCES})
 list(APPEND ENTROPY_CORE_HEADERS ${ENTROPY_C_API_HEADERS})
 
@@ -210,6 +231,13 @@ add_executable(ConcurrencyAPIExample Examples/ConcurrencyAPIExample.c)
 set_property(TARGET ConcurrencyAPIExample PROPERTY LINKER_LANGUAGE CXX)
 # Link core
 target_link_libraries(ConcurrencyAPIExample PRIVATE EntropyCore)
+
+# VFS C API example (pure C)
+add_executable(VFSCAPIExample Examples/VFSCAPIExample.c)
+# Ensure C++ linker is used (C target linking against C++ library)
+set_property(TARGET VFSCAPIExample PROPERTY LINKER_LANGUAGE CXX)
+# Link core
+target_link_libraries(VFSCAPIExample PRIVATE EntropyCore)
 
 add_executable(VirtualFileSystemExample Examples/VirtualFileSystemExample.cpp)
 target_link_libraries(VirtualFileSystemExample PRIVATE EntropyCore)
