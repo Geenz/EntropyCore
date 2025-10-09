@@ -483,6 +483,12 @@ namespace Concurrency {
             // Someone else got it first or state changed
             return WorkContractHandle();
         }
+
+        // Clear from ready set immediately upon successful selection to avoid stale ready bits.
+        // CRITICAL: This clear is part of a triple-redundancy strategy to ensure no stale bits remain
+        // in the signal tree under any thread interleaving. See returnSlotToFreeList() for defensive
+        // clear that handles the race where this thread is preempted before clearing.
+        _readyContracts->clear(index);
         
         // Get current generation for handle
         uint32_t generation = slot.generation.load(std::memory_order_acquire);
@@ -550,6 +556,12 @@ namespace Concurrency {
             // Someone else got it first or state changed
             return WorkContractHandle();
         }
+
+        // Clear from main-thread ready set immediately upon successful selection.
+        // CRITICAL: This clear is part of a triple-redundancy strategy to ensure no stale bits remain
+        // in the signal tree under any thread interleaving. See returnSlotToFreeList() for defensive
+        // clear that handles the race where this thread is preempted before clearing.
+        _mainThreadContracts->clear(index);
         
         // Get current generation for handle
         uint32_t generation = slot.generation.load(std::memory_order_acquire);
@@ -710,14 +722,20 @@ namespace Concurrency {
     
     void WorkContractGroup::returnSlotToFreeList(uint32_t index, ContractState previousState, bool isMainThread) {
         auto& slot = _contracts[index];
-        
+
         // Increment generation to invalidate all handles
         slot.generation.fetch_add(1, std::memory_order_acq_rel);
-        
+
         // Clear the work function to release resources
         slot.work.reset();
-        
-        // Clear from ready tree if it was scheduled
+
+        // Signal tree clearing strategy (triple-redundancy for correctness):
+        // Layer 1: Primary clear immediately after selection (selectForExecution/selectForMainThreadExecution)
+        // Layer 2: Scheduled cleanup - clear if released before execution starts
+        // Layer 3: Defensive clear - handles race where selection thread was preempted before clearing
+        // This ensures no stale ready bits remain in the signal tree regardless of thread scheduling.
+
+        // Layer 2: Clear if contract was released while still scheduled (never selected for execution)
         if (previousState == ContractState::Scheduled) {
             if (isMainThread) {
                 _mainThreadContracts->clear(index);
@@ -745,6 +763,20 @@ namespace Concurrency {
                 _waitCondition.notify_all();
             }
         } else if (previousState == ContractState::Executing) {
+            // Layer 3: Defensive clear to handle race condition where selectForExecution() successfully
+            // transitioned state to Executing but was preempted before executing Layer 1 clear.
+            // Edge case scenario:
+            //   1. Thread A: select() returns index N, CAS Scheduled->Executing succeeds
+            //   2. Thread A: preempted before _readyContracts->clear(N)
+            //   3. Thread B: executeContract(N) + completeExecution(N)
+            //   4. Without this clear: signal tree still has stale bit N set
+            // This defensive clear ensures correctness under all thread interleavings.
+            if (isMainThread) {
+                _mainThreadContracts->clear(index);
+            } else {
+                _readyContracts->clear(index);
+            }
+
             size_t newExecutingCount;
             if (isMainThread) {
                 newExecutingCount = _mainThreadExecutingCount.fetch_sub(1, std::memory_order_acq_rel) - 1;
