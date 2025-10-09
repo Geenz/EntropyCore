@@ -76,7 +76,7 @@ WriteBatch& WriteBatch::clear() {
 }
 
 WriteBatch& WriteBatch::deleteRange(size_t startLine, size_t endLine) {
-    for (size_t i = startLine; i <= endLine; ++i) {
+    for (size_t i = startLine; i < endLine; ++i) {
         deleteLine(i);
     }
     return *this;
