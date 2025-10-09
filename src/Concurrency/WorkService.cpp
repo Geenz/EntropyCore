@@ -244,15 +244,13 @@ namespace Concurrency {
                 if (contract.valid()) {
                     // Check stop token again before executing work to prevent deadlocks during shutdown
                     if (token.stop_requested()) {
-                        // Mark contract as completed even though we didn't execute it
-                        // This properly transitions it from Executing to Free state
-                        scheduleResult.group->completeExecution(contract);
+                        // Abort without executing: transition Executing -> Free safely during shutdown
+                        scheduleResult.group->abortExecution(contract);
                         break;
                     }
 
-                    // Execute the work
+                    // Execute the work (includes all cleanup)
                     scheduleResult.group->executeContract(contract);
-                    scheduleResult.group->completeExecution(contract);
 
                     // Notify scheduler of successful execution
                     _scheduler->notifyWorkExecuted(scheduleResult.group, stThreadId);
