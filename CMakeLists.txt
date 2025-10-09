@@ -312,6 +312,7 @@ if(ENTROPY_BUILD_TESTS)
             Tests/VirtualFileSystem/VFSTests.cpp
             Tests/VirtualFileSystem/VFSTextFidelityTests.cpp
             Tests/VirtualFileSystem/VFSErrorMappingTests.cpp
+            Tests/VirtualFileSystem/VFSLockCacheTests.cpp
     )
 
     add_executable(EntropyCoreTests
@@ -336,11 +337,8 @@ if(ENTROPY_BUILD_TESTS)
     
     # Register tests with CTest
     include(CTest)
-    list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
-    if(TARGET Catch2::Catch2)
-        include(Catch)
-        catch_discover_tests(EntropyCoreTests)
-    endif()
+    # Register the unit test executable with CTest without relying on Catch2's module
+    add_test(NAME EntropyCoreTests COMMAND $<TARGET_FILE:EntropyCoreTests>)
 
     # Convenience target: build tests and run them in one step. This prevents running stale binaries
     # because the test execution only happens if EntropyCoreTests builds successfully.

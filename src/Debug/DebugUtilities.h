@@ -345,7 +345,7 @@ namespace Debug {
         if (!ptr) {
             auto msg = debugFormat("Null pointer: {} at {}:{}", 
                                   name, loc.file_name(), loc.line());
-            ENTROPY_LOG_ERROR_CAT("Validation", msg);
+            ENTROPY_LOG_WARNING_CAT("Validation", msg);
             return false;
         }
         return true;

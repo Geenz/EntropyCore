@@ -29,6 +29,20 @@
 
 namespace EntropyEngine::Core::IO {
 
+#if defined(_WIN32)
+    static std::string toWinLongPath(const std::string& path) {
+        if (path.rfind("\\\\?\\", 0) == 0) return path;
+        if (path.rfind("\\\\", 0) == 0) {
+            // UNC path: \\server\\share -> \\?\\UNC\\server\\share
+            return std::string("\\\\?\\UNC\\") + path.substr(2);
+        }
+        if (path.size() >= 2 && std::isalpha(static_cast<unsigned char>(path[0])) && path[1] == ':') {
+            return std::string("\\\\?\\") + path;
+        }
+        return path;
+    }
+#endif
+
 // Helper function for simple glob pattern matching
 // Supports: * (any sequence), ? (single char)
 namespace {
@@ -408,8 +422,8 @@ void LocalFileSystemBackend::doWriteFile(FileOperationHandle::OpState& s, const 
         // Test seam: simulate disk full via env var and path marker
         // When ENTROPY_TEST_SIMULATE_DISK_FULL=1 and path contains "SimulateDiskFull",
         // return DiskFull with a populated systemError.
-        if (const char* sim = std::getenv("ENTROPY_TEST_SIMULATE_DISK_FULL");
-            sim && sim[0] == '1' && p.find("SimulateDiskFull") != std::string::npos) {
+        if (auto sim = EntropyEngine::Core::safeGetEnv("ENTROPY_TEST_SIMULATE_DISK_FULL");
+            sim && !sim->empty() && (*sim)[0] == '1' && p.find("SimulateDiskFull") != std::string::npos) {
             s.setError(FileError::DiskFull, "Disk full or quota exceeded (test seam)", p,
                        std::error_code(ENOSPC, std::generic_category()));
             s.complete(FileOpStatus::Failed);
@@ -417,12 +431,71 @@ void LocalFileSystemBackend::doWriteFile(FileOperationHandle::OpState& s, const 
         }
 
         // Test seam: optionally hold the serialized section to force advisory timeout in tests
-        if (const char* hold = std::getenv("ENTROPY_TEST_HOLD_WRITE_LOCK_MS");
+        if (auto hold = EntropyEngine::Core::safeGetEnv("ENTROPY_TEST_HOLD_WRITE_LOCK_MS");
             hold && p.find("HoldLock") != std::string::npos) {
-            long ms = std::strtol(hold, nullptr, 10);
+            long ms = std::strtol(hold->c_str(), nullptr, 10);
             if (ms > 0) std::this_thread::sleep_for(std::chrono::milliseconds(ms));
         }
     });
+
+    // Optional cross-process serialization via lock directory
+    struct LockDirGuard { std::filesystem::path path; ~LockDirGuard(){ std::error_code rec; if(!path.empty()) std::filesystem::remove(path, rec);} };
+    std::optional<LockDirGuard> lockGuard;
+    {
+        bool useLock = options.useLockFile.value_or(_vfs ? _vfs->_cfg.defaultUseLockFile : false);
+        if (useLock && _vfs) {
+            auto suffix = options.lockSuffix.value_or(_vfs->_cfg.lockSuffix);
+            auto timeout = options.lockTimeout.value_or(_vfs->_cfg.lockAcquireTimeout);
+            auto lockPath = std::filesystem::path(p + suffix);
+            auto start = std::chrono::steady_clock::now();
+            std::error_code lec;
+            for (;;) {
+                lec.clear();
+                if (std::filesystem::create_directory(lockPath, lec)) {
+                    lockGuard = LockDirGuard{lockPath};
+                    // Write lock info (pid, timestamp) for stale detection
+                    try {
+                        auto infoPath = lockPath / "lockinfo.txt";
+                        std::ofstream info(infoPath.string(), std::ios::out | std::ios::trunc);
+                        if (info) {
+#if defined(_WIN32)
+                            info << "pid=" << GetCurrentProcessId() << "\n";
+#else
+                            info << "pid=" << getpid() << "\n";
+#endif
+                            auto now = std::chrono::system_clock::now().time_since_epoch();
+                            auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
+                            info << "ts=" << ms << "\n";
+                        }
+                    } catch (...) { /* ignore */ }
+                    break;
+                }
+                if (std::filesystem::exists(lockPath)) {
+                    // Check for stale lock based on age >= timeout
+                    std::error_code tec2; auto lwt = std::filesystem::last_write_time(lockPath, tec2);
+                    if (!tec2) {
+                        auto age = std::chrono::system_clock::now() - std::chrono::time_point_cast<std::chrono::system_clock::duration>(lwt - std::filesystem::file_time_type::clock::now() + std::chrono::system_clock::now());
+                        if (age >= timeout) {
+                            std::error_code rec; std::filesystem::remove_all(lockPath, rec);
+                            if (!rec) { continue; }
+                        }
+                    }
+                    // else: not stale yet; fall through to timeout sleep
+                } else if (lec) {
+                    // unexpected error creating lock
+                    s.setError(FileError::IOError, "Failed to create lock directory", p, lec);
+                    s.complete(FileOpStatus::Failed);
+                    return;
+                }
+                if (std::chrono::steady_clock::now() - start >= timeout) {
+                    s.setError(FileError::Timeout, std::string("Lock-file acquisition timed out after ") + std::to_string(timeout.count()) + " ms (lock=" + lockPath.string() + ")", p);
+                    s.complete(FileOpStatus::Failed);
+                    return;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+        }
+    }
 
     std::error_code ec;
     const bool createParents = options.createParentDirs.value_or(_vfs ? _vfs->_cfg.defaultCreateParentDirs : false);
@@ -447,11 +520,16 @@ void LocalFileSystemBackend::doWriteFile(FileOperationHandle::OpState& s, const 
         mode |= std::ios::in;
     }
 
-    std::fstream out(p, mode);
+#if defined(_WIN32)
+    std::string osPath = toWinLongPath(p);
+#else
+    const std::string& osPath = p;
+#endif
+    std::fstream out(osPath, mode);
     if (!out && options.createIfMissing) {
-        out.open(p, std::ios::out | std::ios::binary);
+        out.open(osPath, std::ios::out | std::ios::binary);
         out.close();
-        out.open(p, mode);
+        out.open(osPath, mode);
     }
 
     if (!out) {
@@ -460,7 +538,28 @@ void LocalFileSystemBackend::doWriteFile(FileOperationHandle::OpState& s, const 
         auto parent = std::filesystem::path(p).parent_path();
         if (!parent.empty() && !std::filesystem::exists(parent, pec)) {
             s.setError(FileError::InvalidPath, "Parent directory does not exist", p, pec);
+            s.complete(FileOpStatus::Failed);
+            return;
         } else {
+#if defined(_WIN32)
+            DWORD werr = GetLastError();
+            if (werr != 0) {
+                FileError code;
+                switch (werr) {
+                    case ERROR_INVALID_NAME:
+                    case ERROR_FILENAME_EXCED_RANGE:
+                    case ERROR_PATH_NOT_FOUND: code = FileError::InvalidPath; break;
+                    case ERROR_SHARING_VIOLATION:
+                    case ERROR_LOCK_VIOLATION: code = FileError::Conflict; break;
+                    case ERROR_ACCESS_DENIED: code = FileError::AccessDenied; break;
+                    case ERROR_DISK_FULL: code = FileError::DiskFull; break;
+                    default: code = FileError::IOError; break;
+                }
+                s.setError(code, "Cannot open file for writing", p, std::error_code((int)werr, std::system_category()));
+                s.complete(FileOpStatus::Failed);
+                return;
+            }
+#endif
             std::error_code stEc;
             (void)std::filesystem::status(p, stEc);
             if (stEc) {
@@ -558,9 +657,14 @@ void LocalFileSystemBackend::doWriteFile(FileOperationHandle::OpState& s, const 
 
 void LocalFileSystemBackend::doDeleteFile(FileOperationHandle::OpState& s, const std::string& p) {
     std::error_code ec;
-    std::filesystem::remove(p, ec);
+#if defined(_WIN32)
+    auto osPath = toWinLongPath(p);
+#else
+    const auto& osPath = p;
+#endif
+    std::filesystem::remove(osPath, ec);
 
-    if (ec && std::filesystem::exists(p)) {
+    if (ec && std::filesystem::exists(osPath)) {
         s.setError(FileError::IOError, "Failed to delete file", p, ec);
         s.complete(FileOpStatus::Failed);
     } else {
@@ -569,7 +673,12 @@ void LocalFileSystemBackend::doDeleteFile(FileOperationHandle::OpState& s, const
 }
 
 void LocalFileSystemBackend::doCreateFile(FileOperationHandle::OpState& s, const std::string& p) {
-    std::ofstream out(p, std::ios::out | std::ios::binary);
+#if defined(_WIN32)
+    auto osPath = toWinLongPath(p);
+#else
+    const auto& osPath = p;
+#endif
+    std::ofstream out(osPath, std::ios::out | std::ios::binary);
     if (!out) {
         const int saved_errno = errno;  // Capture errno immediately
         s.setError(FileError::AccessDenied, "Cannot create file", p, std::error_code(saved_errno, std::generic_category()));
@@ -593,6 +702,66 @@ void LocalFileSystemBackend::doWriteLine(FileOperationHandle::OpState& s, const 
             }
         }
     }
+
+#ifdef ENTROPY_VFS_STREAMING_WRITELINE
+    // Streaming writeLine path: chunked rewrite to temp file under serialized section
+    do {
+#if defined(_WIN32)
+        auto osPathR = toWinLongPath(p);
+#else
+        const auto& osPathR = p;
+#endif
+        std::ifstream in(osPathR, std::ios::in | std::ios::binary);
+        // Create temp file in same directory
+        auto dir = std::filesystem::path(p).parent_path();
+        std::error_code tec;
+        std::filesystem::create_directories(dir, tec);
+        auto tempPath = (dir / (std::filesystem::path(p).filename().string() + ".tmp_writeLine")).string();
+#if defined(_WIN32)
+        auto osTemp = toWinLongPath(tempPath);
+#else
+        const auto& osTemp = tempPath;
+#endif
+        std::ofstream out(osTemp, std::ios::out | std::ios::binary | std::ios::trunc);
+        if (!out) { s.setError(FileError::IOError, "Failed to create temp file for writeLine", p); s.complete(FileOpStatus::Failed); return; }
+        std::string eol;
+#if defined(_WIN32)
+        eol = "\r\n";
+#else
+        eol = "\n";
+#endif
+        size_t current = 0; bool wroteReplacement = false; std::string buf;
+        if (in) {
+            while (std::getline(in, buf)) {
+                if (!buf.empty() && buf.back() == '\r') buf.pop_back();
+                if (current == lineNumber) { out.write(line.data(), static_cast<std::streamsize>(line.size())); out.write(eol.data(), static_cast<std::streamsize>(eol.size())); wroteReplacement = true; }
+                else { out.write(buf.data(), static_cast<std::streamsize>(buf.size())); out.write(eol.data(), static_cast<std::streamsize>(eol.size())); }
+                ++current;
+            }
+        }
+        if (!wroteReplacement) {
+            while (current < lineNumber) { out.write(eol.data(), static_cast<std::streamsize>(eol.size())); ++current; }
+            out.write(line.data(), static_cast<std::streamsize>(line.size()));
+            // Preserve final newline policy: if original had a trailing newline, keep one
+            out.write(eol.data(), static_cast<std::streamsize>(eol.size()));
+        }
+        out.flush(); out.close();
+#if defined(_WIN32)
+        // Windows atomic replace with retries
+        bool replaced = false; const int maxRetries = 10; const DWORD retryDelayMs = 25; std::wstring wTarget = std::filesystem::path(p).wstring(); std::wstring wTemp = std::filesystem::path(tempPath).wstring();
+        for (int i = 0; i < maxRetries; ++i) {
+            if (MoveFileExW(wTemp.c_str(), wTarget.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED | MOVEFILE_WRITE_THROUGH)) { replaced = true; break; }
+            DWORD error = GetLastError(); if (error == ERROR_SHARING_VIOLATION || error == ERROR_ACCESS_DENIED || error == ERROR_LOCK_VIOLATION) { Sleep(retryDelayMs); continue; } else { break; }
+        }
+        if (!replaced) { std::error_code rec; std::filesystem::remove(tempPath, rec); s.setError(FileError::IOError, "Failed to replace file (streaming writeLine)", p); s.complete(FileOpStatus::Failed); return; }
+#else
+        std::error_code rec; std::filesystem::rename(tempPath, p, rec); if (rec) { std::filesystem::remove(tempPath, rec); s.setError(FileError::IOError, "Failed to replace file (streaming writeLine)", p, rec); s.complete(FileOpStatus::Failed); return; }
+#endif
+        // Report bytes written
+        std::error_code sec; auto finalSize = std::filesystem::file_size(p, sec); s.wrote = sec ? 0 : finalSize;
+        s.complete(FileOpStatus::Complete); return;
+    } while(false);
+#endif
 
     auto targetPath = std::filesystem::path(p);
     auto dir = targetPath.parent_path();
@@ -753,7 +922,12 @@ FileOperationHandle LocalFileSystemBackend::readFile(const std::string& path, Re
             return;
         }
 
-        std::ifstream in(p, std::ios::in | std::ios::binary);
+    #if defined(_WIN32)
+        auto osPathIn = toWinLongPath(p);
+    #else
+        const auto& osPathIn = p;
+    #endif
+        std::ifstream in(osPathIn, std::ios::in | std::ios::binary);
         if (!in) {
             const int saved_errno = errno;  // Capture errno immediately
             std::error_code ec1;
@@ -763,7 +937,26 @@ FileOperationHandle LocalFileSystemBackend::readFile(const std::string& path, Re
             } else if (!ex) {
                 s.setError(FileError::FileNotFound, "File not found", p);
             } else {
-                s.setError(FileError::AccessDenied, "Cannot open file for reading", p, std::error_code(saved_errno, std::generic_category()));
+#if defined(_WIN32)
+                DWORD werr = GetLastError();
+                if (werr != 0) {
+                    FileError code;
+                    switch (werr) {
+                        case ERROR_INVALID_NAME:
+                        case ERROR_FILENAME_EXCED_RANGE:
+                        case ERROR_PATH_NOT_FOUND: code = FileError::InvalidPath; break;
+                        case ERROR_SHARING_VIOLATION:
+                        case ERROR_LOCK_VIOLATION: code = FileError::Conflict; break;
+                        case ERROR_ACCESS_DENIED: code = FileError::AccessDenied; break;
+                        case ERROR_DISK_FULL: code = FileError::DiskFull; break;
+                        default: code = FileError::IOError; break;
+                    }
+                    s.setError(code, "Cannot open file for reading", p, std::error_code((int)werr, std::system_category()));
+                } else
+#endif
+                {
+                    s.setError(FileError::AccessDenied, "Cannot open file for reading", p, std::error_code(saved_errno, std::generic_category()));
+                }
             }
             s.complete(FileOpStatus::Failed);
             return;
@@ -820,17 +1013,17 @@ FileOperationHandle LocalFileSystemBackend::writeFile(const std::string& path, s
 
         ENTROPY_DEBUG_BLOCK({
             // Test seam: simulate disk full
-            if (const char* sim = std::getenv("ENTROPY_TEST_SIMULATE_DISK_FULL");
-                sim && sim[0] == '1' && p.find("SimulateDiskFull") != std::string::npos) {
+            if (auto sim = EntropyEngine::Core::safeGetEnv("ENTROPY_TEST_SIMULATE_DISK_FULL");
+                sim && !sim->empty() && (*sim)[0] == '1' && p.find("SimulateDiskFull") != std::string::npos) {
                 s.setError(FileError::DiskFull, "Disk full or quota exceeded (test seam)", p,
                            std::error_code(ENOSPC, std::generic_category()));
                 s.complete(FileOpStatus::Failed);
                 return;
             }
             // Test seam: optionally hold to force advisory timeout in tests (for FileHandle path this is redundant)
-            if (const char* hold = std::getenv("ENTROPY_TEST_HOLD_WRITE_LOCK_MS");
+            if (auto hold = EntropyEngine::Core::safeGetEnv("ENTROPY_TEST_HOLD_WRITE_LOCK_MS");
                 hold && p.find("HoldLock") != std::string::npos) {
-                long ms = std::strtol(hold, nullptr, 10);
+                long ms = std::strtol(hold->c_str(), nullptr, 10);
                 if (ms > 0) std::this_thread::sleep_for(std::chrono::milliseconds(ms));
             }
         });
@@ -1416,7 +1609,12 @@ std::unique_ptr<FileStream> LocalFileSystemBackend::openStream(const std::string
 
 FileOperationHandle LocalFileSystemBackend::readLine(const std::string& path, size_t lineNumber) {
     return submitWork(path, [lineNumber](FileOperationHandle::OpState& s, const std::string& p) {
-        std::ifstream in(p, std::ios::in);
+    #if defined(_WIN32)
+        auto osPathIn2 = toWinLongPath(p);
+    #else
+        const auto& osPathIn2 = p;
+    #endif
+        std::ifstream in(osPathIn2, std::ios::in);
         if (!in) {
             s.setError(FileError::FileNotFound, "File not found or cannot be opened", p);
             s.complete(FileOpStatus::Failed);
@@ -1662,7 +1860,12 @@ FileOperationHandle LocalFileSystemBackend::copyFile(const std::string& src, con
         // Regular copy with progress callback
         if (options.progressCallback && fileSize > 0) {
             // Chunked copy with progress
-            std::ifstream in(src, std::ios::binary);
+        #if defined(_WIN32)
+            auto osPathSrc = toWinLongPath(src);
+        #else
+            const auto& osPathSrc = src;
+        #endif
+            std::ifstream in(osPathSrc, std::ios::binary);
             std::ofstream out(dst, std::ios::binary | std::ios::trunc);
 
             if (!in || !out) {
@@ -1687,9 +1890,9 @@ FileOperationHandle LocalFileSystemBackend::copyFile(const std::string& src, con
                     if (!options.progressCallback(totalCopied, fileSize)) {
                         // Ensure streams are closed before cleanup on Windows
                         out.flush(); out.close(); in.close();
+                        std::filesystem::remove(dst, ec);  // Clean up partial copy before completing
                         s.setError(FileError::Unknown, "Copy cancelled by user", src);
                         s.complete(FileOpStatus::Failed);
-                        std::filesystem::remove(dst, ec);  // Clean up partial copy
                         return;
                     }
                 }
@@ -1698,9 +1901,9 @@ FileOperationHandle LocalFileSystemBackend::copyFile(const std::string& src, con
             if (!out.good()) {
                 // Close streams before attempting cleanup
                 out.flush(); out.close(); in.close();
+                std::filesystem::remove(dst, ec);
                 s.setError(FileError::IOError, "Write error during copy", dst);
                 s.complete(FileOpStatus::Failed);
-                std::filesystem::remove(dst, ec);
                 return;
             }
 
@@ -1856,8 +2059,8 @@ EntropyEngine::Core::IO::IFileSystemBackend::AcquireWriteScopeResult EntropyEngi
 
     AcquireWriteScopeResult result;
     ENTROPY_DEBUG_BLOCK({
-        if (const char* sim = std::getenv("ENTROPY_TEST_FORCE_SCOPE_ERROR");
-            sim && sim[0] == '1' && path.find("SimulateScopeError") != std::string::npos) {
+        if (auto sim = EntropyEngine::Core::safeGetEnv("ENTROPY_TEST_FORCE_SCOPE_ERROR");
+            sim && !sim->empty() && (*sim)[0] == '1' && path.find("SimulateScopeError") != std::string::npos) {
             result.status = AcquireWriteScopeResult::Status::Error;
             result.errorCode = std::error_code(EIO, std::generic_category());
             result.message = "Simulated backend scope acquisition error (test seam)";

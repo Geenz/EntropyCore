@@ -88,9 +88,10 @@ FileOperationHandle VirtualFileSystem::submit(std::string path, std::function<vo
  * - If Acquired: run the provided op inline while holding the backend token.
  * - Otherwise apply advisory fallback policy:
  *   - None: map Busy→Conflict, TimedOut→Timeout, Error→IOError and fail early.
+ *     Note: When the backend returns NotSupported, VFS will still apply advisory locking to
+ *     preserve in-process serialization semantics.
  *   - FallbackWithTimeout: try VFS advisory try_lock_for(timeout); on failure set Timeout with
  *     a message that includes the duration (ms) and the lock key.
- *   - FallbackThenWait: block on VFS advisory lock and proceed (discouraged).
  * Invariants:
  * - The op must complete inline and call s.complete(...). No scheduling nested work into the same
  *   WorkContractGroup as the caller.
@@ -137,19 +138,15 @@ FileOperationHandle VirtualFileSystem::submitSerialized(std::string path, std::f
                         return;
                     }
                 }
-                if (policy == Config::AdvisoryFallbackPolicy::FallbackWithTimeout) {
-                    if (!vfsLock->try_lock_for(advTimeout)) {
-                        auto key = backend ? backend->normalizeKey(p) : this->normalizePath(p);
-                        auto ms = advTimeout.count();
-                        s.setError(FileError::Timeout, std::string("Advisory lock acquisition timed out after ") + std::to_string(ms) + " ms (key=" + key + ")", p);
-                        s.complete(FileOpStatus::Failed);
-                        return;
-                    }
-                    pathLock = std::unique_lock<std::timed_mutex>(*vfsLock, std::adopt_lock);
-                } else { // FallbackThenWait
-                    vfsLock->lock();
-                    pathLock = std::unique_lock<std::timed_mutex>(*vfsLock, std::adopt_lock);
+                // Use bounded advisory fallback for all supported cases (including NotSupported)
+                if (!vfsLock->try_lock_for(advTimeout)) {
+                    auto key = backend ? backend->normalizeKey(p) : this->normalizePath(p);
+                    auto ms = advTimeout.count();
+                    s.setError(FileError::Timeout, std::string("Advisory lock acquisition timed out after ") + std::to_string(ms) + " ms (key=" + key + ")", p);
+                    s.complete(FileOpStatus::Failed);
+                    return;
                 }
+                pathLock = std::unique_lock<std::timed_mutex>(*vfsLock, std::adopt_lock);
             }
         }
 

@@ -7,6 +7,19 @@
 #include <algorithm>
 #include <random>
 #include <map>
+
+#if defined(_WIN32)
+static std::string vfs_toWinLongPath(const std::string& path) {
+    if (path.rfind("\\\\?\\", 0) == 0) return path;
+    if (path.rfind("\\\\", 0) == 0) {
+        return std::string("\\\\?\\UNC\\") + path.substr(2);
+    }
+    if (path.size() >= 2 && std::isalpha(static_cast<unsigned char>(path[0])) && path[1] == ':') {
+        return std::string("\\\\?\\") + path;
+    }
+    return path;
+}
+#endif
 #if defined(_WIN32)
 #include <windows.h>
 #endif
@@ -189,7 +202,7 @@ FileOperationHandle WriteBatch::commit(const WriteOptions& opts) {
         if (backend) {
             IFileSystemBackend::AcquireScopeOptions scopeOpts;
             scopeOpts.nonBlocking = false;
-            auto pol = _vfs ? _vfs->_cfg.advisoryFallback : VirtualFileSystem::Config::AdvisoryFallbackPolicy::FallbackThenWait;
+            auto pol = _vfs ? _vfs->_cfg.advisoryFallback : VirtualFileSystem::Config::AdvisoryFallbackPolicy::FallbackWithTimeout;
             if (pol == VirtualFileSystem::Config::AdvisoryFallbackPolicy::FallbackWithTimeout || pol == VirtualFileSystem::Config::AdvisoryFallbackPolicy::None) {
                 scopeOpts.timeout = _vfs ? std::optional<std::chrono::milliseconds>(_vfs->_cfg.advisoryAcquireTimeout) : std::nullopt;
             }
@@ -220,19 +233,15 @@ FileOperationHandle WriteBatch::commit(const WriteOptions& opts) {
                         return;
                     }
                 }
-                if (fallbackPolicy == VirtualFileSystem::Config::AdvisoryFallbackPolicy::FallbackWithTimeout) {
-                    if (!vfsLock->try_lock_for(_vfs->_cfg.advisoryAcquireTimeout)) {
-                        auto key = backend ? backend->normalizeKey(p) : _vfs->normalizePath(p);
-                        auto ms = _vfs->_cfg.advisoryAcquireTimeout.count();
-                        s.setError(FileError::Timeout, std::string("Advisory lock acquisition timed out after ") + std::to_string(ms) + " ms (key=" + key + ")", p);
-                        s.complete(FileOpStatus::Failed);
-                        return;
-                    }
-                    pathLock = std::unique_lock<std::timed_mutex>(*vfsLock, std::adopt_lock);
-                } else { // FallbackThenWait
-                    vfsLock->lock();
-                    pathLock = std::unique_lock<std::timed_mutex>(*vfsLock, std::adopt_lock);
+                // Use bounded advisory fallback (including NotSupported)
+                if (!vfsLock->try_lock_for(_vfs->_cfg.advisoryAcquireTimeout)) {
+                    auto key = backend ? backend->normalizeKey(p) : _vfs->normalizePath(p);
+                    auto ms = _vfs->_cfg.advisoryAcquireTimeout.count();
+                    s.setError(FileError::Timeout, std::string("Advisory lock acquisition timed out after ") + std::to_string(ms) + " ms (key=" + key + ")", p);
+                    s.complete(FileOpStatus::Failed);
+                    return;
                 }
+                pathLock = std::unique_lock<std::timed_mutex>(*vfsLock, std::adopt_lock);
             }
         } else if (!scopeToken && !vfsLock) {
             // No serialization available; proceed best-effort
@@ -253,7 +262,12 @@ FileOperationHandle WriteBatch::commit(const WriteOptions& opts) {
         const std::string platformDefaultEol = "\n";
 #endif
         {
-            std::ifstream inBin(p, std::ios::in | std::ios::binary);
+#if defined(_WIN32)
+            auto osPathR = vfs_toWinLongPath(p);
+#else
+            const auto& osPathR = p;
+#endif
+            std::ifstream inBin(osPathR, std::ios::in | std::ios::binary);
             if (inBin) {
                 originalExists = true;
                 std::ostringstream ss; ss << inBin.rdbuf();

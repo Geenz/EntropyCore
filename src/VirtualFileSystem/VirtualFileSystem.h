@@ -44,7 +44,7 @@ public:
 
         // Advisory locking policy (in-process fallback)
         std::chrono::milliseconds advisoryAcquireTimeout; // 5s default
-        enum class AdvisoryFallbackPolicy { None, FallbackThenWait, FallbackWithTimeout };
+        enum class AdvisoryFallbackPolicy { None, FallbackWithTimeout };
         AdvisoryFallbackPolicy advisoryFallback;
 
         // Cross-process lock-file serialization (optional)
@@ -58,7 +58,7 @@ public:
             , writeLockTimeout(std::chrono::minutes(5))
             , defaultCreateParentDirs(false)
             , advisoryAcquireTimeout(std::chrono::milliseconds(5000))
-            , advisoryFallback(AdvisoryFallbackPolicy::FallbackThenWait)
+            , advisoryFallback(AdvisoryFallbackPolicy::FallbackWithTimeout)
             , defaultUseLockFile(false)
             , lockAcquireTimeout(std::chrono::milliseconds(5000))
             , lockSuffix(".lock") {}
