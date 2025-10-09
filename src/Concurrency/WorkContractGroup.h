@@ -617,6 +617,11 @@ namespace Concurrency {
         void executeContract(const WorkContractHandle& handle);
         
         /**
+         * @brief Aborts execution without running the task (shutdown-only path)
+         */
+        void abortExecution(const WorkContractHandle& handle);
+        
+        /**
          * @brief Completes execution and cleans up a contract
          * 
          * Must be called after executeContract() to complete the lifecycle.
