@@ -122,6 +122,25 @@ set(ENTROPY_CORE_HEADERS
         src/VirtualFileSystem/DirectoryHandle.h
 )
 
+# C Concurrency API sources and headers
+set(ENTROPY_C_API_SOURCES
+        src/entropy/entropy_concurrency_types_c.cpp
+        src/entropy/entropy_work_contract_handle_c.cpp
+        src/entropy/entropy_work_contract_group_c.cpp
+        src/entropy/entropy_work_service_c.cpp
+)
+
+set(ENTROPY_C_API_HEADERS
+        include/entropy/entropy_concurrency_types.h
+        include/entropy/entropy_work_contract_handle.h
+        include/entropy/entropy_work_contract_group.h
+        include/entropy/entropy_work_service.h
+)
+
+# Append to main lists
+list(APPEND ENTROPY_CORE_SOURCES ${ENTROPY_C_API_SOURCES})
+list(APPEND ENTROPY_CORE_HEADERS ${ENTROPY_C_API_HEADERS})
+
 # Create the core library
 add_library(EntropyCore)
 target_sources(EntropyCore
@@ -129,7 +148,7 @@ target_sources(EntropyCore
         ${ENTROPY_CORE_SOURCES}
     PUBLIC
         FILE_SET HEADERS
-        BASE_DIRS src
+        BASE_DIRS src include
         FILES ${ENTROPY_CORE_HEADERS}
 )
 
@@ -138,8 +157,9 @@ target_compile_features(EntropyCore PUBLIC cxx_std_20)
 
 # Include directories
 target_include_directories(EntropyCore
-    PUBLIC 
+    PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include>
 )
 
@@ -183,6 +203,13 @@ add_executable(CInteropExample Examples/CInteropExample.c Examples/CInteropExamp
 set_property(TARGET CInteropExample PROPERTY LINKER_LANGUAGE CXX)
 # Link core
 target_link_libraries(CInteropExample PRIVATE EntropyCore)
+
+# C Concurrency API example (pure C)
+add_executable(ConcurrencyAPIExample Examples/ConcurrencyAPIExample.c)
+# Ensure C++ linker is used (C target linking against C++ library)
+set_property(TARGET ConcurrencyAPIExample PROPERTY LINKER_LANGUAGE CXX)
+# Link core
+target_link_libraries(ConcurrencyAPIExample PRIVATE EntropyCore)
 
 add_executable(VirtualFileSystemExample Examples/VirtualFileSystemExample.cpp)
 target_link_libraries(VirtualFileSystemExample PRIVATE EntropyCore)
