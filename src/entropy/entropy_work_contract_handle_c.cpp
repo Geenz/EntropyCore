@@ -10,6 +10,7 @@
 #include "../../include/entropy/entropy_work_contract_handle.h"
 #include "../Concurrency/WorkContractHandle.h"
 #include <new>
+#include <stdexcept>
 
 using namespace EntropyEngine::Core::Concurrency;
 
