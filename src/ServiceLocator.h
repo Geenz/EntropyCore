@@ -13,6 +13,7 @@
 #include "TypeSystem/Reflection.h"
 #include <memory>
 #include <shared_mutex>
+#include <mutex>
 #include <unordered_map>
 #include <stdexcept>
 
@@ -93,7 +94,7 @@ namespace EntropyEngine {
              */
             template<typename T>
             void registerService(std::shared_ptr<T> service) {
-                std::unique_lock lock(_mutex);
+                std::unique_lock<std::shared_mutex> lock(_mutex);
                 _services[TypeSystem::createTypeId<T>()] = service;
             }
 
@@ -119,7 +120,7 @@ namespace EntropyEngine {
              */
             template<typename T>
             std::shared_ptr<T> getService() const {
-                std::shared_lock lock(_mutex);
+                std::shared_lock<std::shared_mutex> lock(_mutex);
                 auto it = _services.find(TypeSystem::createTypeId<T>());
                 if (it == _services.end()) {
                     return nullptr;
@@ -150,7 +151,7 @@ namespace EntropyEngine {
              */
             template<typename T>
             bool hasService() const {
-                std::shared_lock lock(_mutex);
+                std::shared_lock<std::shared_mutex> lock(_mutex);
                 return _services.find(TypeSystem::createTypeId<T>()) != _services.end();
             }
 
@@ -177,19 +178,19 @@ namespace EntropyEngine {
             void removeService() {
                 auto typeId = TypeSystem::createTypeId<T>();
                 std::shared_ptr<void> serviceToDestroy;
-                
+
                 // First check if service exists with shared lock
                 {
-                    std::shared_lock readLock(_mutex);
+                    std::shared_lock<std::shared_mutex> readLock(_mutex);
                     auto it = _services.find(typeId);
                     if (it == _services.end()) {
                         return; // Service not found, nothing to do
                     }
                 }
-                
+
                 // Service exists, now take exclusive lock to remove it
                 {
-                    std::unique_lock writeLock(_mutex);
+                    std::unique_lock<std::shared_mutex> writeLock(_mutex);
                     auto it = _services.find(typeId);
                     if (it != _services.end()) {
                         // Extract the service but keep it alive via shared_ptr
