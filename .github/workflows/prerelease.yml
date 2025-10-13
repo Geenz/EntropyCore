@@ -1,0 +1,58 @@
+name: Pre-release
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types:
+      - completed
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  create-prerelease:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Get commit info
+      id: commit
+      run: |
+        echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+        echo "date=$(date +'%Y%m%d-%H%M%S')" >> $GITHUB_OUTPUT
+        echo "commit_msg=$(git log -1 --pretty=%B | head -n 1)" >> $GITHUB_OUTPUT
+
+    - name: Delete existing pre-release
+      run: |
+        gh release delete latest --yes || true
+        git push origin :refs/tags/latest || true
+      env:
+        GH_TOKEN: ${{ github.token }}
+
+    - name: Create pre-release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: latest
+        name: "Development Build (latest)"
+        body: |
+          ## 🚀 Automated Development Build
+
+          **This is an automatic pre-release from the latest main branch.**
+
+          - **Commit**: ${{ steps.commit.outputs.sha_short }}
+          - **Date**: ${{ steps.commit.outputs.date }}
+          - **Message**: ${{ steps.commit.outputs.commit_msg }}
+
+          ### ⚠️ Warning
+          This is a development build and may be unstable. For production use, please use a [stable release](https://github.com/${{ github.repository }}/releases).
+
+          ### 📋 Recent Changes
+          See [commit history](https://github.com/${{ github.repository }}/commits/main) for details.
+        prerelease: true
+        make_latest: false
