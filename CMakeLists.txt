@@ -14,7 +14,7 @@ project(EntropyCore
 
 # Options
 option(BUILD_SHARED_LIBS "Build as a shared library" OFF)
-option(ENTROPY_BUILD_TESTS "Build tests for EntropyCore" ON)
+option(ENTROPY_BUILD_TESTS "Build tests for EntropyCore" OFF)
 # Entropy does not depend on C++ RTTI. You may optionally disable RTTI for these targets if desired.
 option(ENTROPY_REQUIRE_NO_RTTI "Disable C++ RTTI for Entropy targets" OFF)
 
@@ -29,7 +29,7 @@ if(DEFINED CMAKE_TOOLCHAIN_FILE)
 endif()
 
 # Find packages
-option(ENTROPY_WITH_TRACY "Enable Tracy profiler integration" ON)
+option(ENTROPY_WITH_TRACY "Enable Tracy profiler integration" OFF)
 if(ENTROPY_WITH_TRACY)
     find_package(Tracy CONFIG QUIET)
 endif()

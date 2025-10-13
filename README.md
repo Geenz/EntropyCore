@@ -50,14 +50,47 @@ Notes:
   - -DCMAKE_TOOLCHAIN_FILE="[VCPKG_ROOT]/scripts/buildsystems/vcpkg.cmake"
 - On Windows/MSVC, static CRT is used to match vcpkg defaults.
 
-### Building tests
+### Optional Dependencies
 
-Tests are off by default. Enable and build:
+EntropyCore has optional dependencies that are disabled by default:
+
+#### Tracy Profiler
+
+Tracy profiler integration is disabled by default. To enable it:
 
 ```bash
+# Enable Tracy via CMake option
+cmake -B build -S . -DENTROPY_WITH_TRACY=ON
+
+# Install Tracy via vcpkg feature
+vcpkg install --feature=tracy
+
+# Build with Tracy enabled
+cmake --build build
+```
+
+#### Tests (Catch2)
+
+Tests are disabled by default. To enable and build tests:
+
+```bash
+# Enable tests via CMake option
 cmake -B build -S . -DENTROPY_BUILD_TESTS=ON
+
+# Install Catch2 via vcpkg feature
+vcpkg install --feature=tests
+
+# Build and run tests
 cmake --build build --target EntropyCoreTests
 ctest --test-dir build --output-on-failure
+```
+
+You can enable both features simultaneously:
+
+```bash
+cmake -B build -S . -DENTROPY_WITH_TRACY=ON -DENTROPY_BUILD_TESTS=ON
+vcpkg install --feature=tracy --feature=tests
+cmake --build build
 ```
 
 ## Using in your project

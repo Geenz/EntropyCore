@@ -4,11 +4,21 @@
   "version" : "1.0.0",
   "description" : "Core utilities and concurrency primitives for Entropy Engine",
   "supports" : "!uwp",
-  "dependencies" : [ "catch2", "tracy", {
+  "dependencies" : [ {
     "name" : "boost-type-index",
     "version>=" : "1.88.0"
   }, {
     "name" : "efsw",
     "version>=" : "1.5.0"
-  } ]
+  } ],
+  "features": {
+    "tracy": {
+      "description": "Enable Tracy profiler integration",
+      "dependencies": ["tracy"]
+    },
+    "tests": {
+      "description": "Enable testing with Catch2",
+      "dependencies": ["catch2"]
+    }
+  }
 }
