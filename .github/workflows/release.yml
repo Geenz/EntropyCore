@@ -83,9 +83,15 @@ jobs:
         - **Windows x64**: `EntropyCore-Windows-x64.tar.gz` / `.zip`
 
         Each archive contains:
-        - `libEntropyCore.a` / `EntropyCore.lib` (static library)
-        - Example executables
-        - Headers are in the repository
+        - **lib/**: Static library (`libEntropyCore.a` or `EntropyCore.lib`)
+        - **include/**: All C++ and C headers
+        - **lib/cmake/EntropyCore/**: CMake config files
+
+        Extract and use in your project:
+        ```cmake
+        find_package(EntropyCore REQUIRED PATHS /path/to/extracted/lib/cmake/EntropyCore)
+        target_link_libraries(YourTarget PRIVATE EntropyCore::Core)
+        ```
 
         ### 🔧 Building from Source
 

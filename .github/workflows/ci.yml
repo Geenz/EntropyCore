@@ -60,15 +60,17 @@ jobs:
     - name: Build
       run: cmake --build build --config ${{ env.BUILD_TYPE }} --parallel
 
+    - name: Install to staging directory
+      run: |
+        cmake --install build --prefix build/install
+
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
         name: EntropyCore-Linux-${{ matrix.compiler.cc }}
         path: |
-          build/libEntropyCore.a
-          build/*Example
-          build/*.so
-        if-no-files-found: warn
+          build/install/
+        if-no-files-found: error
 
   build-macos:
     runs-on: macos-latest
@@ -100,15 +102,17 @@ jobs:
     - name: Build
       run: cmake --build build --config ${{ env.BUILD_TYPE }} --parallel
 
+    - name: Install to staging directory
+      run: |
+        cmake --install build --prefix build/install
+
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
         name: EntropyCore-macOS-universal
         path: |
-          build/libEntropyCore.a
-          build/*Example
-          build/*.dylib
-        if-no-files-found: warn
+          build/install/
+        if-no-files-found: error
 
   build-windows:
     runs-on: windows-latest
@@ -134,12 +138,14 @@ jobs:
     - name: Build
       run: cmake --build build --config ${{ env.BUILD_TYPE }} --parallel
 
+    - name: Install to staging directory
+      run: |
+        cmake --install build --prefix build/install --config ${{ env.BUILD_TYPE }}
+
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
         name: EntropyCore-Windows-x64
         path: |
-          build/${{ env.BUILD_TYPE }}/EntropyCore.lib
-          build/${{ env.BUILD_TYPE }}/*Example.exe
-          build/${{ env.BUILD_TYPE }}/*.dll
-        if-no-files-found: warn
+          build/install/
+        if-no-files-found: error

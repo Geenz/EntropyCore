@@ -70,10 +70,13 @@ jobs:
 
           - **Linux GCC 14**: `EntropyCore-Linux-gcc-14.tar.gz` / `.zip`
           - **Linux Clang 18**: `EntropyCore-Linux-clang-18.tar.gz` / `.zip`
-          - **macOS Universal**: `EntropyCore-macOS-universal.tar.gz` / `.zip`
+          - **macOS Universal**: `EntropyCore-macOS-universal.tar.gz` / `.zip` (Intel + Apple Silicon)
           - **Windows x64**: `EntropyCore-Windows-x64.tar.gz` / `.zip`
 
-          Each archive contains the library and example executables.
+          Each archive contains:
+          - **lib/**: Static library (`libEntropyCore.a` or `EntropyCore.lib`)
+          - **include/**: All C++ and C headers
+          - **lib/cmake/EntropyCore/**: CMake config files for easy integration
 
           ### ⚠️ Warning
           This is a development build and may be unstable. For production use, please use a [stable release](https://github.com/${{ github.repository }}/releases).
