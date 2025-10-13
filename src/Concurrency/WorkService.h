@@ -24,6 +24,7 @@
 #include <atomic>
 #include <mutex>
 #include <thread>
+#include <condition_variable>
 #include <limits>
 #include "IWorkScheduler.h"
 #include "IConcurrencyProvider.h"

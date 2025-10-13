@@ -22,7 +22,13 @@
 #include <Logging/CLogger.h>
 #include <stdio.h>
 #include <stdlib.h>
+
+#ifdef _WIN32
+#include <windows.h>
+#define usleep(x) Sleep((x) / 1000)  // usleep is microseconds, Sleep is milliseconds
+#else
 #include <unistd.h>
+#endif
 
 // Example work context
 typedef struct {

@@ -22,6 +22,7 @@
 #include "ILogSink.h"
 #include <vector>
 #include <shared_mutex>
+#include <mutex>
 #include <format>
 #include <source_location>
 #include <unordered_set>
