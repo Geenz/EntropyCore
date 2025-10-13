@@ -334,7 +334,10 @@ if(WIN32)
 else()
     # Settings for non-Windows platforms (macOS, Linux)
     target_compile_options(EntropyCore PRIVATE -Wall -Wextra -Wpedantic)
-    target_compile_options(EntropyCore PUBLIC -fexperimental-library)
+    # -fexperimental-library is only supported by Clang, not GCC
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        target_compile_options(EntropyCore PUBLIC -fexperimental-library)
+    endif()
     if(APPLE)
         # macOS specific
         target_compile_definitions(EntropyCore PUBLIC EntropyDarwin)

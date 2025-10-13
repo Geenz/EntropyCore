@@ -16,8 +16,8 @@ jobs:
     strategy:
       matrix:
         compiler:
-          - { cc: gcc-13, cxx: g++-13 }
-          - { cc: clang-17, cxx: clang++-17 }
+          - { cc: gcc-14, cxx: g++-14 }
+          - { cc: clang-18, cxx: clang++-18 }
 
     steps:
     - uses: actions/checkout@v4
@@ -36,8 +36,8 @@ jobs:
         elif [[ "${{ matrix.compiler.cc }}" == clang-* ]]; then
           wget https://apt.llvm.org/llvm.sh
           chmod +x llvm.sh
-          sudo ./llvm.sh 17
-          sudo apt-get install -y libc++-17-dev libc++abi-17-dev
+          sudo ./llvm.sh 18
+          sudo apt-get install -y libc++-18-dev libc++abi-18-dev
         fi
 
     - name: Setup vcpkg
