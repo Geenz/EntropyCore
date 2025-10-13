@@ -9,7 +9,12 @@ permissions:
   contents: write
 
 jobs:
+  # First, trigger builds for all platforms
+  build:
+    uses: ./.github/workflows/ci.yml
+
   create-release:
+    needs: build
     runs-on: ubuntu-latest
 
     steps:
@@ -30,6 +35,21 @@ jobs:
         VERSION="${{ github.ref_name }}"
         echo "version=${VERSION}" >> $GITHUB_OUTPUT
         echo "version_number=${VERSION#v}" >> $GITHUB_OUTPUT
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+
+    - name: Create artifact archives
+      run: |
+        cd artifacts
+        for dir in */; do
+          dirname="${dir%/}"
+          tar -czf "${dirname}.tar.gz" -C "$dirname" .
+          zip -r "${dirname}.zip" "$dirname"
+        done
+        cd ..
 
     - name: Generate release notes
       id: notes
@@ -52,6 +72,20 @@ jobs:
         ### Changes in this release
 
         $CHANGELOG
+
+        ### 📦 Pre-built Binaries
+
+        Download the appropriate archive for your platform:
+
+        - **Linux GCC 14**: `EntropyCore-Linux-gcc-14.tar.gz` / `.zip`
+        - **Linux Clang 18**: `EntropyCore-Linux-clang-18.tar.gz` / `.zip`
+        - **macOS Universal**: `EntropyCore-macOS-universal.tar.gz` / `.zip` (Intel + Apple Silicon)
+        - **Windows x64**: `EntropyCore-Windows-x64.tar.gz` / `.zip`
+
+        Each archive contains:
+        - `libEntropyCore.a` / `EntropyCore.lib` (static library)
+        - Example executables
+        - Headers are in the repository
 
         ### 🔧 Building from Source
 
@@ -86,6 +120,9 @@ jobs:
       with:
         name: "Release ${{ steps.version.outputs.version }}"
         body_path: release_notes.md
+        files: |
+          artifacts/*.tar.gz
+          artifacts/*.zip
         draft: false
         prerelease: false
         make_latest: true

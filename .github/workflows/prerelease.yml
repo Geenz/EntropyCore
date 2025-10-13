@@ -28,6 +28,23 @@ jobs:
         echo "date=$(date +'%Y%m%d-%H%M%S')" >> $GITHUB_OUTPUT
         echo "commit_msg=$(git log -1 --pretty=%B | head -n 1)" >> $GITHUB_OUTPUT
 
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+        run-id: ${{ github.event.workflow_run.id }}
+        github-token: ${{ github.token }}
+
+    - name: Create artifact archives
+      run: |
+        cd artifacts
+        for dir in */; do
+          dirname="${dir%/}"
+          tar -czf "${dirname}.tar.gz" -C "$dirname" .
+          zip -r "${dirname}.zip" "$dirname"
+        done
+        cd ..
+
     - name: Delete existing pre-release
       run: |
         gh release delete latest --yes || true
@@ -49,10 +66,22 @@ jobs:
           - **Date**: ${{ steps.commit.outputs.date }}
           - **Message**: ${{ steps.commit.outputs.commit_msg }}
 
+          ### 📦 Available Builds
+
+          - **Linux GCC 14**: `EntropyCore-Linux-gcc-14.tar.gz` / `.zip`
+          - **Linux Clang 18**: `EntropyCore-Linux-clang-18.tar.gz` / `.zip`
+          - **macOS Universal**: `EntropyCore-macOS-universal.tar.gz` / `.zip`
+          - **Windows x64**: `EntropyCore-Windows-x64.tar.gz` / `.zip`
+
+          Each archive contains the library and example executables.
+
           ### ⚠️ Warning
           This is a development build and may be unstable. For production use, please use a [stable release](https://github.com/${{ github.repository }}/releases).
 
           ### 📋 Recent Changes
           See [commit history](https://github.com/${{ github.repository }}/commits/main) for details.
+        files: |
+          artifacts/*.tar.gz
+          artifacts/*.zip
         prerelease: true
         make_latest: false
