@@ -10,6 +10,8 @@
   }, {
     "name" : "efsw",
     "version>=" : "1.5.0"
+  }, {
+    "name" : "gtest"
   } ],
   "features": {
     "tracy": {
@@ -17,8 +19,8 @@
       "dependencies": ["tracy"]
     },
     "tests": {
-      "description": "Enable testing with Catch2",
-      "dependencies": ["catch2"]
+      "description": "Enable testing with GoogleTest",
+      "dependencies": ["gtest"]
     }
   }
 }

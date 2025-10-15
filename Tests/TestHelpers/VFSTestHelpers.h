@@ -3,41 +3,68 @@
 #include <string>
 #include <random>
 #include <chrono>
+#include <sstream>
 
-namespace EntropyEngine::Core::Concurrency {
-    class WorkService;
-    class WorkContractGroup;
-}
+#include "EntropyCore.h"
+#include "VirtualFileSystem/VirtualFileSystem.h"
 
-namespace EntropyTestHelpers {
+namespace entropy::test_helpers {
 
-/**
- * @brief Creates a unique temporary file path with the given base name
- * @param base Base name for the temporary file
- * @return Unique temporary path
- */
-std::filesystem::path makeTempPath(const std::string& base = "entropy_test");
+// RAII temporary directory that gets cleaned up on destruction
+class ScopedTempDir {
+public:
+    ScopedTempDir() {
+        namespace fs = std::filesystem;
+        auto base = fs::temp_directory_path();
+        // Create a reasonably unique directory name
+        auto now = std::chrono::high_resolution_clock::now().time_since_epoch().count();
+        std::random_device rd;
+        std::mt19937_64 gen(rd());
+        auto rnd = gen();
+        std::ostringstream oss;
+        oss << "EntropyVFS_Test_" << std::hex << now << "_" << rnd;
+        _path = base / oss.str();
+        std::error_code ec;
+        fs::create_directories(_path, ec);
+    }
 
-/**
- * @brief Extended version with explicit base name parameter
- * @param base Base name for the temporary file
- * @return Unique temporary path
- */
-std::filesystem::path makeTempPathEx(const std::string& base);
+    ~ScopedTempDir() {
+        namespace fs = std::filesystem;
+        std::error_code ec;
+        fs::remove_all(_path, ec); // best-effort cleanup
+    }
 
-/**
- * @brief Starts a WorkService and adds a WorkContractGroup to it
- * @param svc WorkService to start
- * @param group WorkContractGroup to add
- */
-void startService(EntropyEngine::Core::Concurrency::WorkService& svc,
-                 EntropyEngine::Core::Concurrency::WorkContractGroup& group);
+    const std::filesystem::path& path() const noexcept { return _path; }
+    std::filesystem::path join(const std::string& name) const { return _path / name; }
 
-/**
- * @brief Reads all bytes from a file
- * @param p Path to file
- * @return File contents as string
- */
-std::string readAllBytes(const std::filesystem::path& p);
+private:
+    std::filesystem::path _path;
+};
 
-} // namespace EntropyTestHelpers
+// RAII environment with a running WorkService, a WorkContractGroup and a VFS instance
+class ScopedWorkEnv {
+public:
+    ScopedWorkEnv()
+        : _service(EntropyEngine::Core::Concurrency::WorkService::Config{})
+        , _group(2048, "TestVFSGroup")
+        , _vfs(&_group, EntropyEngine::Core::IO::VirtualFileSystem::Config{}) {
+        _service.start();
+        _service.addWorkContractGroup(&_group);
+    }
+
+    ~ScopedWorkEnv() {
+        // Attempt graceful teardown
+        _service.removeWorkContractGroup(&_group);
+        _service.stop();
+    }
+
+    EntropyEngine::Core::IO::VirtualFileSystem& vfs() noexcept { return _vfs; }
+    EntropyEngine::Core::Concurrency::WorkContractGroup& group() noexcept { return _group; }
+
+private:
+    EntropyEngine::Core::Concurrency::WorkService _service;
+    EntropyEngine::Core::Concurrency::WorkContractGroup _group;
+    EntropyEngine::Core::IO::VirtualFileSystem _vfs;
+};
+
+} // namespace entropy::test_helpers

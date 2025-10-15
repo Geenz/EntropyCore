@@ -1,151 +1,209 @@
 name: CI
 
 on:
-  push:
-    branches: [ main, develop ]
-  pull_request:
-    branches: [ main, develop ]
-  workflow_dispatch:
   workflow_call:
+  push:
+    branches: [ "**" ]
+  pull_request:
+    branches: [ "**" ]
 
-env:
-  BUILD_TYPE: Release
+permissions:
+  contents: read
 
 jobs:
-  build-linux:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        compiler:
-          - { cc: gcc-14, cxx: g++-14 }
-          - { cc: clang-18, cxx: clang++-18 }
-
-    steps:
-    - uses: actions/checkout@v4
-      with:
-        submodules: recursive
-
-    - name: Install system dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y ninja-build cmake pkg-config
-
-    - name: Install compiler
-      run: |
-        if [[ "${{ matrix.compiler.cc }}" == gcc-* ]]; then
-          sudo apt-get install -y ${{ matrix.compiler.cc }} ${{ matrix.compiler.cxx }}
-        elif [[ "${{ matrix.compiler.cc }}" == clang-* ]]; then
-          wget https://apt.llvm.org/llvm.sh
-          chmod +x llvm.sh
-          sudo ./llvm.sh 18
-          sudo apt-get install -y libc++-18-dev libc++abi-18-dev
-        fi
-
-    - name: Setup vcpkg
-      uses: lukka/run-vcpkg@v11
-      with:
-        vcpkgGitCommitId: 'c8696863d371ab7f46e213d8f5ca923c4aef2a00'
-
-    - name: Configure CMake
-      env:
-        CC: ${{ matrix.compiler.cc }}
-        CXX: ${{ matrix.compiler.cxx }}
-      run: |
-        cmake -B build -G Ninja \
-          -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
-          -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake \
-          -DENTROPY_WITH_TRACY=OFF \
-          -DENTROPY_BUILD_TESTS=OFF
-
-    - name: Build
-      run: cmake --build build --config ${{ env.BUILD_TYPE }} --parallel
-
-    - name: Install to staging directory
-      run: |
-        cmake --install build --prefix build/install
-
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: EntropyCore-Linux-${{ matrix.compiler.cc }}
-        path: |
-          build/install/
-        if-no-files-found: error
-
-  build-macos:
-    runs-on: macos-latest
-
-    steps:
-    - uses: actions/checkout@v4
-      with:
-        submodules: recursive
-
-    - name: Install dependencies
-      run: |
-        brew install ninja cmake pkg-config
-
-    - name: Setup vcpkg
-      uses: lukka/run-vcpkg@v11
-      with:
-        vcpkgGitCommitId: 'c8696863d371ab7f46e213d8f5ca923c4aef2a00'
-
-    - name: Configure CMake
-      run: |
-        cmake -B build -G Ninja \
-          -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
-          -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake \
-          -DVCPKG_TARGET_TRIPLET=universal-osx \
-          -DVCPKG_OVERLAY_TRIPLETS=${{ github.workspace }}/triplets \
-          -DENTROPY_WITH_TRACY=OFF \
-          -DENTROPY_BUILD_TESTS=OFF
-
-    - name: Build
-      run: cmake --build build --config ${{ env.BUILD_TYPE }} --parallel
-
-    - name: Install to staging directory
-      run: |
-        cmake --install build --prefix build/install
-
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: EntropyCore-macOS-universal
-        path: |
-          build/install/
-        if-no-files-found: error
-
-  build-windows:
+  build-and-test-windows:
+    name: Build and test (Windows, MSVC)
     runs-on: windows-latest
-
     steps:
-    - uses: actions/checkout@v4
-      with:
-        submodules: recursive
+      - name: Checkout
+        uses: actions/checkout@v4
 
-    - name: Setup vcpkg
-      uses: lukka/run-vcpkg@v11
-      with:
-        vcpkgGitCommitId: 'c8696863d371ab7f46e213d8f5ca923c4aef2a00'
+      - name: Setup vcpkg (manifest mode with cache)
+        uses: microsoft/vcpkg-action@v1
+        with:
+          # Enable cache to speed up dependency restore between runs
+          cache: true
 
-    - name: Configure CMake
-      run: |
-        cmake -B build -G "Visual Studio 17 2022" -A x64 `
-          -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} `
-          -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake" `
-          -DENTROPY_WITH_TRACY=OFF `
-          -DENTROPY_BUILD_TESTS=OFF
+      - name: Configure CMake (VS 2022, x64, Debug)
+        run: >
+          cmake -S . -B build
+          -G "Visual Studio 17 2022" -A x64
+          -DENTROPY_ENABLE_TESTS=ON
+          -DCMAKE_TOOLCHAIN_FILE="${{ env.VCPKG_ROOT }}\\scripts\\buildsystems\\vcpkg.cmake"
 
-    - name: Build
-      run: cmake --build build --config ${{ env.BUILD_TYPE }} --parallel
+      - name: Build tests (Debug)
+        run: cmake --build build --config Debug --target EntropyCoreTests
 
-    - name: Install to staging directory
-      run: |
-        cmake --install build --prefix build/install --config ${{ env.BUILD_TYPE }}
+      - name: Run tests (ctest, verbose)
+        working-directory: build
+        run: ctest -C Debug -VV --output-on-failure
 
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: EntropyCore-Windows-x64
-        path: |
-          build/install/
-        if-no-files-found: error
+      - name: Install package (Debug)
+        run: cmake --install build --config Debug --prefix "${{ github.workspace }}\\EntropyCore-Windows-x64"
+
+      - name: Upload CTest logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctest-logs-windows
+          path: |
+            build/Testing/Temporary/LastTest.log
+            build/Testing/**/Test.xml
+            build/Testing/Temporary/LastTestsFailed.log
+
+      - name: Upload Windows package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: EntropyCore-Windows-x64
+          path: EntropyCore-Windows-x64/**
+
+  build-and-test-linux:
+    name: Build and test (Linux, GCC)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build g++ cmake
+
+      - name: Setup vcpkg (manifest mode with cache)
+        uses: microsoft/vcpkg-action@v1
+        with:
+          cache: true
+
+      - name: Configure CMake (Ninja, Debug)
+        run: >
+          cmake -S . -B build -G Ninja
+          -DENTROPY_ENABLE_TESTS=ON
+          -DCMAKE_TOOLCHAIN_FILE="${{ env.VCPKG_ROOT }}/scripts/buildsystems/vcpkg.cmake"
+
+      - name: Build tests
+        run: cmake --build build --target EntropyCoreTests
+
+      - name: Run tests (ctest, verbose)
+        working-directory: build
+        run: ctest -VV --output-on-failure
+
+      - name: Install package
+        run: cmake --install build --prefix "${{ github.workspace }}/EntropyCore-Linux-gcc-14"
+
+      - name: Upload CTest logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctest-logs-linux
+          path: |
+            build/Testing/Temporary/LastTest.log
+            build/Testing/**/Test.xml
+            build/Testing/Temporary/LastTestsFailed.log
+
+      - name: Upload Linux GCC package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: EntropyCore-Linux-gcc-14
+          path: EntropyCore-Linux-gcc-14/**
+
+  build-and-test-linux-clang:
+    name: Build and test (Linux, Clang 18)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build clang-18 lld-18 cmake
+
+      - name: Setup vcpkg (manifest mode with cache)
+        uses: microsoft/vcpkg-action@v1
+        with:
+          cache: true
+
+      - name: Configure CMake (Ninja, Debug, Clang 18)
+        env:
+          CC: clang-18
+          CXX: clang++-18
+        run: >
+          cmake -S . -B build -G Ninja \
+          -DENTROPY_ENABLE_TESTS=ON \
+          -DCMAKE_TOOLCHAIN_FILE="${{ env.VCPKG_ROOT }}/scripts/buildsystems/vcpkg.cmake"
+
+      - name: Build tests
+        run: cmake --build build --target EntropyCoreTests
+
+      - name: Run tests (ctest, verbose)
+        working-directory: build
+        run: ctest -VV --output-on-failure
+
+      - name: Install package
+        run: cmake --install build --prefix "${{ github.workspace }}/EntropyCore-Linux-clang-18"
+
+      - name: Upload CTest logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctest-logs-linux-clang
+          path: |
+            build/Testing/Temporary/LastTest.log
+            build/Testing/**/Test.xml
+            build/Testing/Temporary/LastTestsFailed.log
+
+      - name: Upload Linux Clang package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: EntropyCore-Linux-clang-18
+          path: EntropyCore-Linux-clang-18/**
+
+  build-and-test-macos:
+    name: Build and test (macOS, AppleClang)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install prerequisites
+        run: |
+          brew update
+          brew install ninja
+
+      - name: Setup vcpkg (manifest mode with cache)
+        uses: microsoft/vcpkg-action@v1
+        with:
+          cache: true
+
+      - name: Configure CMake (Ninja, Debug, Universal)
+        run: >
+          cmake -S . -B build -G Ninja
+          -DENTROPY_ENABLE_TESTS=ON
+          -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64"
+          -DCMAKE_TOOLCHAIN_FILE="${{ env.VCPKG_ROOT }}/scripts/buildsystems/vcpkg.cmake"
+      
+      - name: Build tests
+        run: cmake --build build --target EntropyCoreTests
+      
+      - name: Run tests (ctest, verbose)
+        working-directory: build
+        run: ctest -VV --output-on-failure
+
+      - name: Install package
+        run: cmake --install build --prefix "${{ github.workspace }}/EntropyCore-macOS-universal"
+      
+      - name: Upload CTest logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctest-logs-macos
+          path: |
+            build/Testing/Temporary/LastTest.log
+            build/Testing/**/Test.xml
+            build/Testing/Temporary/LastTestsFailed.log
+
+      - name: Upload macOS universal package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: EntropyCore-macOS-universal
+          path: EntropyCore-macOS-universal/**

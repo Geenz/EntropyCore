@@ -14,9 +14,21 @@ project(EntropyCore
 
 # Options
 option(BUILD_SHARED_LIBS "Build as a shared library" OFF)
-option(ENTROPY_BUILD_TESTS "Build tests for EntropyCore" OFF)
+# New unified toggle for tests. Prefer this over ENTROPY_BUILD_TESTS.
+option(ENTROPY_ENABLE_TESTS "Enable/build tests for EntropyCore" OFF)
 # Entropy does not depend on C++ RTTI. You may optionally disable RTTI for these targets if desired.
 option(ENTROPY_REQUIRE_NO_RTTI "Disable C++ RTTI for Entropy targets" OFF)
+
+# Default behavior: on single-config generators, enable tests in Debug/RelWithDebInfo
+# No build-dir heuristics; on multi-config generators we do not auto-enable by default.
+if(NOT CMAKE_CONFIGURATION_TYPES AND NOT DEFINED CACHE{ENTROPY_ENABLE_TESTS})
+    if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
+        set(ENTROPY_ENABLE_TESTS ON CACHE BOOL "Enable/build tests for EntropyCore" FORCE)
+    endif()
+endif()
+
+# Back-compat shim: mirror to existing variable used throughout the file
+set(ENTROPY_BUILD_TESTS ${ENTROPY_ENABLE_TESTS} CACHE BOOL "Build tests for EntropyCore (deprecated; use ENTROPY_ENABLE_TESTS)" FORCE)
 
 # Set C++20 standard with modules support
 set(CMAKE_CXX_STANDARD 20)
@@ -36,9 +48,9 @@ endif()
 find_package(Boost REQUIRED COMPONENTS type_index)
 find_package(efsw CONFIG REQUIRED)
 
-# Only require Catch2 when building tests
+# Only require GoogleTest when building tests
 if(ENTROPY_BUILD_TESTS)
-    find_package(Catch2 3 CONFIG REQUIRED)
+    find_package(GTest CONFIG REQUIRED)
 endif()
 
 # Core library source files
@@ -303,24 +315,6 @@ if(WIN32)
     target_compile_definitions(EntropyCore PUBLIC WIN32_LEAN_AND_MEAN NOMINMAX EntropyWindows)
     if(MSVC)
         target_compile_options(EntropyCore PRIVATE /W4)
-        # Use static runtime library to match vcpkg dependencies
-        set_property(TARGET EntropyCore PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
-        set_property(TARGET WorkContractExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
-        set_property(TARGET WorkGraphYieldableExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
-        set_property(TARGET EntropyObjectExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
-        set_property(TARGET EntropyObjectHandleExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
-        set_property(TARGET CInteropExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
-        set_property(TARGET VirtualFileSystemExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
-        set_property(TARGET VirtualFileStreamingExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
-        # PR3 examples
-        set_property(TARGET VFS_Basics PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
-        set_property(TARGET VFS_LinesAndBatch PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
-        set_property(TARGET VFS_Streams PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
-        set_property(TARGET VFS_CopyMove PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
-        set_property(TARGET VFS_Metadata PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
-        set_property(TARGET EntropyMainExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
-        set_property(TARGET EntropyCppAppExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
-        set_property(TARGET WorkGraphCAPIExample PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
         # Optionally disable RTTI if requested
         if(ENTROPY_REQUIRE_NO_RTTI)
             target_compile_options(EntropyCore PRIVATE /GR-)
@@ -400,6 +394,7 @@ if(ENTROPY_BUILD_TESTS)
             Tests/Concurrency/WorkContractGroupTests.cpp
             Tests/Concurrency/WorkContractGroupAccountingTests.cpp
             Tests/Concurrency/WorkContractGroupLifetimeTests.cpp
+            Tests/Concurrency/WorkContractGroupReentranceTests.cpp
             Tests/Concurrency/WorkContractHighContentionTests.cpp
             Tests/Concurrency/MainThreadWorkTests.cpp
             Tests/Concurrency/WorkServiceTests.cpp
@@ -422,6 +417,19 @@ if(ENTROPY_BUILD_TESTS)
             Tests/VirtualFileSystem/VFSLockCacheTests.cpp
     )
 
+    # Simple diagnostic test (standalone executable, not using GTest)
+    add_executable(VFSSimpleTest Tests/VirtualFileSystem/VFSSimpleTest.cpp Tests/TestHelpers/VFSTestHelpers.cpp)
+    target_include_directories(VFSSimpleTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Tests/TestHelpers ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    target_link_libraries(VFSSimpleTest PRIVATE EntropyCore)
+    target_compile_features(VFSSimpleTest PRIVATE cxx_std_20)
+
+    # Minimal GTest test without gtest_main to diagnose hanging
+    add_executable(MinimalGTestNoMain Tests/MinimalGTestNoMain.cpp)
+    target_include_directories(MinimalGTestNoMain PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    target_link_libraries(MinimalGTestNoMain PRIVATE EntropyCore GTest::gtest GTest::gtest_main)
+    target_compile_features(MinimalGTestNoMain PRIVATE cxx_std_20)
+
+    # Create single test executable with all test sources (like EntropyNetworking)
     add_executable(EntropyCoreTests
             ${TEST_HELPERS}
             ${CORE_TESTS}
@@ -430,29 +438,27 @@ if(ENTROPY_BUILD_TESTS)
             ${VFS_TESTS}
     )
 
-    target_link_libraries(EntropyCoreTests 
-        PRIVATE 
-            EntropyCore
-            Catch2::Catch2WithMain
+    target_include_directories(EntropyCoreTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/Tests/TestHelpers
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
     )
-    
+
+    target_link_libraries(EntropyCoreTests PRIVATE
+        EntropyCore
+        GTest::gtest
+        GTest::gtest_main
+    )
+
     target_compile_features(EntropyCoreTests PRIVATE cxx_std_20)
 
-    if(WIN32 AND MSVC)
-        set_property(TARGET EntropyCoreTests PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
-    endif()
-    
-    # Register tests with CTest
-    include(CTest)
-    # Register the unit test executable with CTest without relying on Catch2's module
-    add_test(NAME EntropyCoreTests COMMAND $<TARGET_FILE:EntropyCoreTests>)
+    # Enable testing and discover tests automatically
+    include(GoogleTest)
 
-    # Convenience target: build tests and run them in one step. This prevents running stale binaries
-    # because the test execution only happens if EntropyCoreTests builds successfully.
-    add_custom_target(RunAllTests
-        COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -C $<CONFIG>
-        DEPENDS EntropyCoreTests
-        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    # Discover tests with sane defaults for hang detection
+    gtest_discover_tests(EntropyCoreTests
+        DISCOVERY_MODE PRE_TEST
+        PROPERTIES TIMEOUT 90
     )
 endif()
 

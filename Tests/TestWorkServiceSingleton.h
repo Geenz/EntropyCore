@@ -18,7 +18,7 @@ namespace Testing {
 
 /**
  * @brief Singleton wrapper for WorkService in tests
- * 
+ *
  * WorkService should only have one instance active at a time due to
  * static thread_local variables. This wrapper ensures that constraint.
  */
@@ -26,7 +26,7 @@ class TestWorkServiceSingleton {
 private:
     static std::unique_ptr<Concurrency::WorkService> instance;
     static std::mutex mutex;
-    
+
 public:
     static Concurrency::WorkService& getInstance(const Concurrency::WorkService::Config& config = {}) {
         std::lock_guard<std::mutex> lock(mutex);
@@ -35,7 +35,7 @@ public:
         }
         return *instance;
     }
-    
+
     static void reset() {
         std::lock_guard<std::mutex> lock(mutex);
         if (instance) {
@@ -43,7 +43,7 @@ public:
             instance.reset();
         }
     }
-    
+
     // Prevent copying
     TestWorkServiceSingleton() = delete;
     TestWorkServiceSingleton(const TestWorkServiceSingleton&) = delete;
