@@ -16,6 +16,8 @@ project(EntropyCore
 option(BUILD_SHARED_LIBS "Build as a shared library" OFF)
 # New unified toggle for tests. Prefer this over ENTROPY_BUILD_TESTS.
 option(ENTROPY_ENABLE_TESTS "Enable/build tests for EntropyCore" OFF)
+# Make building examples optional (disabled by default, e.g., for CI/CD)
+option(ENTROPY_BUILD_EXAMPLES "Build EntropyCore example executables" OFF)
 # Entropy does not depend on C++ RTTI. You may optionally disable RTTI for these targets if desired.
 option(ENTROPY_REQUIRE_NO_RTTI "Disable C++ RTTI for Entropy targets" OFF)
 
@@ -220,92 +222,94 @@ if(ENTROPY_WITH_TRACY)
   endif()
 endif()
 
-add_executable(WorkContractExample Examples/WorkContractExample.cpp)
-target_link_libraries(WorkContractExample PRIVATE EntropyCore)
+if(ENTROPY_BUILD_EXAMPLES)
+  add_executable(WorkContractExample Examples/WorkContractExample.cpp)
+  target_link_libraries(WorkContractExample PRIVATE EntropyCore)
 
-add_executable(WorkGraphYieldableExample Examples/WorkGraphYieldableExample.cpp)
-target_link_libraries(WorkGraphYieldableExample PRIVATE EntropyCore)
+  add_executable(WorkGraphYieldableExample Examples/WorkGraphYieldableExample.cpp)
+  target_link_libraries(WorkGraphYieldableExample PRIVATE EntropyCore)
 
-add_executable(EntropyObjectExample Examples/EntropyObjectExample.cpp)
-target_link_libraries(EntropyObjectExample PRIVATE EntropyCore)
+  add_executable(EntropyObjectExample Examples/EntropyObjectExample.cpp)
+  target_link_libraries(EntropyObjectExample PRIVATE EntropyCore)
 
-add_executable(EntropyObjectHandleExample Examples/EntropyObjectHandleExample.cpp)
-target_link_libraries(EntropyObjectHandleExample PRIVATE EntropyCore)
+  add_executable(EntropyObjectHandleExample Examples/EntropyObjectHandleExample.cpp)
+  target_link_libraries(EntropyObjectHandleExample PRIVATE EntropyCore)
 
-# C ABI example (pure C)
-add_executable(CInteropExample Examples/CInteropExample.c Examples/CInteropExample_linkshim.cpp)
-# Link against the C++ library; ensure C++ linker is used on some toolchains
-set_property(TARGET CInteropExample PROPERTY LINKER_LANGUAGE CXX)
-# Link core
-target_link_libraries(CInteropExample PRIVATE EntropyCore)
+  # C ABI example (pure C)
+  add_executable(CInteropExample Examples/CInteropExample.c Examples/CInteropExample_linkshim.cpp)
+  # Link against the C++ library; ensure C++ linker is used on some toolchains
+  set_property(TARGET CInteropExample PROPERTY LINKER_LANGUAGE CXX)
+  # Link core
+  target_link_libraries(CInteropExample PRIVATE EntropyCore)
 
-# C Concurrency API example (pure C)
-add_executable(ConcurrencyAPIExample Examples/ConcurrencyAPIExample.c)
-# Ensure C++ linker is used (C target linking against C++ library)
-set_property(TARGET ConcurrencyAPIExample PROPERTY LINKER_LANGUAGE CXX)
-# Link core
-target_link_libraries(ConcurrencyAPIExample PRIVATE EntropyCore)
+  # C Concurrency API example (pure C)
+  add_executable(ConcurrencyAPIExample Examples/ConcurrencyAPIExample.c)
+  # Ensure C++ linker is used (C target linking against C++ library)
+  set_property(TARGET ConcurrencyAPIExample PROPERTY LINKER_LANGUAGE CXX)
+  # Link core
+  target_link_libraries(ConcurrencyAPIExample PRIVATE EntropyCore)
 
-# VFS C API example (pure C)
-add_executable(VFSCAPIExample Examples/VFSCAPIExample.c)
-# Ensure C++ linker is used (C target linking against C++ library)
-set_property(TARGET VFSCAPIExample PROPERTY LINKER_LANGUAGE CXX)
-# Link core
-target_link_libraries(VFSCAPIExample PRIVATE EntropyCore)
+  # VFS C API example (pure C)
+  add_executable(VFSCAPIExample Examples/VFSCAPIExample.c)
+  # Ensure C++ linker is used (C target linking against C++ library)
+  set_property(TARGET VFSCAPIExample PROPERTY LINKER_LANGUAGE CXX)
+  # Link core
+  target_link_libraries(VFSCAPIExample PRIVATE EntropyCore)
 
-# WorkGraph C API example (pure C)
-add_executable(WorkGraphCAPIExample Examples/WorkGraphCAPIExample.c)
-# Ensure C++ linker is used (C target linking against C++ library)
-set_property(TARGET WorkGraphCAPIExample PROPERTY LINKER_LANGUAGE CXX)
-# Link core
-target_link_libraries(WorkGraphCAPIExample PRIVATE EntropyCore)
+  # WorkGraph C API example (pure C)
+  add_executable(WorkGraphCAPIExample Examples/WorkGraphCAPIExample.c)
+  # Ensure C++ linker is used (C target linking against C++ library)
+  set_property(TARGET WorkGraphCAPIExample PROPERTY LINKER_LANGUAGE CXX)
+  # Link core
+  target_link_libraries(WorkGraphCAPIExample PRIVATE EntropyCore)
 
-add_executable(VirtualFileSystemExample Examples/VirtualFileSystemExample.cpp)
-target_link_libraries(VirtualFileSystemExample PRIVATE EntropyCore)
-# Avoid Windows min/max macro pollution
-if(WIN32)
-  target_compile_definitions(VirtualFileSystemExample PRIVATE NOMINMAX)
-endif()
+  add_executable(VirtualFileSystemExample Examples/VirtualFileSystemExample.cpp)
+  target_link_libraries(VirtualFileSystemExample PRIVATE EntropyCore)
+  # Avoid Windows min/max macro pollution
+  if(WIN32)
+    target_compile_definitions(VirtualFileSystemExample PRIVATE NOMINMAX)
+  endif()
 
-add_executable(VirtualFileStreamingExample Examples/VirtualFileStreamingExample.cpp)
-target_link_libraries(VirtualFileStreamingExample PRIVATE EntropyCore)
-if(WIN32)
-  target_compile_definitions(VirtualFileStreamingExample PRIVATE NOMINMAX)
-endif()
+  add_executable(VirtualFileStreamingExample Examples/VirtualFileStreamingExample.cpp)
+  target_link_libraries(VirtualFileStreamingExample PRIVATE EntropyCore)
+  if(WIN32)
+    target_compile_definitions(VirtualFileStreamingExample PRIVATE NOMINMAX)
+  endif()
 
-# Focused VFS examples (PR3)
-add_executable(VFS_Basics Examples/VFS_Basics.cpp)
-target_link_libraries(VFS_Basics PRIVATE EntropyCore)
+  # Focused VFS examples (PR3)
+  add_executable(VFS_Basics Examples/VFS_Basics.cpp)
+  target_link_libraries(VFS_Basics PRIVATE EntropyCore)
 
-add_executable(VFS_LinesAndBatch Examples/VFS_LinesAndBatch.cpp)
-target_link_libraries(VFS_LinesAndBatch PRIVATE EntropyCore)
+  add_executable(VFS_LinesAndBatch Examples/VFS_LinesAndBatch.cpp)
+  target_link_libraries(VFS_LinesAndBatch PRIVATE EntropyCore)
 
-add_executable(VFS_Streams Examples/VFS_Streams.cpp)
-target_link_libraries(VFS_Streams PRIVATE EntropyCore)
+  add_executable(VFS_Streams Examples/VFS_Streams.cpp)
+  target_link_libraries(VFS_Streams PRIVATE EntropyCore)
 
-add_executable(VFS_CopyMove Examples/VFS_CopyMove.cpp)
-target_link_libraries(VFS_CopyMove PRIVATE EntropyCore)
+  add_executable(VFS_CopyMove Examples/VFS_CopyMove.cpp)
+  target_link_libraries(VFS_CopyMove PRIVATE EntropyCore)
 
-add_executable(VFS_Metadata Examples/VFS_Metadata.cpp)
-target_link_libraries(VFS_Metadata PRIVATE EntropyCore)
-# EntropyMain C ABI example
-add_executable(EntropyMainExample Examples/EntropyMainExample.c)
-# Ensure C++ linker is used (C target linking against C++ library)
-set_property(TARGET EntropyMainExample PROPERTY LINKER_LANGUAGE CXX)
-# Link core
-target_link_libraries(EntropyMainExample PRIVATE EntropyCore)
+  add_executable(VFS_Metadata Examples/VFS_Metadata.cpp)
+  target_link_libraries(VFS_Metadata PRIVATE EntropyCore)
+  # EntropyMain C ABI example
+  add_executable(EntropyMainExample Examples/EntropyMainExample.c)
+  # Ensure C++ linker is used (C target linking against C++ library)
+  set_property(TARGET EntropyMainExample PROPERTY LINKER_LANGUAGE CXX)
+  # Link core
+  target_link_libraries(EntropyMainExample PRIVATE EntropyCore)
 
-# C++ EntropyApplication/Delegate example
-add_executable(EntropyCppAppExample Examples/EntropyCppAppExample.cpp)
-target_link_libraries(EntropyCppAppExample PRIVATE EntropyCore)
+  # C++ EntropyApplication/Delegate example
+  add_executable(EntropyCppAppExample Examples/EntropyCppAppExample.cpp)
+  target_link_libraries(EntropyCppAppExample PRIVATE EntropyCore)
 
-# Link Tracy to examples if available
-if(ENTROPY_WITH_TRACY)
-  if(TARGET Tracy::TracyClient)
-    target_link_libraries(WorkContractExample PRIVATE Tracy::TracyClient)
-    target_link_libraries(WorkGraphYieldableExample PRIVATE Tracy::TracyClient)
-    target_link_libraries(EntropyObjectExample PRIVATE Tracy::TracyClient)
-    target_link_libraries(EntropyObjectHandleExample PRIVATE Tracy::TracyClient)
+  # Link Tracy to examples if available
+  if(ENTROPY_WITH_TRACY)
+    if(TARGET Tracy::TracyClient)
+      target_link_libraries(WorkContractExample PRIVATE Tracy::TracyClient)
+      target_link_libraries(WorkGraphYieldableExample PRIVATE Tracy::TracyClient)
+      target_link_libraries(EntropyObjectExample PRIVATE Tracy::TracyClient)
+      target_link_libraries(EntropyObjectHandleExample PRIVATE Tracy::TracyClient)
+    endif()
   endif()
 endif()
 
