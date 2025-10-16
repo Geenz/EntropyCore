@@ -18,18 +18,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup vcpkg (manifest mode with cache)
-        uses: microsoft/vcpkg-action@v1
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11
         with:
-          # Enable cache to speed up dependency restore between runs
-          cache: true
+          vcpkgGitCommitId: 'c59b04f668d20c7dd83f478835e8266a3cc51270'
 
       - name: Configure CMake (VS 2022, x64, Debug)
         run: >
           cmake -S . -B build
           -G "Visual Studio 17 2022" -A x64
           -DENTROPY_ENABLE_TESTS=ON
-          -DCMAKE_TOOLCHAIN_FILE="${{ env.VCPKG_ROOT }}\\scripts\\buildsystems\\vcpkg.cmake"
+          -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
 
       - name: Build tests (Debug)
         run: cmake --build build --config Debug --target EntropyCoreTests
@@ -69,16 +68,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ninja-build g++ cmake
 
-      - name: Setup vcpkg (manifest mode with cache)
-        uses: microsoft/vcpkg-action@v1
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11
         with:
-          cache: true
+          vcpkgGitCommitId: 'c59b04f668d20c7dd83f478835e8266a3cc51270'
 
       - name: Configure CMake (Ninja, Debug)
         run: >
           cmake -S . -B build -G Ninja
           -DENTROPY_ENABLE_TESTS=ON
-          -DCMAKE_TOOLCHAIN_FILE="${{ env.VCPKG_ROOT }}/scripts/buildsystems/vcpkg.cmake"
+          -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
 
       - name: Build tests
         run: cmake --build build --target EntropyCoreTests
@@ -118,19 +117,19 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ninja-build clang-18 lld-18 cmake
 
-      - name: Setup vcpkg (manifest mode with cache)
-        uses: microsoft/vcpkg-action@v1
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11
         with:
-          cache: true
+          vcpkgGitCommitId: 'c59b04f668d20c7dd83f478835e8266a3cc51270'
 
       - name: Configure CMake (Ninja, Debug, Clang 18)
         env:
           CC: clang-18
           CXX: clang++-18
         run: >
-          cmake -S . -B build -G Ninja \
-          -DENTROPY_ENABLE_TESTS=ON \
-          -DCMAKE_TOOLCHAIN_FILE="${{ env.VCPKG_ROOT }}/scripts/buildsystems/vcpkg.cmake"
+          cmake -S . -B build -G Ninja
+          -DENTROPY_ENABLE_TESTS=ON
+          -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
 
       - name: Build tests
         run: cmake --build build --target EntropyCoreTests
@@ -170,17 +169,17 @@ jobs:
           brew update
           brew install ninja
 
-      - name: Setup vcpkg (manifest mode with cache)
-        uses: microsoft/vcpkg-action@v1
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11
         with:
-          cache: true
+          vcpkgGitCommitId: 'c59b04f668d20c7dd83f478835e8266a3cc51270'
 
       - name: Configure CMake (Ninja, Debug, Universal)
         run: >
           cmake -S . -B build -G Ninja
           -DENTROPY_ENABLE_TESTS=ON
           -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64"
-          -DCMAKE_TOOLCHAIN_FILE="${{ env.VCPKG_ROOT }}/scripts/buildsystems/vcpkg.cmake"
+          -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
       
       - name: Build tests
         run: cmake --build build --target EntropyCoreTests
