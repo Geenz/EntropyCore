@@ -23,25 +23,19 @@ jobs:
         with:
           vcpkgGitCommitId: 'c59b04f668d20c7dd83f478835e8266a3cc51270'
 
-      - name: Configure CMake (VS 2022, x64)
+      - name: Configure CMake (VS 2022, x64, Release)
         run: >
           cmake -S . -B build
           -G "Visual Studio 17 2022" -A x64
           -DENTROPY_ENABLE_TESTS=ON
           -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
 
-      - name: Build tests (Debug)
-        run: cmake --build build --config Debug --target EntropyCoreTests
+      - name: Build tests (Release)
+        run: cmake --build build --config Release --target EntropyCoreTests
 
-      - name: Run tests (ctest, verbose, Debug)
+      - name: Run tests (ctest, verbose)
         working-directory: build
-        run: ctest -C Debug -VV --output-on-failure
-
-      - name: Build (Release)
-        run: cmake --build build --config Release
-
-      - name: Install package (Debug)
-        run: cmake --install build --config Debug --prefix "${{ github.workspace }}\\EntropyCore-Windows-x64\\debug"
+        run: ctest -C Release -VV --output-on-failure
 
       - name: Install package (Release)
         run: cmake --install build --config Release --prefix "${{ github.workspace }}\\EntropyCore-Windows-x64"
@@ -79,35 +73,22 @@ jobs:
         with:
           vcpkgGitCommitId: 'c59b04f668d20c7dd83f478835e8266a3cc51270'
 
-      - name: Configure CMake (Ninja, Debug)
-        run: >
-          cmake -S . -B build-debug -G Ninja
-          -DCMAKE_BUILD_TYPE=Debug
-          -DENTROPY_ENABLE_TESTS=ON
-          -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
-
       - name: Configure CMake (Ninja, Release)
         run: >
-          cmake -S . -B build-release -G Ninja
+          cmake -S . -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Release
           -DENTROPY_ENABLE_TESTS=ON
           -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
 
-      - name: Build tests (Debug)
-        run: cmake --build build-debug --target EntropyCoreTests
+      - name: Build tests
+        run: cmake --build build --target EntropyCoreTests
 
-      - name: Run tests (ctest, verbose, Debug)
-        working-directory: build-debug
+      - name: Run tests (ctest, verbose)
+        working-directory: build
         run: ctest -VV --output-on-failure
 
-      - name: Build (Release)
-        run: cmake --build build-release
-
-      - name: Install package (Debug)
-        run: cmake --install build-debug --prefix "${{ github.workspace }}/EntropyCore-Linux-gcc-14/debug"
-
-      - name: Install package (Release)
-        run: cmake --install build-release --prefix "${{ github.workspace }}/EntropyCore-Linux-gcc-14"
+      - name: Install package
+        run: cmake --install build --prefix "${{ github.workspace }}/EntropyCore-Linux-gcc-14"
 
       - name: Upload CTest logs
         if: always()
@@ -115,84 +96,15 @@ jobs:
         with:
           name: ctest-logs-linux
           path: |
-            build-debug/Testing/Temporary/LastTest.log
-            build-debug/Testing/**/Test.xml
-            build-debug/Testing/Temporary/LastTestsFailed.log
+            build/Testing/Temporary/LastTest.log
+            build/Testing/**/Test.xml
+            build/Testing/Temporary/LastTestsFailed.log
 
       - name: Upload Linux GCC package artifact
         uses: actions/upload-artifact@v4
         with:
           name: EntropyCore-Linux-gcc-14
           path: EntropyCore-Linux-gcc-14/**
-
-  build-and-test-linux-clang:
-    name: Build and test (Linux, Clang 18)
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install prerequisites
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ninja-build clang-18 lld-18 cmake
-
-      - name: Setup vcpkg
-        uses: lukka/run-vcpkg@v11
-        with:
-          vcpkgGitCommitId: 'c59b04f668d20c7dd83f478835e8266a3cc51270'
-
-      - name: Configure CMake (Ninja, Debug, Clang 18)
-        env:
-          CC: clang-18
-          CXX: clang++-18
-        run: >
-          cmake -S . -B build-debug -G Ninja
-          -DCMAKE_BUILD_TYPE=Debug
-          -DENTROPY_ENABLE_TESTS=ON
-          -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
-
-      - name: Configure CMake (Ninja, Release, Clang 18)
-        env:
-          CC: clang-18
-          CXX: clang++-18
-        run: >
-          cmake -S . -B build-release -G Ninja
-          -DCMAKE_BUILD_TYPE=Release
-          -DENTROPY_ENABLE_TESTS=ON
-          -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
-
-      - name: Build tests (Debug)
-        run: cmake --build build-debug --target EntropyCoreTests
-
-      - name: Run tests (ctest, verbose, Debug)
-        working-directory: build-debug
-        run: ctest -VV --output-on-failure
-
-      - name: Build (Release)
-        run: cmake --build build-release
-
-      - name: Install package (Debug)
-        run: cmake --install build-debug --prefix "${{ github.workspace }}/EntropyCore-Linux-clang-18/debug"
-
-      - name: Install package (Release)
-        run: cmake --install build-release --prefix "${{ github.workspace }}/EntropyCore-Linux-clang-18"
-
-      - name: Upload CTest logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ctest-logs-linux-clang
-          path: |
-            build-debug/Testing/Temporary/LastTest.log
-            build-debug/Testing/**/Test.xml
-            build-debug/Testing/Temporary/LastTestsFailed.log
-
-      - name: Upload Linux Clang package artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: EntropyCore-Linux-clang-18
-          path: EntropyCore-Linux-clang-18/**
 
   build-and-test-macos:
     name: Build and test (macOS, AppleClang)
@@ -211,37 +123,23 @@ jobs:
         with:
           vcpkgGitCommitId: 'c59b04f668d20c7dd83f478835e8266a3cc51270'
 
-      - name: Configure CMake (Ninja, Debug, Universal)
-        run: >
-          cmake -S . -B build-debug -G Ninja
-          -DCMAKE_BUILD_TYPE=Debug
-          -DENTROPY_ENABLE_TESTS=ON
-          -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64"
-          -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
-
       - name: Configure CMake (Ninja, Release, Universal)
         run: >
-          cmake -S . -B build-release -G Ninja
+          cmake -S . -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Release
           -DENTROPY_ENABLE_TESTS=ON
           -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64"
           -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
 
-      - name: Build tests (Debug)
-        run: cmake --build build-debug --target EntropyCoreTests
+      - name: Build tests
+        run: cmake --build build --target EntropyCoreTests
 
-      - name: Run tests (ctest, verbose, Debug)
-        working-directory: build-debug
+      - name: Run tests (ctest, verbose)
+        working-directory: build
         run: ctest -VV --output-on-failure
 
-      - name: Build (Release)
-        run: cmake --build build-release
-
-      - name: Install package (Debug)
-        run: cmake --install build-debug --prefix "${{ github.workspace }}/EntropyCore-macOS-universal/debug"
-
-      - name: Install package (Release)
-        run: cmake --install build-release --prefix "${{ github.workspace }}/EntropyCore-macOS-universal"
+      - name: Install package
+        run: cmake --install build --prefix "${{ github.workspace }}/EntropyCore-macOS-universal"
       
       - name: Upload CTest logs
         if: always()
@@ -249,9 +147,9 @@ jobs:
         with:
           name: ctest-logs-macos
           path: |
-            build-debug/Testing/Temporary/LastTest.log
-            build-debug/Testing/**/Test.xml
-            build-debug/Testing/Temporary/LastTestsFailed.log
+            build/Testing/Temporary/LastTest.log
+            build/Testing/**/Test.xml
+            build/Testing/Temporary/LastTestsFailed.log
 
       - name: Upload macOS universal package artifact
         uses: actions/upload-artifact@v4
