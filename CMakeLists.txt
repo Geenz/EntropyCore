@@ -13,7 +13,8 @@ project(EntropyCore
 )
 
 # Options
-option(BUILD_SHARED_LIBS "Build as a shared library" OFF)
+# EntropyCore MUST ALWAYS be built as a static library - shared linking is not supported
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "EntropyCore only supports static linking" FORCE)
 # New unified toggle for tests. Prefer this over ENTROPY_BUILD_TESTS.
 option(ENTROPY_ENABLE_TESTS "Enable/build tests for EntropyCore" OFF)
 # Make building examples optional (disabled by default, e.g., for CI/CD)
@@ -178,8 +179,8 @@ list(APPEND ENTROPY_C_API_HEADERS ${ENTROPY_VFS_C_API_HEADERS})
 list(APPEND ENTROPY_CORE_SOURCES ${ENTROPY_C_API_SOURCES})
 list(APPEND ENTROPY_CORE_HEADERS ${ENTROPY_C_API_HEADERS})
 
-# Create the core library
-add_library(EntropyCore)
+# Create the core library (STATIC only - shared libs are not supported)
+add_library(EntropyCore STATIC)
 target_sources(EntropyCore
     PRIVATE
         ${ENTROPY_CORE_SOURCES}
@@ -210,10 +211,7 @@ target_link_libraries(EntropyCore
 
 # Define for export macros when building the library
 target_compile_definitions(EntropyCore PRIVATE ENTROPYCORE_BUILDING)
-# Define if building shared library to enable dllexport/dllimport in headers
-if(BUILD_SHARED_LIBS)
-    target_compile_definitions(EntropyCore PUBLIC ENTROPYCORE_SHARED)
-endif()
+# EntropyCore is always static - no ENTROPYCORE_SHARED definition needed
 
 # Link Tracy if enabled and available
 if(ENTROPY_WITH_TRACY)
