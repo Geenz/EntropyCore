@@ -107,7 +107,12 @@ jobs:
         run: cmake --build build-debug
 
       - name: Install package (Debug)
-        run: cmake --install build-debug --prefix "${{ github.workspace }}/EntropyCore-Linux-gcc-14"
+        run: cmake --install build-debug --prefix "${{ github.workspace }}/EntropyCore-Linux-gcc-14/debug"
+
+      - name: Restructure debug files for vcpkg
+        run: |
+          cd "${{ github.workspace }}/EntropyCore-Linux-gcc-14/debug"
+          rm -rf include share
 
       - name: Upload CTest logs
         if: always()
@@ -172,7 +177,12 @@ jobs:
         run: cmake --build build-debug
 
       - name: Install package (Debug)
-        run: cmake --install build-debug --prefix "${{ github.workspace }}/EntropyCore-macOS-universal"
+        run: cmake --install build-debug --prefix "${{ github.workspace }}/EntropyCore-macOS-universal/debug"
+
+      - name: Restructure debug files for vcpkg
+        run: |
+          cd "${{ github.workspace }}/EntropyCore-macOS-universal/debug"
+          rm -rf include share
       
       - name: Upload CTest logs
         if: always()
