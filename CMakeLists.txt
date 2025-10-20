@@ -126,9 +126,15 @@ set(ENTROPY_CORE_HEADERS
         src/Concurrency/RandomScheduler.h
         src/Concurrency/RoundRobinScheduler.h
         src/VirtualFileSystem/VirtualFileSystem.h
+        src/VirtualFileSystem/IFileSystemBackend.h
+        src/VirtualFileSystem/LocalFileSystemBackend.h
         src/VirtualFileSystem/FileOperationHandle.h
         src/VirtualFileSystem/FileHandle.h
         src/VirtualFileSystem/DirectoryHandle.h
+        src/VirtualFileSystem/FileStream.h
+        src/VirtualFileSystem/WriteBatch.h
+        src/VirtualFileSystem/FileWatch.h
+        src/VirtualFileSystem/FileWatchManager.h
 )
 
 # C Concurrency API sources and headers
