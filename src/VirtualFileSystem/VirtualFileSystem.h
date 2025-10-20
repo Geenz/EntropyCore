@@ -161,6 +161,55 @@ public:
      */
     std::shared_ptr<IFileSystemBackend> getDefaultBackend() const;
 
+    /**
+     * @brief Submit async work to VFS WorkContractGroup (for backends)
+     *
+     * Third-party backends can use this method to schedule async operations through the VFS's
+     * WorkContractGroup instead of spawning their own threads. The body lambda receives OpState&
+     * to populate results and must call state.complete() when done.
+     *
+     * Example usage in a backend:
+     * @code
+     * FileOperationHandle MyBackend::readFile(const std::string& path, ReadOptions options) {
+     *     return _vfs->submit(path, [this, options](auto& state, const std::string& p, const ExecContext&) {
+     *         // Fetch data asynchronously
+     *         state.bytes = fetchFromRemote(p, options);
+     *         state.complete(FileOpStatus::Complete);
+     *     });
+     * }
+     * @endcode
+     *
+     * @param path Path for the operation (used for diagnostics)
+     * @param body Lambda that populates OpState and calls complete()
+     * @return FileOperationHandle that will be completed when body finishes
+     */
+    FileOperationHandle submit(std::string path, std::function<void(FileOperationHandle::OpState&, const std::string&, const ExecContext&)> body) const;
+
+    /**
+     * @brief Get VFS configuration (for backends)
+     * @return Reference to VFS configuration
+     *
+     * Backends can check settings like defaultCreateParentDirs to respect VFS policy.
+     */
+    const Config& getConfig() const { return _cfg; }
+
+    /**
+     * @brief Get WorkContractGroup for advanced scheduling (for backends)
+     * @return Pointer to WorkContractGroup, may be null
+     *
+     * Backends can use this to detect same-group execution and avoid nested scheduling.
+     */
+    EntropyEngine::Core::Concurrency::WorkContractGroup* getWorkGroup() const { return _group; }
+
+    /**
+     * @brief Normalize path for consistent comparison (for backends)
+     * @param path Path to normalize
+     * @return Normalized path (canonical + case-insensitive on Windows)
+     *
+     * Backends can use this to normalize paths consistently with VFS locking.
+     */
+    std::string normalizePath(const std::string& path) const;
+
 private:
     using Group = EntropyEngine::Core::Concurrency::WorkContractGroup;
     Group* _group;
@@ -179,15 +228,10 @@ private:
 
     std::shared_ptr<FileOperationHandle::OpState> makeState() const { return std::make_shared<FileOperationHandle::OpState>(); }
 
-    // Path normalization for lock keys
-    std::string normalizePath(const std::string& path) const;
-    
     // Lock management
     std::shared_ptr<std::timed_mutex> lockForPath(const std::string& path) const;
     void evictOldLocks(std::chrono::steady_clock::time_point now) const;
 
-    FileOperationHandle submit(std::string path, std::function<void(FileOperationHandle::OpState&, const std::string&, const ExecContext&)> body) const;
-    
     // Centralized write-serialization submit used by FileHandle write paths
     /**
      * Executes a serialized write operation under backend scope or VFS advisory lock.
