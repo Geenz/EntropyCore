@@ -1,11 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
 
-# Set vcpkg triplet for macOS universal binaries
-if(APPLE AND NOT DEFINED VCPKG_TARGET_TRIPLET)
-    set(VCPKG_TARGET_TRIPLET "universal-osx" CACHE STRING "")
-    set(VCPKG_OVERLAY_TRIPLETS "${CMAKE_CURRENT_SOURCE_DIR}/triplets" CACHE STRING "")
-endif()
-
 project(EntropyCore 
     VERSION 1.0.0
     DESCRIPTION "Core utilities and concurrency primitives for Entropy Engine"

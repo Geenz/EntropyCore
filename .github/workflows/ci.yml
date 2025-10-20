@@ -147,52 +147,111 @@ jobs:
         with:
           vcpkgGitCommitId: 'c59b04f668d20c7dd83f478835e8266a3cc51270'
 
-      - name: Configure CMake (Ninja, Release, Universal)
+      # Build x64 Release
+      - name: Configure CMake (Ninja, Release, x64)
         run: >
-          cmake -S . -B build-release -G Ninja
+          cmake -S . -B build-release-x64 -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DENTROPY_ENABLE_TESTS=OFF
+          -DVCPKG_TARGET_TRIPLET=x64-osx
+          -DCMAKE_OSX_ARCHITECTURES=x86_64
+          -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
+
+      - name: Build (Release, x64)
+        run: cmake --build build-release-x64
+
+      - name: Install package (Release, x64)
+        run: cmake --install build-release-x64 --prefix "${{ github.workspace }}/install-x64"
+
+      # Build arm64 Release with tests
+      - name: Configure CMake (Ninja, Release, arm64)
+        run: >
+          cmake -S . -B build-release-arm64 -G Ninja
           -DCMAKE_BUILD_TYPE=Release
           -DENTROPY_ENABLE_TESTS=ON
-          -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64"
+          -DVCPKG_TARGET_TRIPLET=arm64-osx
+          -DCMAKE_OSX_ARCHITECTURES=arm64
           -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
 
-      - name: Build tests (Release)
-        run: cmake --build build-release --target EntropyCoreTests
+      - name: Build tests (Release, arm64)
+        run: cmake --build build-release-arm64 --target EntropyCoreTests
 
       - name: Run tests (ctest, verbose)
-        working-directory: build-release
+        working-directory: build-release-arm64
         run: ctest -VV --output-on-failure
 
-      - name: Install package (Release)
-        run: cmake --install build-release --prefix "${{ github.workspace }}/EntropyCore-macOS-universal"
+      - name: Install package (Release, arm64)
+        run: cmake --install build-release-arm64 --prefix "${{ github.workspace }}/install-arm64"
 
-      - name: Configure CMake (Ninja, Debug, Universal)
+      # Build x64 Debug
+      - name: Configure CMake (Ninja, Debug, x64)
         run: >
-          cmake -S . -B build-debug -G Ninja
+          cmake -S . -B build-debug-x64 -G Ninja
           -DCMAKE_BUILD_TYPE=Debug
           -DENTROPY_ENABLE_TESTS=OFF
-          -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64"
+          -DVCPKG_TARGET_TRIPLET=x64-osx
+          -DCMAKE_OSX_ARCHITECTURES=x86_64
           -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
 
-      - name: Build (Debug)
-        run: cmake --build build-debug
+      - name: Build (Debug, x64)
+        run: cmake --build build-debug-x64
 
-      - name: Install package (Debug)
-        run: cmake --install build-debug --prefix "${{ github.workspace }}/EntropyCore-macOS-universal/debug"
+      - name: Install package (Debug, x64)
+        run: cmake --install build-debug-x64 --prefix "${{ github.workspace }}/install-x64-debug"
 
-      - name: Restructure debug files for vcpkg
+      # Build arm64 Debug
+      - name: Configure CMake (Ninja, Debug, arm64)
+        run: >
+          cmake -S . -B build-debug-arm64 -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DENTROPY_ENABLE_TESTS=OFF
+          -DVCPKG_TARGET_TRIPLET=arm64-osx
+          -DCMAKE_OSX_ARCHITECTURES=arm64
+          -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
+
+      - name: Build (Debug, arm64)
+        run: cmake --build build-debug-arm64
+
+      - name: Install package (Debug, arm64)
+        run: cmake --install build-debug-arm64 --prefix "${{ github.workspace }}/install-arm64-debug"
+
+      # Create universal binaries with lipo
+      - name: Create universal binaries
         run: |
-          cd "${{ github.workspace }}/EntropyCore-macOS-universal/debug"
-          rm -rf include share
-      
+          mkdir -p "${{ github.workspace }}/EntropyCore-macOS-universal/lib"
+          mkdir -p "${{ github.workspace }}/EntropyCore-macOS-universal/debug/lib"
+
+          # Combine Release libraries
+          lipo -create \
+            "${{ github.workspace }}/install-x64/lib/libEntropyCore.a" \
+            "${{ github.workspace }}/install-arm64/lib/libEntropyCore.a" \
+            -output "${{ github.workspace }}/EntropyCore-macOS-universal/lib/libEntropyCore.a"
+
+          # Combine Debug libraries
+          lipo -create \
+            "${{ github.workspace }}/install-x64-debug/lib/libEntropyCore.a" \
+            "${{ github.workspace }}/install-arm64-debug/lib/libEntropyCore.a" \
+            -output "${{ github.workspace }}/EntropyCore-macOS-universal/debug/lib/libEntropyCore.a"
+
+          # Copy headers and cmake files from arm64 build (they're identical)
+          cp -r "${{ github.workspace }}/install-arm64/include" "${{ github.workspace }}/EntropyCore-macOS-universal/"
+          cp -r "${{ github.workspace }}/install-arm64/lib/cmake" "${{ github.workspace }}/EntropyCore-macOS-universal/lib/" || true
+
+          # Verify universal binaries
+          echo "Release library architectures:"
+          lipo -info "${{ github.workspace }}/EntropyCore-macOS-universal/lib/libEntropyCore.a"
+          echo "Debug library architectures:"
+          lipo -info "${{ github.workspace }}/EntropyCore-macOS-universal/debug/lib/libEntropyCore.a"
+
       - name: Upload CTest logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ctest-logs-macos
           path: |
-            build-release/Testing/Temporary/LastTest.log
-            build-release/Testing/**/Test.xml
-            build-release/Testing/Temporary/LastTestsFailed.log
+            build-release-arm64/Testing/Temporary/LastTest.log
+            build-release-arm64/Testing/**/Test.xml
+            build-release-arm64/Testing/Temporary/LastTestsFailed.log
 
       - name: Upload macOS universal package artifact
         uses: actions/upload-artifact@v4
