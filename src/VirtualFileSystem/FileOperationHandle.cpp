@@ -129,4 +129,10 @@ FileOperationHandle FileOperationHandle::immediate(FileOpStatus status) {
     return FileOperationHandle(state);
 }
 
+std::shared_ptr<FileOperationHandle::OpState> FileOperationHandle::makeState() {
+    return std::make_shared<OpState>();
+}
+
+FileOperationHandle::FileOperationHandle(std::shared_ptr<OpState> s) : _s(std::move(s)) {}
+
 } // namespace EntropyEngine::Core::IO

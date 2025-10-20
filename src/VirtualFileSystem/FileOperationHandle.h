@@ -110,7 +110,20 @@ public:
     // Factory for immediate completion (no async work needed)
     static FileOperationHandle immediate(FileOpStatus status);
 
-private:
+    /**
+     * @brief Shared state for file operations
+     *
+     * Third-party backends can create and populate OpState, then construct a FileOperationHandle
+     * using the same pattern as LocalFileSystemBackend:
+     *
+     * @code
+     * auto state = FileOperationHandle::makeState();
+     * // Populate state
+     * state->bytes = fetchData();
+     * state->complete(FileOpStatus::Complete);
+     * return FileOperationHandle(state);
+     * @endcode
+     */
     struct OpState {
         std::atomic<FileOpStatus> st{FileOpStatus::Pending};
         mutable std::mutex completionMutex;
@@ -128,7 +141,7 @@ private:
         std::optional<FileMetadata> metadata;  // for metadata queries
         std::vector<DirectoryEntry> directoryEntries;  // for directory listings
         std::vector<FileMetadata> metadataBatch;  // for batch metadata queries
-        
+
         void complete(FileOpStatus final) noexcept {
             {
                 std::lock_guard<std::mutex> lock(completionMutex);
@@ -137,8 +150,8 @@ private:
             }
             completionCV.notify_all();
         }
-        
-        void setError(FileError code, const std::string& msg, 
+
+        void setError(FileError code, const std::string& msg,
                      const std::string& path = "",
                      std::optional<std::error_code> ec = std::nullopt) {
             error.code = code;
@@ -148,8 +161,20 @@ private:
         }
     };
 
+    /**
+     * @brief Create a new OpState for backends to populate
+     * @return Shared pointer to OpState
+     */
+    static std::shared_ptr<OpState> makeState();
+
+    /**
+     * @brief Construct handle from OpState (for backends)
+     * @param s Shared pointer to populated OpState
+     */
+    explicit FileOperationHandle(std::shared_ptr<OpState> s);
+
+private:
     std::shared_ptr<OpState> _s;
-    explicit FileOperationHandle(std::shared_ptr<OpState> s) : _s(std::move(s)) {}
 
     friend class VirtualFileSystem;
     friend class FileHandle;
