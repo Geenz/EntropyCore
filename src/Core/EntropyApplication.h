@@ -65,6 +65,11 @@ public:
     void handleConsoleSignal(unsigned long ctrlType);
     // Signal-safe notification from console handler (sets flag and signals event)
     void notifyConsoleSignalFromHandler(unsigned long ctrlType) noexcept;
+#else
+    // Exposed for Unix signal handler forwarder
+    void handlePosixSignal(int signum);
+    // Signal-safe notification from signal handler
+    void notifyPosixSignalFromHandler(int signum) noexcept;
 #endif
 
 private:
@@ -73,6 +78,10 @@ private:
 
 #if defined(_WIN32)
     // Windows console control handling
+    void installSignalHandlers();
+    void uninstallSignalHandlers();
+#else
+    // Unix/POSIX signal handling
     void installSignalHandlers();
     void uninstallSignalHandlers();
 #endif
@@ -95,6 +104,13 @@ private:
     void* _ctrlEvent{nullptr};      // HANDLE, kept as void* to avoid windows.h in header (auto-reset)
     void* _terminateEvent{nullptr}; // HANDLE, kept as void* (manual-reset)
     std::atomic<unsigned long> _lastCtrlType{0};
+#else
+    std::atomic<bool> _handlersInstalled{false};
+    std::atomic<bool> _signalSeen{false};
+    std::atomic<bool> _escalationStarted{false};
+    // Unix signal handling internals
+    int _signalPipe[2]{-1, -1};     // Pipe for signal-safe notification
+    std::atomic<int> _lastSignal{0};
 #endif
 
     // Inline wait primitives (replacing EntropyRunLoop)
