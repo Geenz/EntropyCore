@@ -34,6 +34,7 @@ public:
     virtual bool applicationShouldTerminate() { return true; }
     virtual void applicationWillTerminate() {}
     virtual void applicationDidCatchUnhandledException(std::exception_ptr) {}
+    virtual void applicationMainLoop() {}
 };
 
 struct EntropyApplicationConfig {

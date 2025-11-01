@@ -118,6 +118,12 @@ int EntropyApplication::run() {
                     // Continue waiting afterwards
                     continue;
                 }
+                
+                // Run the main thread work service jobs.
+                _services.get<Concurrency::WorkService>()->executeMainThreadWork();
+
+                // Let the app delegate execute its main thread work.
+                if (_delegate) _delegate->applicationMainLoop();
             }
         }
     }
@@ -145,6 +151,12 @@ int EntropyApplication::run() {
                     int signum = _lastSignal.load(std::memory_order_relaxed);
                     handlePosixSignal(signum);
                 }
+
+                // Run the main thread work service jobs.
+                _services.get<Concurrency::WorkService>()->executeMainThreadWork();
+
+                // Let the app delegate execute its main thread work.
+                if (_delegate) _delegate->applicationMainLoop();
             }
         } else {
             // Fallback to condition_variable if signal handlers not installed
