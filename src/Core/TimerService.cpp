@@ -134,7 +134,9 @@ Timer TimerService::scheduleTimer(std::chrono::steady_clock::duration interval,
 
                 // For repeating timers, update fire time and reschedule
                 if (timerData->repeating && !timerData->cancelled.load(std::memory_order_acquire)) {
-                    timerData->fireTime = now + timerData->interval;
+                    // Use absolute time tracking to prevent drift accumulation
+                    // This ensures consistent intervals even if execution is delayed
+                    timerData->fireTime += timerData->interval;
                     return Concurrency::WorkResult::Yield;  // Reschedule
                 }
 

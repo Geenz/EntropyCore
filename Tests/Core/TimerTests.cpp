@@ -121,9 +121,10 @@ TEST_F(TimerServiceTest, RepeatingTimer_FiresMultipleTimes) {
     std::this_thread::sleep_for(250ms);
 
     // Should fire multiple times (at least 3-4 times)
+    // Upper bound should be tight now that we fixed timer drift accumulation
     int finalCount = count.load(std::memory_order_acquire);
     EXPECT_GE(finalCount, 3);
-    EXPECT_LE(finalCount, 6);  // Allow some scheduling variation
+    EXPECT_LE(finalCount, 6);  // 250ms / 50ms = 5 expected, allow ±1 for scheduling variance
 }
 
 TEST_F(TimerServiceTest, TimerCancellation_PreventsExecution) {
