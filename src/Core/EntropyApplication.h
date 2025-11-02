@@ -39,7 +39,6 @@ public:
 
 struct EntropyApplicationConfig {
     size_t workerThreads = 0; // 0 => auto
-    bool installSignalHandlers = false; // MVP: off by default for safety
     std::chrono::milliseconds shutdownDeadline{3000};
 };
 

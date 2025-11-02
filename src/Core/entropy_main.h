@@ -33,7 +33,6 @@ typedef struct EntropyAppDelegateC {
 // Runtime configuration for bootstrap
 typedef struct EntropyMainConfig {
     uint32_t worker_threads;          // 0 => auto
-    bool install_signal_handlers;     // MVP ignored for now
     uint32_t shutdown_deadline_ms;    // graceful drain window
 } EntropyMainConfig;
 

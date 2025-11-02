@@ -304,6 +304,10 @@ if(ENTROPY_BUILD_EXAMPLES)
   add_executable(EntropyCppAppExample Examples/EntropyCppAppExample.cpp)
   target_link_libraries(EntropyCppAppExample PRIVATE EntropyCore)
 
+  # Custom AppDelegate example with main thread work pump
+  add_executable(CustomAppDelegateExample Examples/CustomAppDelegateExample.cpp)
+  target_link_libraries(CustomAppDelegateExample PRIVATE EntropyCore)
+
   # Link Tracy to examples if available
   if(ENTROPY_WITH_TRACY)
     if(TARGET Tracy::TracyClient)
@@ -324,7 +328,7 @@ if(WIN32)
         # Optionally disable RTTI if requested
         if(ENTROPY_REQUIRE_NO_RTTI)
             target_compile_options(EntropyCore PRIVATE /GR-)
-            foreach(tgt IN ITEMS WorkContractExample WorkGraphYieldableExample EntropyObjectExample EntropyObjectHandleExample CInteropExample EntropyMainExample EntropyCppAppExample WorkGraphCAPIExample)
+            foreach(tgt IN ITEMS WorkContractExample WorkGraphYieldableExample EntropyObjectExample EntropyObjectHandleExample CInteropExample EntropyMainExample EntropyCppAppExample CustomAppDelegateExample WorkGraphCAPIExample)
                 if(TARGET ${tgt})
                     target_compile_options(${tgt} PRIVATE /GR-)
                 endif()
@@ -348,7 +352,7 @@ else()
     # Optionally disable RTTI if requested
     if(ENTROPY_REQUIRE_NO_RTTI)
         target_compile_options(EntropyCore PRIVATE -fno-rtti)
-        foreach(tgt IN ITEMS WorkContractExample WorkGraphYieldableExample EntropyObjectExample EntropyObjectHandleExample CInteropExample EntropyMainExample EntropyCppAppExample WorkGraphCAPIExample)
+        foreach(tgt IN ITEMS WorkContractExample WorkGraphYieldableExample EntropyObjectExample EntropyObjectHandleExample CInteropExample EntropyMainExample EntropyCppAppExample CustomAppDelegateExample WorkGraphCAPIExample)
             if(TARGET ${tgt})
                 target_compile_options(${tgt} PRIVATE -fno-rtti)
             endif()

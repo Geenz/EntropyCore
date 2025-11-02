@@ -32,7 +32,6 @@ static void did_catch(EntropyApp* app, void* userdata) {
 int main(void) {
     EntropyMainConfig cfg = {0};
     cfg.worker_threads = 0;            // auto
-    cfg.install_signal_handlers = true;
     cfg.shutdown_deadline_ms = 3000;
 
     EntropyAppDelegateC del = {0};

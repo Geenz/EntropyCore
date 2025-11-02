@@ -50,7 +50,7 @@ public:
                 // If this was the last contract to finish, request app termination
                 if (--remaining_ == 0) {
                     ENTROPY_LOG_INFO("[EntropyCppAppExample] All work completed; requesting terminate");
-                    EntropyApplication::shared().terminate(0);
+                    //EntropyApplication::shared().terminate(0);
                 }
             });
             if (handle.valid()) {
@@ -61,7 +61,6 @@ public:
         remaining_.store(scheduled, std::memory_order_relaxed);
         if (scheduled == 0) {
             // Nothing scheduled; terminate immediately
-            EntropyApplication::shared().terminate(0);
         }
     }
 
@@ -82,6 +81,11 @@ public:
     void applicationDidCatchUnhandledException(std::exception_ptr) override {
         ENTROPY_LOG_ERROR("[EntropyCppAppExample] Unhandled exception observed");
     }
+
+    void applicationMainLoop() override {
+        ENTROPY_LOG_INFO("[EntropyCppAppExample] applicationMainLoop");
+            EntropyApplication::shared().terminate(0);
+    }
 };
 
 int main() {
@@ -89,7 +93,6 @@ int main() {
 
     EntropyApplicationConfig cfg;
     cfg.workerThreads = 0; // auto
-    cfg.installSignalHandlers = false; // left off in this example
     cfg.shutdownDeadline = std::chrono::milliseconds(3000);
 
     app.configure(cfg);

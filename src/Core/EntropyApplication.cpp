@@ -74,9 +74,8 @@ int EntropyApplication::run() {
         // Manual-reset event signaled by terminate()
         _terminateEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     }
-    if (_cfg.installSignalHandlers) {
-        installSignalHandlers();
-    }
+    // Always install signal handlers
+    installSignalHandlers();
 #else
     // Create signal notification pipe for Unix
     if (_signalPipe[0] == -1) {
@@ -86,9 +85,8 @@ int EntropyApplication::run() {
             fcntl(_signalPipe[1], F_SETFL, O_NONBLOCK);
         }
     }
-    if (_cfg.installSignalHandlers) {
-        installSignalHandlers();
-    }
+    // Always install signal handlers
+    installSignalHandlers();
 #endif
 
     // Drive service lifecycle
@@ -114,70 +112,62 @@ int EntropyApplication::run() {
         DWORD count = 0;
         HANDLE termH = static_cast<HANDLE>(_terminateEvent);
         if (termH) { handles[count++] = termH; }
-        HANDLE ctrlH = _cfg.installSignalHandlers && _ctrlEvent ? static_cast<HANDLE>(_ctrlEvent) : nullptr;
+        HANDLE ctrlH = _ctrlEvent ? static_cast<HANDLE>(_ctrlEvent) : nullptr;
         if (ctrlH) { handles[count++] = ctrlH; }
-        // Always ensure we have at least the terminate event
-        if (count == 0) {
-            // Fallback to condition_variable if for some reason terminate event is missing
-            std::unique_lock<std::mutex> lk(_loopMutex);
-            _loopCv.wait(lk, [&]{ return _terminateRequested.load(std::memory_order_acquire); });
-        } else {
-            for (;;) {
-                DWORD w = WaitForMultipleObjects(count, handles, FALSE, INFINITE);
-                if (w == WAIT_OBJECT_0) {
-                    // terminateEvent signaled
-                    break;
-                }
-                if (count >= 2 && w == WAIT_OBJECT_0 + 1) {
-                    auto type = _lastCtrlType.load(std::memory_order_relaxed);
-                    handleConsoleSignal(type);
-                    // Continue waiting afterwards
-                    continue;
-                }
 
-                // Run the main thread work service jobs.
-                _services.get<Concurrency::WorkService>()->executeMainThreadWork();
-
-                // Let the app delegate execute its main thread work.
-                if (_delegate) _delegate->applicationMainLoop();
+        for (;;) {
+            // Wait with timeout to pump work regularly
+            DWORD w = WaitForMultipleObjects(count, handles, FALSE, 10); // 10ms timeout
+            if (w == WAIT_OBJECT_0) {
+                // terminateEvent signaled
+                break;
             }
+            if (count >= 2 && w == WAIT_OBJECT_0 + 1) {
+                auto type = _lastCtrlType.load(std::memory_order_relaxed);
+                handleConsoleSignal(type);
+                // Continue waiting afterwards
+                continue;
+            }
+
+            // Run the main thread work service jobs
+            if (auto workService = _services.get<Concurrency::WorkService>()) {
+                workService->executeMainThreadWork();
+            }
+
+            // Let the app delegate execute its main thread work
+            if (_delegate) _delegate->applicationMainLoop();
         }
     }
 #else
     {
-        // Unix wait loop with signal handling
-        if (_cfg.installSignalHandlers && _signalPipe[0] != -1) {
-            // Use poll() to wait on both condition variable and signal pipe
-            for (;;) {
-                if (_terminateRequested.load(std::memory_order_acquire)) {
-                    break;
-                }
-
-                // Check signal pipe with short timeout
-                struct pollfd pfd;
-                pfd.fd = _signalPipe[0];
-                pfd.events = POLLIN;
-                int ret = poll(&pfd, 1, 100); // 100ms timeout
-
-                if (ret > 0 && (pfd.revents & POLLIN)) {
-                    // Signal received - drain pipe and handle
-                    char buf[1];
-                    while (read(_signalPipe[0], buf, 1) > 0);
-
-                    int signum = _lastSignal.load(std::memory_order_relaxed);
-                    handlePosixSignal(signum);
-                }
-
-                // Run the main thread work service jobs.
-                _services.get<Concurrency::WorkService>()->executeMainThreadWork();
-
-                // Let the app delegate execute its main thread work.
-                if (_delegate) _delegate->applicationMainLoop();
+        // Unix wait loop with signal handling using poll()
+        for (;;) {
+            if (_terminateRequested.load(std::memory_order_acquire)) {
+                break;
             }
-        } else {
-            // Fallback to condition_variable if signal handlers not installed
-            std::unique_lock<std::mutex> lk(_loopMutex);
-            _loopCv.wait(lk, [&]{ return _terminateRequested.load(std::memory_order_acquire); });
+
+            // Check signal pipe with short timeout
+            struct pollfd pfd;
+            pfd.fd = _signalPipe[0];
+            pfd.events = POLLIN;
+            int ret = poll(&pfd, 1, 10); // 10ms timeout
+
+            if (ret > 0 && (pfd.revents & POLLIN)) {
+                // Signal received - drain pipe and handle
+                char buf[1];
+                while (read(_signalPipe[0], buf, 1) > 0);
+
+                int signum = _lastSignal.load(std::memory_order_relaxed);
+                handlePosixSignal(signum);
+            }
+
+            // Run the main thread work service jobs
+            if (auto workService = _services.get<Concurrency::WorkService>()) {
+                workService->executeMainThreadWork();
+            }
+
+            // Let the app delegate execute its main thread work
+            if (_delegate) _delegate->applicationMainLoop();
         }
     }
 #endif
@@ -187,17 +177,15 @@ int EntropyApplication::run() {
     _services.unloadAll();
 
 #if defined(_WIN32)
-    if (_cfg.installSignalHandlers) {
-        uninstallSignalHandlers();
-    }
+    // Always uninstall signal handlers
+    uninstallSignalHandlers();
     if (_terminateEvent) {
         CloseHandle(static_cast<HANDLE>(_terminateEvent));
         _terminateEvent = nullptr;
     }
 #else
-    if (_cfg.installSignalHandlers) {
-        uninstallSignalHandlers();
-    }
+    // Always uninstall signal handlers
+    uninstallSignalHandlers();
     if (_signalPipe[0] != -1) {
         close(_signalPipe[0]);
         _signalPipe[0] = -1;

@@ -42,7 +42,6 @@ int entropy_main_run(const EntropyMainConfig* cfg,
     EntropyEngine::Core::EntropyApplicationConfig cc{};
     if (cfg) {
         cc.workerThreads = cfg->worker_threads;
-        cc.installSignalHandlers = cfg->install_signal_handlers;
         cc.shutdownDeadline = std::chrono::milliseconds(cfg->shutdown_deadline_ms ? cfg->shutdown_deadline_ms : 3000);
     }
     app.configure(cc);
