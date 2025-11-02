@@ -84,7 +84,7 @@ public:
 
     void applicationMainLoop() override {
         ENTROPY_LOG_INFO("[EntropyCppAppExample] applicationMainLoop");
-            EntropyApplication::shared().terminate(0);
+        EntropyApplication::shared().terminate(0);
     }
 };
 

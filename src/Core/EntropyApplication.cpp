@@ -105,72 +105,62 @@ int EntropyApplication::run() {
     _services.startAll();
     if (_delegate) _delegate->applicationDidFinishLaunching();
 
-    // Wait until termination requested
+    // Spawn dedicated signal handler thread
+    // This thread waits for OS signals and handles termination requests
+    // while the main thread runs the application loop at full speed
+    std::jthread signalThread([this](std::stop_token stopToken) {
 #if defined(_WIN32)
-    {
-        HANDLE handles[2];
-        DWORD count = 0;
-        HANDLE termH = static_cast<HANDLE>(_terminateEvent);
-        if (termH) { handles[count++] = termH; }
-        HANDLE ctrlH = _ctrlEvent ? static_cast<HANDLE>(_ctrlEvent) : nullptr;
-        if (ctrlH) { handles[count++] = ctrlH; }
-
-        for (;;) {
-            // Wait with timeout to pump work regularly
-            DWORD w = WaitForMultipleObjects(count, handles, FALSE, 10); // 10ms timeout
-            if (w == WAIT_OBJECT_0) {
-                // terminateEvent signaled
-                break;
+        // Windows: wait on console control events
+        HANDLE ctrlH = static_cast<HANDLE>(_ctrlEvent);
+        while (!stopToken.stop_requested() && !_terminateRequested.load(std::memory_order_acquire)) {
+            if (ctrlH) {
+                DWORD w = WaitForSingleObject(ctrlH, 100); // 100ms timeout for responsiveness
+                if (w == WAIT_OBJECT_0) {
+                    auto type = _lastCtrlType.load(std::memory_order_relaxed);
+                    handleConsoleSignal(type);
+                }
+            } else {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
-            if (count >= 2 && w == WAIT_OBJECT_0 + 1) {
-                auto type = _lastCtrlType.load(std::memory_order_relaxed);
-                handleConsoleSignal(type);
-                // Continue waiting afterwards
-                continue;
-            }
-
-            // Run the main thread work service jobs
-            if (auto workService = _services.get<Concurrency::WorkService>()) {
-                workService->executeMainThreadWork();
-            }
-
-            // Let the app delegate execute its main thread work
-            if (_delegate) _delegate->applicationMainLoop();
         }
-    }
 #else
-    {
-        // Unix wait loop with signal handling using poll()
-        for (;;) {
-            if (_terminateRequested.load(std::memory_order_acquire)) {
-                break;
+        // Unix: wait on signal pipe
+        while (!stopToken.stop_requested() && !_terminateRequested.load(std::memory_order_acquire)) {
+            if (_signalPipe[0] != -1) {
+                struct pollfd pfd;
+                pfd.fd = _signalPipe[0];
+                pfd.events = POLLIN;
+                int ret = poll(&pfd, 1, 100); // 100ms timeout for responsiveness
+
+                if (ret > 0 && (pfd.revents & POLLIN)) {
+                    // Signal received - drain pipe and handle
+                    char buf[1];
+                    while (read(_signalPipe[0], buf, 1) > 0);
+
+                    int signum = _lastSignal.load(std::memory_order_relaxed);
+                    handlePosixSignal(signum);
+                }
+            } else {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
+        }
+#endif
+    });
 
-            // Check signal pipe with short timeout
-            struct pollfd pfd;
-            pfd.fd = _signalPipe[0];
-            pfd.events = POLLIN;
-            int ret = poll(&pfd, 1, 10); // 10ms timeout
+    // Main application loop - runs at full speed with no blocking waits
+    while (!_terminateRequested.load(std::memory_order_acquire)) {
+        // Execute all pending main thread work from the work service
+        if (auto workService = _services.get<Concurrency::WorkService>()) {
+            workService->executeMainThreadWork();
+        }
 
-            if (ret > 0 && (pfd.revents & POLLIN)) {
-                // Signal received - drain pipe and handle
-                char buf[1];
-                while (read(_signalPipe[0], buf, 1) > 0);
-
-                int signum = _lastSignal.load(std::memory_order_relaxed);
-                handlePosixSignal(signum);
-            }
-
-            // Run the main thread work service jobs
-            if (auto workService = _services.get<Concurrency::WorkService>()) {
-                workService->executeMainThreadWork();
-            }
-
-            // Let the app delegate execute its main thread work
-            if (_delegate) _delegate->applicationMainLoop();
+        // Let the application delegate run its per-frame logic
+        if (_delegate) {
+            _delegate->applicationMainLoop();
         }
     }
-#endif
+
+    // Signal handler thread will stop automatically via stop_token when signalThread goes out of scope
 
     if (_delegate) _delegate->applicationWillTerminate();
     _services.stopAll();
