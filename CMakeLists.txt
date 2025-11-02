@@ -78,6 +78,8 @@ set(ENTROPY_CORE_SOURCES
         src/Core/EntropyServiceRegistry.cpp
         src/Core/EntropyApplication.cpp
         src/Core/EntropyMain.cpp
+        src/Core/Timer.cpp
+        src/Core/TimerService.cpp
 )
 
 set(ENTROPY_CORE_HEADERS
@@ -94,6 +96,8 @@ set(ENTROPY_CORE_HEADERS
         src/Core/EntropyServiceRegistry.h
         src/Core/EntropyApplication.h
         src/Core/entropy_main.h
+        src/Core/Timer.h
+        src/Core/TimerService.h
         src/TypeSystem/GenericHandle.h
         src/TypeSystem/TypeID.h
         src/TypeSystem/Reflection.h
@@ -389,6 +393,7 @@ if(ENTROPY_BUILD_TESTS)
             Tests/Core/TypeSystemTests.cpp
             Tests/Core/SignalTreeTests.cpp
             Tests/Core/EntropyObjectTests.cpp
+            Tests/Core/TimerTests.cpp
     )
 
     # Concurrency tests

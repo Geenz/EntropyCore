@@ -249,27 +249,11 @@ namespace Concurrency {
                 
                 // Get current generation for handle before any modifications
                 uint32_t generation = slot.generation.load(std::memory_order_acquire);
-                
-                // Assign work into non-throwing wrapper; avoid exceptions entirely.
-                // We wrap the incoming callable to a noexcept thunk.
-                bool ok = slot.work.assign([fn = std::move(work)]() noexcept {
+
+                // Assign work with noexcept wrapper to ensure termination on exceptions
+                slot.work = [fn = std::move(work)]() noexcept {
                     if (fn) fn();
-                });
-                if (!ok) {
-                    // Allocation failed in wrapper; push slot back to free list and return invalid handle
-                    uint64_t old = _freeListHead.load(std::memory_order_acquire);
-                    for (;;) {
-                        uint32_t oldIdx = headIndex(old);
-                        slot.nextFree.store(oldIdx, std::memory_order_release);
-                        uint64_t newH = packHead(index, headTag(old) + 1);
-                        if (_freeListHead.compare_exchange_weak(old, newH,
-                                                                std::memory_order_acq_rel,
-                                                                std::memory_order_acquire)) {
-                            break;
-                        }
-                    }
-                    return WorkContractHandle();
-                }
+                };
                 slot.executionType = executionType;
                 
                 // Increment active count BEFORE making the slot visible as allocated.
@@ -678,7 +662,7 @@ namespace Concurrency {
         const bool isMainThread = (slot.executionType == ExecutionType::MainThread);
 
         // Drop work; we are not executing
-        slot.work.reset();
+        slot.work = nullptr;
 
         // Invalidate handles and free the slot
         slot.generation.fetch_add(1, std::memory_order_acq_rel);
@@ -841,7 +825,7 @@ namespace Concurrency {
         slot.generation.fetch_add(1, std::memory_order_acq_rel);
 
         // Clear the work function to release resources
-        slot.work.reset();
+        slot.work = nullptr;
 
         // Signal tree clearing strategy (triple-redundancy for correctness):
         // Layer 1: Primary clear immediately after selection (selectForExecution/selectForMainThreadExecution)

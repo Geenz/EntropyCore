@@ -9,6 +9,7 @@
 
 #include "Core/EntropyApplication.h"
 #include "Concurrency/WorkService.h"
+#include "Core/TimerService.h"
 #include <utility>
 #include <thread>
 #include <cstdlib>
@@ -53,6 +54,11 @@ void EntropyApplication::ensureCoreServices() {
         auto work = std::make_shared<Concurrency::WorkService>(wcfg);
         _services.registerService<Concurrency::WorkService>(work);
     }
+
+    if (!_services.has<TimerService>()) {
+        auto timer = std::make_shared<TimerService>();
+        _services.registerService<TimerService>(timer);
+    }
 }
 
 int EntropyApplication::run() {
@@ -87,6 +93,16 @@ int EntropyApplication::run() {
 
     // Drive service lifecycle
     _services.loadAll();
+
+    // Inject WorkService into TimerService before starting
+    if (_services.has<TimerService>()) {
+        auto timerService = _services.get<TimerService>();
+        auto workService = _services.get<Concurrency::WorkService>();
+        if (timerService && workService) {
+            timerService->setWorkService(workService.get());
+        }
+    }
+
     if (_delegate) _delegate->applicationWillFinishLaunching();
     _services.startAll();
     if (_delegate) _delegate->applicationDidFinishLaunching();
@@ -118,7 +134,7 @@ int EntropyApplication::run() {
                     // Continue waiting afterwards
                     continue;
                 }
-                
+
                 // Run the main thread work service jobs.
                 _services.get<Concurrency::WorkService>()->executeMainThreadWork();
 
