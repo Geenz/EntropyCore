@@ -125,6 +125,10 @@ TEST_F(TimerServiceTest, RepeatingTimer_FiresMultipleTimes) {
     int finalCount = count.load(std::memory_order_acquire);
     EXPECT_GE(finalCount, 3);
     EXPECT_LE(finalCount, 6);  // 250ms / 50ms = 5 expected, allow ±1 for scheduling variance
+
+    // Cancel timer and wait for in-flight executions before 'count' is destroyed
+    timer.invalidate();
+    std::this_thread::sleep_for(50ms);
 }
 
 TEST_F(TimerServiceTest, TimerCancellation_PreventsExecution) {
@@ -198,6 +202,15 @@ TEST_F(TimerServiceTest, MultipleTimers_ExecuteIndependently) {
     // Both repeating timers should have fired multiple times
     EXPECT_GE(count1.load(std::memory_order_acquire), 4);  // At least 4 times at 50ms intervals
     EXPECT_GE(count2.load(std::memory_order_acquire), 3);  // At least 3 times at 75ms intervals
+
+    // CRITICAL: Cancel timers and wait for in-flight executions to complete
+    // before local atomics (count1, count2) go out of scope
+    timer1.invalidate();
+    timer2.invalidate();
+
+    // Give any in-flight timer callbacks time to complete
+    // This prevents use-after-free when count1/count2 are destroyed
+    std::this_thread::sleep_for(50ms);
 }
 
 TEST_F(TimerServiceTest, MainThreadTimer_ExecutesOnMainThread) {
@@ -293,4 +306,8 @@ TEST_F(TimerServiceTest, VeryShortInterval_StillWorks) {
 
     // Should have fired many times
     EXPECT_GE(count.load(std::memory_order_acquire), 10);
+
+    // Cancel timer and wait for in-flight executions before 'count' is destroyed
+    timer.invalidate();
+    std::this_thread::sleep_for(10ms);
 }
