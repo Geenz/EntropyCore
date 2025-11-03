@@ -286,15 +286,14 @@ namespace Concurrency {
     }
 
     void WorkService::checkTimedDeferrals() {
-        // Check all work graphs for ready timed deferrals
+        // Check all work contract groups for ready timed deferrals
+        // WorkGraph overrides checkTimedDeferrals() to check its timer queue,
+        // while base WorkContractGroup returns 0 (no timers)
         size_t totalScheduled = 0;
         {
             std::shared_lock<std::shared_mutex> lock(_workContractGroupsMutex);
             for (auto* group : _workContractGroups) {
-                // Check if this group is a WorkGraph (which has timer support)
-                if (auto* workGraph = dynamic_cast<WorkGraph*>(group)) {
-                    totalScheduled += workGraph->checkTimedDeferrals();
-                }
+                totalScheduled += group->checkTimedDeferrals();
             }
         }
 

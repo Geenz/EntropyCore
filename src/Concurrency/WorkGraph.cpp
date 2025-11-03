@@ -190,7 +190,12 @@ WorkGraph::WorkGraph(WorkContractGroup* workContractGroup, const WorkGraphConfig
             }
         }
     });
-    
+
+    // Set up timed deferral callback to avoid dynamic_cast in WorkService
+    _workContractGroup->setTimedDeferralCallback([this]() {
+        return checkTimedDeferrals();
+    });
+
     // Register with debug system (can be disabled via config)
     if (_config.enableDebugRegistration) {
         Debug::DebugRegistry::getInstance().registerObject(this, "WorkGraph");
@@ -209,10 +214,11 @@ WorkGraph::~WorkGraph() {
     // Set destroyed flag to prevent new callbacks
     _destroyed.store(true, std::memory_order_release);
     
-    // Unregister capacity callback from WorkContractGroup first
+    // Unregister callbacks from WorkContractGroup first
     // This prevents new callbacks from being scheduled
     if (_workContractGroup) {
         _workContractGroup->removeOnCapacityAvailable(_capacityCallbackIt);
+        _workContractGroup->setTimedDeferralCallback(nullptr); // Clear timed deferral callback
     }
     
     // Wait for all active callbacks to complete

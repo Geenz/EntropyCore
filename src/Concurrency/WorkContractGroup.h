@@ -169,7 +169,10 @@ namespace Concurrency {
         
         // Stopping support
         std::atomic<bool> _stopping{false};              ///< Stopping flag
-        
+
+        // Timed deferral support (for WorkGraph timer integration)
+        std::function<size_t()> _timedDeferralCallback; ///< Callback for checking timed deferrals
+
     public:
         
         /**
@@ -575,11 +578,38 @@ namespace Concurrency {
         
         /**
          * @brief Remove a capacity available callback
-         * 
+         *
          * @param it Iterator returned from addOnCapacityAvailable
          */
         void removeOnCapacityAvailable(CapacityCallback it);
-        
+
+        /**
+         * @brief Checks for timed deferrals and schedules ready nodes
+         *
+         * Invokes the timed deferral callback if one is set (used by WorkGraph for timer support).
+         * Returns 0 if no callback is registered (standard WorkContractGroups don't support timers).
+         *
+         * @return Number of nodes that were scheduled from timed deferral queue
+         */
+        size_t checkTimedDeferrals() {
+            if (_timedDeferralCallback) {
+                return _timedDeferralCallback();
+            }
+            return 0;
+        }
+
+        /**
+         * @brief Sets a callback for checking timed deferrals
+         *
+         * Allows external owners (like WorkGraph) to provide timer functionality
+         * without requiring inheritance or RTTI/dynamic_cast.
+         *
+         * @param callback Function that checks and schedules timed deferrals, or nullptr to clear
+         */
+        void setTimedDeferralCallback(std::function<size_t()> callback) {
+            _timedDeferralCallback = std::move(callback);
+        }
+
     private:
         /**
          * @brief Creates a SignalTree sized appropriately for the given capacity

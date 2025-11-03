@@ -97,6 +97,14 @@ TEST_F(TimerServiceTest, OneShotTimer_Fires) {
     }
 
     EXPECT_TRUE(fired.load(std::memory_order_acquire));
+
+    // Cancel timer and wait for in-flight executions before 'fired' is destroyed
+    timer.invalidate();
+    start = std::chrono::steady_clock::now();
+    while (std::chrono::steady_clock::now() - start < 10ms) {
+        workService->executeMainThreadWork(10);
+        std::this_thread::sleep_for(1ms);
+    }
 }
 
 TEST_F(TimerServiceTest, OneShotTimer_DoesNotRepeat) {
@@ -117,6 +125,14 @@ TEST_F(TimerServiceTest, OneShotTimer_DoesNotRepeat) {
 
     // Should only fire once
     EXPECT_EQ(count.load(std::memory_order_acquire), 1);
+
+    // Cancel timer and wait for in-flight executions before 'count' is destroyed
+    timer.invalidate();
+    start = std::chrono::steady_clock::now();
+    while (std::chrono::steady_clock::now() - start < 10ms) {
+        workService->executeMainThreadWork(10);
+        std::this_thread::sleep_for(1ms);
+    }
 }
 
 TEST_F(TimerServiceTest, RepeatingTimer_FiresMultipleTimes) {
@@ -277,6 +293,14 @@ TEST_F(TimerServiceTest, MainThreadTimer_ExecutesOnMainThread) {
 
     EXPECT_TRUE(fired.load(std::memory_order_acquire));
     EXPECT_EQ(executionThreadId.load(std::memory_order_acquire), mainThreadId);
+
+    // Cancel timer and wait for in-flight executions before locals are destroyed
+    timer.invalidate();
+    start = std::chrono::steady_clock::now();
+    while (std::chrono::steady_clock::now() - start < 10ms) {
+        workService->executeMainThreadWork(10);
+        std::this_thread::sleep_for(1ms);
+    }
 }
 
 TEST_F(TimerServiceTest, TimerMove_TransfersOwnership) {
@@ -309,6 +333,13 @@ TEST_F(TimerServiceTest, TimerMove_TransfersOwnership) {
     timer2.invalidate();
 
     EXPECT_FALSE(timer2.isValid());
+
+    // Wait for in-flight executions before 'count' is destroyed
+    start = std::chrono::steady_clock::now();
+    while (std::chrono::steady_clock::now() - start < 10ms) {
+        workService->executeMainThreadWork(10);
+        std::this_thread::sleep_for(1ms);
+    }
 }
 
 TEST_F(TimerServiceTest, TimerDestruction_CancelsTimer) {
