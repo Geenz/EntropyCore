@@ -363,7 +363,9 @@ size_t NodeScheduler::processTimedDeferredNodes(size_t maxToSchedule) {
             readyNodes.push_back(_timedDeferredQueue.top());
             _timedDeferredQueue.pop();
 
-            // Check if we've hit the limit
+            // Check if we've hit the limit (0 means no limit)
+            // Note: maxToSchedule is size_t (unsigned), so negative values from external APIs
+            // would wrap to large positive values - treated as effectively unlimited
             if (maxToSchedule > 0 && readyNodes.size() >= maxToSchedule) {
                 break;
             }
