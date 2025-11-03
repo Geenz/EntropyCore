@@ -483,12 +483,13 @@ private:
         NodeHandle node;
         std::chrono::steady_clock::time_point wakeTime;
 
-        bool operator>(const TimedNode& other) const {
-            return wakeTime > other.wakeTime;  // Min-heap: earliest wake time at top
+        // Inverted comparison: later times have lower priority, creating min-heap (earliest at top)
+        bool operator<(const TimedNode& other) const {
+            return wakeTime > other.wakeTime;
         }
     };
     mutable std::shared_mutex _timedDeferredMutex;  ///< Reader-writer lock for timed deferred queue
-    std::priority_queue<TimedNode, std::vector<TimedNode>, std::greater<>> _timedDeferredQueue;  ///< Min-heap sorted by wake time
+    std::priority_queue<TimedNode> _timedDeferredQueue;  ///< Min-heap sorted by wake time (earliest first)
 
     // Statistics
     mutable std::mutex _statsMutex;           ///< Protects statistics (separate to reduce contention)
