@@ -21,6 +21,10 @@ using namespace std::chrono_literals;
 class TimerServiceTest : public ::testing::Test {
 protected:
     void SetUp() override {
+        // NOTE: Timer tests are timing-sensitive and may exhibit platform-specific behavior
+        // in resource-constrained CI environments due to thread scheduling variability.
+        // Windows requires longer drain times (200ms) vs Unix (50ms) for reliable cleanup.
+
         // Create WorkService
         WorkService::Config workConfig;
         workConfig.threadCount = 2;
@@ -42,39 +46,74 @@ protected:
     }
 
     void TearDown() override {
-        // Stop services
-        if (timerService) {
-            timerService->stop();
-            timerService->unload();
-        }
-        if (workService) {
-            workService->stop();
-            workService->unload();
-        }
+        try {
+            // Stop services
+            if (timerService) {
+                timerService->stop();
+                timerService->unload();
+            }
+            if (workService) {
+                workService->stop();
+                workService->unload();
+            }
 
-        // CRITICAL: Extra safety drain before destroying services
-        //
-        // CI environments are often resource-constrained with:
-        // - High CPU contention (multiple builds running in parallel)
-        // - Slower/virtualized hardware
-        // - Variable scheduling latency
-        // - Shared system resources
-        //
-        // This causes timing-related tests to be "wonky" because:
-        // 1. Thread scheduling is less predictable
-        // 2. Small sleep durations may wake much later than requested
-        // 3. Work that should complete in 10ms might take 50ms+
-        // 4. Race conditions that rarely manifest locally become common
-        //
-        // This drain period gives lingering timer callbacks time to complete
-        // before we destroy the test fixture, preventing use-after-free crashes.
-        auto drainStart = std::chrono::steady_clock::now();
-        while (std::chrono::steady_clock::now() - drainStart < 50ms) {
-            std::this_thread::sleep_for(5ms);
-        }
+            // CRITICAL: Extra safety drain before destroying services
+            //
+            // CI environments are often resource-constrained with:
+            // - High CPU contention (multiple builds running in parallel)
+            // - Slower/virtualized hardware
+            // - Variable scheduling latency
+            // - Shared system resources
+            //
+            // This causes timing-related tests to be "wonky" because:
+            // 1. Thread scheduling is less predictable
+            // 2. Small sleep durations may wake much later than requested
+            // 3. Work that should complete in 10ms might take 50ms+
+            // 4. Race conditions that rarely manifest locally become common
+            //
+            // This drain period gives lingering timer callbacks time to complete
+            // before we destroy the test fixture, preventing use-after-free crashes.
+            // Must pump main thread work to ensure callbacks execute properly.
+            //
+            // Platform-specific drain times: Windows requires significantly longer (200ms)
+            // due to different thread scheduling characteristics that delay callback completion.
+            // Unix systems (macOS, Linux) complete callbacks faster and only need 50ms.
+#ifdef _WIN32
+            constexpr auto drainTime = 200ms;  // Windows: slower callback completion
+#else
+            constexpr auto drainTime = 50ms;   // Unix: faster callback completion
+#endif
+            auto drainStart = std::chrono::steady_clock::now();
+            while (std::chrono::steady_clock::now() - drainStart < drainTime) {
+                workService->executeMainThreadWork(10);
+                std::this_thread::sleep_for(5ms);
+            }
 
-        timerService.reset();
-        workService.reset();
+            timerService.reset();
+            workService.reset();
+        } catch (const std::exception& e) {
+            // Log timing-sensitive test cleanup failure
+            // These tests may fail in CI environments due to thread scheduling variability
+            ADD_FAILURE() << "Timer test TearDown failed (timing-sensitive test on CI): " << e.what();
+
+            // Attempt cleanup anyway to prevent resource leaks
+            try {
+                timerService.reset();
+                workService.reset();
+            } catch (...) {
+                // Suppress secondary exceptions during cleanup
+            }
+        } catch (...) {
+            ADD_FAILURE() << "Timer test TearDown failed with unknown exception (timing-sensitive test on CI)";
+
+            // Attempt cleanup anyway
+            try {
+                timerService.reset();
+                workService.reset();
+            } catch (...) {
+                // Suppress secondary exceptions during cleanup
+            }
+        }
     }
 
     // Helper to pump timer system - checks for ready timers

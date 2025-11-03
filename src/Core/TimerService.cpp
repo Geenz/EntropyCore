@@ -250,7 +250,7 @@ void TimerService::restartPumpContract() {
         if (_workContractGroup) {
             // Lock the weak_ptr to ensure pump function is still alive
             auto pumpFunction = weakPump.lock();
-            if (!pumpFunction) return; // Already destroyed, stop rescheduling
+            if (!pumpFunction) return; // Pump function released during shutdown, stop rescheduling
 
             _pumpContractHandle = _workContractGroup->createContract(
                 *pumpFunction,
