@@ -262,6 +262,10 @@ private:
     // Smart pump contract - only reschedules when active timers exist
     mutable std::mutex _pumpContractMutex;
     Concurrency::WorkContractHandle _pumpContractHandle;
+
+    // Synchronous cleanup: pump holds execution mutex while running
+    std::mutex _pumpExecutionMutex;
+    std::atomic<bool> _pumpShouldStop{false};
 };
 
 } // namespace Core
