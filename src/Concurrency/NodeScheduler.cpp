@@ -249,14 +249,14 @@ std::function<void()> NodeScheduler::createWorkWrapper(NodeHandle node) {
                     if (result.result == WorkResult::Yield) {
                         yielded = true;
                     } else if (result.result == WorkResult::YieldUntil && result.wakeTime) {
-                        // Validate that wake time is in the future
+                        // Validate that wake time is in the future or current
                         auto now = std::chrono::steady_clock::now();
-                        if (*result.wakeTime > now) {
-                            // Future time - defer until then
+                        if (*result.wakeTime >= now) {
+                            // Future or current time - defer until then
                             yieldedUntil = true;
                             wakeTime = *result.wakeTime;
                         } else {
-                            // Past or current time - treat as immediate yield
+                            // Past time - treat as immediate yield
                             yielded = true;
                         }
                     }
@@ -377,12 +377,28 @@ size_t NodeScheduler::processTimedDeferredNodes(size_t maxToSchedule) {
 
     // Schedule the ready nodes
     size_t scheduled = 0;
-    for (const auto& node : readyNodes) {
-        if (scheduleNode(node)) {
+    bool hitCapacity = false;
+    for (size_t i = 0; i < readyNodes.size(); ++i) {
+        if (scheduleNode(readyNodes[i])) {
             scheduled++;
         } else {
-            // Scheduling failed - node was re-deferred or dropped
-            break;  // Stop if we hit capacity
+            // Scheduling failed - hit capacity
+            // Re-defer remaining nodes back to timed queue to prevent dropping
+            hitCapacity = true;
+
+            // Re-enqueue this node and all remaining nodes
+            std::lock_guard<std::shared_mutex> lock(_timedDeferredMutex);
+            for (size_t j = i; j < readyNodes.size(); ++j) {
+                auto* dag = readyNodes[j].handleOwnerAs<Graph::DirectedAcyclicGraph<WorkGraphNode>>();
+                auto* nodeData = dag ? dag->getNodeData(readyNodes[j]) : nullptr;
+                if (nodeData) {
+                    // Re-defer with original wake time
+                    // Get wake time from the timer data associated with this node
+                    auto fireTime = std::chrono::steady_clock::now() + std::chrono::milliseconds(1);
+                    _timedDeferredQueue.push({readyNodes[j], fireTime});
+                }
+            }
+            break;
         }
     }
 

@@ -172,6 +172,7 @@ namespace Concurrency {
 
         // Timed deferral support (for WorkGraph timer integration)
         std::function<size_t()> _timedDeferralCallback; ///< Callback for checking timed deferrals
+        mutable std::mutex _timedDeferralCallbackMutex; ///< Protects callback access
 
     public:
         
@@ -588,10 +589,12 @@ namespace Concurrency {
          *
          * Invokes the timed deferral callback if one is set (used by WorkGraph for timer support).
          * Returns 0 if no callback is registered (standard WorkContractGroups don't support timers).
+         * Thread-safe: Protected by mutex.
          *
          * @return Number of nodes that were scheduled from timed deferral queue
          */
         size_t checkTimedDeferrals() {
+            std::lock_guard<std::mutex> lock(_timedDeferralCallbackMutex);
             if (_timedDeferralCallback) {
                 return _timedDeferralCallback();
             }
@@ -603,10 +606,12 @@ namespace Concurrency {
          *
          * Allows external owners (like WorkGraph) to provide timer functionality
          * without requiring inheritance or RTTI/dynamic_cast.
+         * Thread-safe: Protected by mutex.
          *
          * @param callback Function that checks and schedules timed deferrals, or nullptr to clear
          */
         void setTimedDeferralCallback(std::function<size_t()> callback) {
+            std::lock_guard<std::mutex> lock(_timedDeferralCallbackMutex);
             _timedDeferralCallback = std::move(callback);
         }
 
