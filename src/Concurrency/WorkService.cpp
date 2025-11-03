@@ -8,6 +8,7 @@
 #include <limits>
 
 #include "WorkContractGroup.h"
+#include "WorkGraph.h"
 #include "AdaptiveRankingScheduler.h"
 
 namespace EntropyEngine {
@@ -207,6 +208,9 @@ namespace Concurrency {
             }
 
             if (groupsSnapshot.empty()) {
+                // Check for ready timers before sleeping
+                checkTimedDeferrals();
+
                 // Wait on condition variable instead of sleeping
                 std::unique_lock<std::mutex> lock(_workAvailableMutex);
                 _workAvailableCV.wait_for(lock, std::chrono::milliseconds(1), [this, &token]() {
@@ -264,6 +268,9 @@ namespace Concurrency {
 
             // No work found
             if (scheduleResult.shouldSleep || stSoftFailureCount >= _config.maxSoftFailureCount) {
+                // Check for ready timers before sleeping
+                checkTimedDeferrals();
+
                 // Use condition variable for efficient waiting
                 std::unique_lock<std::mutex> lock(_workAvailableMutex);
                 _workAvailable = false;
@@ -275,6 +282,25 @@ namespace Concurrency {
                 stSoftFailureCount++;
                 std::this_thread::yield();
             }
+        }
+    }
+
+    void WorkService::checkTimedDeferrals() {
+        // Check all work graphs for ready timed deferrals
+        size_t totalScheduled = 0;
+        {
+            std::shared_lock<std::shared_mutex> lock(_workContractGroupsMutex);
+            for (auto* group : _workContractGroups) {
+                // Check if this group is a WorkGraph (which has timer support)
+                if (auto* workGraph = dynamic_cast<WorkGraph*>(group)) {
+                    totalScheduled += workGraph->checkTimedDeferrals();
+                }
+            }
+        }
+
+        // If any timers were scheduled, wake up waiting worker threads
+        if (totalScheduled > 0) {
+            notifyWorkAvailable();
         }
     }
 
@@ -312,7 +338,7 @@ namespace Concurrency {
     
     WorkService::MainThreadWorkResult WorkService::executeMainThreadWork(size_t maxContracts) {
         MainThreadWorkResult result{0, 0, false};
-        
+
         // Get current snapshot of groups
         std::vector<WorkContractGroup*> groups;
         {

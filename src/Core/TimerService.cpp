@@ -48,6 +48,11 @@ void TimerService::start() {
 }
 
 void TimerService::stop() {
+    // Cancel the pump contract
+    if (_pumpContractHandle.valid()) {
+        _pumpContractHandle.release();
+    }
+
     // Cancel all active timers
     {
         std::lock_guard<std::mutex> lock(_timersMutex);
@@ -94,6 +99,31 @@ void TimerService::setWorkService(Concurrency::WorkService* workService) {
         if (_workGraph) {
             _workGraph->execute();
         }
+
+        // Schedule smart pump contract on background thread
+        // Runs on AnyThread to avoid monopolizing main thread queue
+        // Main thread timers will still execute on main thread when ready
+        auto pumpFunction = std::make_shared<std::function<void()>>();
+        *pumpFunction = [this, pumpFunction]() {
+            // Process ready timers (schedules them for execution)
+            processReadyTimers();
+
+            // Reschedule if there are still active timers
+            if (getActiveTimerCount() > 0 && _workContractGroup && _workService) {
+                _pumpContractHandle = _workContractGroup->createContract(
+                    *pumpFunction,
+                    Concurrency::ExecutionType::AnyThread  // Background thread - won't block main thread
+                );
+                _pumpContractHandle.schedule();
+            }
+        };
+
+        // Initial schedule on background thread
+        _pumpContractHandle = _workContractGroup->createContract(
+            *pumpFunction,
+            Concurrency::ExecutionType::AnyThread
+        );
+        _pumpContractHandle.schedule();
     }
 }
 
@@ -118,10 +148,10 @@ Timer TimerService::scheduleTimer(std::chrono::steady_clock::duration interval,
 
     // Create yieldable node that checks elapsed time
     auto node = _workGraph->addYieldableNode(
-        [timerData]() -> Concurrency::WorkResult {
+        [timerData]() -> Concurrency::WorkResultContext {
             // Check if cancelled
             if (timerData->cancelled.load(std::memory_order_acquire)) {
-                return Concurrency::WorkResult::Complete;
+                return Concurrency::WorkResultContext::complete();
             }
 
             // Check if enough time has elapsed
@@ -140,15 +170,16 @@ Timer TimerService::scheduleTimer(std::chrono::steady_clock::duration interval,
                         timerData->fireTime += timerData->interval;
                     } while (timerData->fireTime <= now);
 
-                    return Concurrency::WorkResult::Yield;  // Reschedule
+                    // Yield until next fire time - NO BUSY WAITING!
+                    return Concurrency::WorkResultContext::yieldUntil(timerData->fireTime);
                 }
 
                 // One-shot timer completes
-                return Concurrency::WorkResult::Complete;
+                return Concurrency::WorkResultContext::complete();
             }
 
-            // Not time yet - yield and try again later
-            return Concurrency::WorkResult::Yield;
+            // Not time yet - yield until fire time instead of immediate reschedule
+            return Concurrency::WorkResultContext::yieldUntil(timerData->fireTime);
         },
         "Timer",
         nullptr,
@@ -160,6 +191,27 @@ Timer TimerService::scheduleTimer(std::chrono::steady_clock::duration interval,
     {
         std::lock_guard<std::mutex> lock(_timersMutex);
         _timers[node.handleIndex()] = timerData;
+    }
+
+    // If pump contract is not running, restart it on background thread
+    if (!_pumpContractHandle.valid() && _workContractGroup) {
+        auto pumpFunction = std::make_shared<std::function<void()>>();
+        *pumpFunction = [this, pumpFunction]() {
+            processReadyTimers();
+            if (getActiveTimerCount() > 0 && _workContractGroup && _workService) {
+                _pumpContractHandle = _workContractGroup->createContract(
+                    *pumpFunction,
+                    Concurrency::ExecutionType::AnyThread
+                );
+                _pumpContractHandle.schedule();
+            }
+        };
+
+        _pumpContractHandle = _workContractGroup->createContract(
+            *pumpFunction,
+            Concurrency::ExecutionType::AnyThread
+        );
+        _pumpContractHandle.schedule();
     }
 
     // Return Timer handle
@@ -183,6 +235,13 @@ size_t TimerService::getActiveTimerCount() const {
         }
     }
     return activeCount;
+}
+
+size_t TimerService::processReadyTimers() {
+    if (_workGraph) {
+        return _workGraph->checkTimedDeferrals();
+    }
+    return 0;
 }
 
 } // namespace Core

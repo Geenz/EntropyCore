@@ -196,6 +196,26 @@ public:
      */
     size_t getActiveTimerCount() const;
 
+    /**
+     * @brief Checks for ready timers and schedules them for execution
+     *
+     * Examines timers that are waiting for their scheduled time and wakes up
+     * any whose time has arrived. Call this periodically from your main loop
+     * to ensure timers fire promptly, especially when the system is idle.
+     *
+     * @return Number of timers that were woken up and scheduled
+     *
+     * @code
+     * // In main loop
+     * while (running) {
+     *     timerService->processReadyTimers();
+     *     // ... other work ...
+     *     std::this_thread::sleep_for(10ms);
+     * }
+     * @endcode
+     */
+    size_t processReadyTimers();
+
 private:
     // Only Timer can call cancelTimer
     friend class Timer;
@@ -230,6 +250,9 @@ private:
 
     // WorkService reference (set during load)
     Concurrency::WorkService* _workService = nullptr;
+
+    // Smart pump contract - only reschedules when active timers exist
+    Concurrency::WorkContractHandle _pumpContractHandle;
 };
 
 } // namespace Core

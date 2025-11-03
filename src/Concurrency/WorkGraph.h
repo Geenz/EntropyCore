@@ -643,12 +643,12 @@ namespace Concurrency {
         
         /**
          * @brief Manually drain the deferred queue when capacity becomes available
-         * 
+         *
          * Schedules deferred nodes when capacity frees up. Usually automatic via
          * callbacks.
-         * 
+         *
          * @return How many deferred nodes were successfully scheduled
-         * 
+         *
          * @code
          * // After manually cancelling some work
          * workGroup.cancelSomeContracts();
@@ -657,7 +657,27 @@ namespace Concurrency {
          * @endcode
          */
         size_t processDeferredNodes();
-        
+
+        /**
+         * @brief Checks timed deferrals and schedules nodes whose wake time has arrived
+         *
+         * Examines nodes that yielded with a specific wake time (e.g., timers) and
+         * schedules any whose scheduled time has passed. Call this periodically from
+         * your main loop or worker threads to ensure timers fire promptly.
+         *
+         * @return Number of timed nodes successfully scheduled
+         *
+         * @code
+         * // In main loop
+         * while (running) {
+         *     graph.checkTimedDeferrals();  // Wake up any ready timers
+         *     workService->executeMainThreadWork(10);
+         *     std::this_thread::sleep_for(10ms);
+         * }
+         * @endcode
+         */
+        size_t checkTimedDeferrals();
+
         /**
          * @brief Access the event system for monitoring graph execution
          * 
@@ -908,14 +928,26 @@ namespace Concurrency {
         
         /**
          * @brief Handles a node that has yielded execution
-         * 
+         *
          * Transitions the node from Executing to Yielded state and reschedules it
          * for later execution. Checks reschedule limits to prevent infinite loops.
-         * 
+         *
          * @param node The node that yielded
          */
         void onNodeYielded(NodeHandle node);
-        
+
+        /**
+         * @brief Handles timed node yield - node suspended until specific time
+         *
+         * Transitions the node from Executing to Yielded state and defers it
+         * until the specified wake time. The node sleeps passively in a priority
+         * queue consuming no CPU until the wake time arrives.
+         *
+         * @param node The node that yielded
+         * @param wakeTime When the node should be reconsidered for scheduling
+         */
+        void onNodeYieldedUntil(NodeHandle node, std::chrono::steady_clock::time_point wakeTime);
+
         /**
          * @brief Reschedules a yielded node for execution
          * 

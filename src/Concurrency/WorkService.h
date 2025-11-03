@@ -435,7 +435,18 @@ private:
      */
     void executeWork(const std::stop_token& token);
 
-
+    /**
+     * @brief Checks all work graphs for ready timed deferrals (timers)
+     *
+     * Called automatically by worker threads when idle to ensure timers
+     * fire promptly without requiring manual pumping. Iterates through
+     * all registered work contract groups and processes timed deferrals
+     * for any that are WorkGraphs.
+     *
+     * This enables zero-overhead timer support: timers wake automatically
+     * when the system would otherwise be idle, with no dedicated threads.
+     */
+    void checkTimedDeferrals();
 
     Config _config;
 

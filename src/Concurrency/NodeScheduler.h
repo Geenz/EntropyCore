@@ -22,6 +22,7 @@
 #include "WorkContractGroup.h"
 #include "../Core/EventBus.h"
 #include <deque>
+#include <queue>
 #include <mutex>
 #include <shared_mutex>
 #include <functional>
@@ -122,7 +123,8 @@ public:
         std::function<void(NodeHandle)> onNodeCompleted;     ///< Node finished successfully
         std::function<void(NodeHandle, std::exception_ptr)> onNodeFailed;  ///< Node threw an exception
         std::function<void(NodeHandle)> onNodeDropped;       ///< Node dropped (deferred queue overflow)
-        std::function<void(NodeHandle)> onNodeYielded;       ///< Node yielded execution (will reschedule)
+        std::function<void(NodeHandle)> onNodeYielded;       ///< Node yielded execution (will reschedule immediately)
+        std::function<void(NodeHandle, std::chrono::steady_clock::time_point)> onNodeYieldedUntil;  ///< Node yielded until specific time
     };
     
     /**
@@ -234,13 +236,13 @@ public:
     
     /**
      * @brief Drains the deferred queue into available execution slots
-     * 
+     *
      * Pulls nodes from deferred queue (FIFO) until empty or out of capacity.
      * Use maxToSchedule to leave room for new work.
-     * 
+     *
      * @param maxToSchedule How many to schedule max (0 = all possible)
      * @return Number of nodes actually scheduled
-     * 
+     *
      * @code
      * // After work completes, process waiting nodes
      * void onWorkCompleted() {
@@ -249,13 +251,56 @@ public:
      *         LOG_DEBUG("Scheduled {} deferred nodes", scheduled);
      *     }
      * }
-     * 
+     *
      * // Or limit to leave room for new work
      * size_t availableSlots = scheduler.getAvailableCapacity();
      * scheduler.processDeferredNodes(availableSlots / 2);  // Use half for deferred
      * @endcode
      */
     size_t processDeferredNodes(size_t maxToSchedule = 0);
+
+    /**
+     * @brief Checks timed deferrals and schedules nodes whose wake time has passed
+     *
+     * Examines the timed deferred queue and moves all nodes whose scheduled wake
+     * time has arrived into execution. This is called opportunistically during
+     * capacity callbacks and main thread pumping - no dedicated timer thread.
+     *
+     * @param maxToSchedule Maximum nodes to schedule (0 = all ready nodes)
+     * @return Number of timed nodes actually scheduled
+     *
+     * @code
+     * // Called during capacity callbacks
+     * void onCapacityAvailable() {
+     *     // Check if any timers are ready
+     *     size_t scheduled = scheduler.processTimedDeferredNodes();
+     *     if (scheduled > 0) {
+     *         LOG_DEBUG("Woke {} timed nodes", scheduled);
+     *     }
+     * }
+     * @endcode
+     */
+    size_t processTimedDeferredNodes(size_t maxToSchedule = 0);
+
+    /**
+     * @brief Defers a node until a specific time point
+     *
+     * Instead of immediate rescheduling, the node sleeps in a priority queue
+     * until the specified wake time. No CPU usage, no thread blocking - just
+     * passive waiting. Used by timers and delayed work.
+     *
+     * @param node The node to defer
+     * @param wakeTime When the node should be reconsidered for scheduling
+     * @return true if successfully queued
+     *
+     * @code
+     * // Timer that fires in 5 seconds
+     * auto wakeTime = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+     * scheduler.deferNodeUntil(timerNode, wakeTime);
+     * // Node sits in queue consuming zero CPU until wakeTime arrives
+     * @endcode
+     */
+    bool deferNodeUntil(NodeHandle node, std::chrono::steady_clock::time_point wakeTime);
     
     /**
      * @brief Quick check if we can accept more work right now
@@ -432,7 +477,19 @@ private:
     // Deferred queue for nodes waiting for capacity
     mutable std::shared_mutex _deferredMutex;   ///< Reader-writer lock for deferred queue (mutable for const methods)
     std::deque<NodeHandle> _deferredQueue;      ///< FIFO queue of nodes waiting for capacity
-    
+
+    // Timed deferred queue for nodes waiting until specific time (e.g., timers)
+    struct TimedNode {
+        NodeHandle node;
+        std::chrono::steady_clock::time_point wakeTime;
+
+        bool operator>(const TimedNode& other) const {
+            return wakeTime > other.wakeTime;  // Min-heap: earliest wake time at top
+        }
+    };
+    mutable std::shared_mutex _timedDeferredMutex;  ///< Reader-writer lock for timed deferred queue
+    std::priority_queue<TimedNode, std::vector<TimedNode>, std::greater<>> _timedDeferredQueue;  ///< Min-heap sorted by wake time
+
     // Statistics
     mutable std::mutex _statsMutex;           ///< Protects statistics (separate to reduce contention)
     Stats _stats;                             ///< Accumulated statistics

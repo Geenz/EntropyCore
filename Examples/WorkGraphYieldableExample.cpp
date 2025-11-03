@@ -80,18 +80,18 @@ int main() {
         }, "producer");
         
         // Consumer yields until atomic is true
-        auto consumer = graph.addYieldableNode([&ready]() -> WorkResult {
+        auto consumer = graph.addYieldableNode([&ready]() -> WorkResultContext {
             static int attempts = 0;
             attempts++;
             ENTROPY_LOG_INFO_CAT("WorkGraphExample", std::format("Consumer: Attempt {} - checking...", attempts));
-            
+
             if (!ready.load()) {
                 std::this_thread::sleep_for(100ms);
-                return WorkResult::Yield;
+                return WorkResultContext::yield();
             }
-            
+
             ENTROPY_LOG_INFO_CAT("WorkGraphExample", std::format("Consumer: Got data after {} attempts!", attempts));
-            return WorkResult::Complete;
+            return WorkResultContext::complete();
         }, "consumer", nullptr, ExecutionType::AnyThread, 20); // Max 20 attempts
         
         // Execute (no dependency - they run in parallel)
@@ -124,18 +124,18 @@ int main() {
         }, "node2");
         
         // Yieldable node that increments counter multiple times
-        auto yieldNode = graph.addYieldableNode([&counter]() -> WorkResult {
+        auto yieldNode = graph.addYieldableNode([&counter]() -> WorkResultContext {
             static int iterations = 0;
             iterations++;
             ENTROPY_LOG_INFO_CAT("WorkGraphExample", std::format("Yield Node: Iteration {}", iterations));
             counter++;
             std::this_thread::sleep_for(100ms);
-            
+
             if (iterations < 5) {
-                return WorkResult::Yield;
+                return WorkResultContext::yield();
             }
             ENTROPY_LOG_INFO_CAT("WorkGraphExample", std::format("Yield Node: Complete (counter={})", counter.load()));
-            return WorkResult::Complete;
+            return WorkResultContext::complete();
         }, "yield-node");
         
         auto node3 = graph.addNode([&counter]() {
@@ -177,6 +177,51 @@ int main() {
         ENTROPY_LOG_INFO_CAT("WorkGraphExample", std::format("Graph 3 complete (final counter={})", counter.load()));
     }
     
+    // Example 4: Timed Yield - Sleep until specific time (NEW!)
+    {
+        ENTROPY_LOG_INFO_CAT("WorkGraphExample", "\n=== Example 4: Timed Yield - Zero-CPU Waiting ===");
+        WorkGraph graph(&group);
+
+        std::atomic<int> pollCount{0};
+        std::atomic<bool> dataReady{false};
+
+        // Simulated async operation that completes after 500ms
+        auto dataProvider = graph.addNode([&dataReady]() {
+            ENTROPY_LOG_INFO_CAT("WorkGraphExample", "Data Provider: Starting async operation...");
+            std::this_thread::sleep_for(500ms);
+            dataReady.store(true);
+            ENTROPY_LOG_INFO_CAT("WorkGraphExample", "Data Provider: Data is ready!");
+        }, "data-provider");
+
+        // Poller using timed yields - checks every 100ms without busy-waiting
+        auto poller = graph.addYieldableNode([&pollCount, &dataReady]() -> WorkResultContext {
+            pollCount++;
+            auto now = std::chrono::steady_clock::now();
+            ENTROPY_LOG_INFO_CAT("WorkGraphExample",
+                std::format("Poller: Check #{} - data ready: {}", pollCount.load(), dataReady.load()));
+
+            if (!dataReady.load()) {
+                // NOT READY: Yield until 100ms from now (NO CPU USAGE!)
+                auto wakeTime = now + 100ms;
+                ENTROPY_LOG_INFO_CAT("WorkGraphExample", "Poller: Sleeping for 100ms...");
+                return WorkResultContext::yieldUntil(wakeTime);
+            }
+
+            // READY: Process and complete
+            ENTROPY_LOG_INFO_CAT("WorkGraphExample",
+                std::format("Poller: Data ready after {} polls!", pollCount.load()));
+            return WorkResultContext::complete();
+        }, "poller");
+
+        // Execute (nodes run in parallel)
+        graph.execute();
+        graph.wait();
+
+        ENTROPY_LOG_INFO_CAT("WorkGraphExample",
+            std::format("Graph 4 complete - Poller checked {} times (expected ~5)", pollCount.load()));
+        ENTROPY_LOG_INFO_CAT("WorkGraphExample", "Note: Zero CPU usage while waiting - timer sleeps passively!");
+    }
+
     service.stop();
     return 0;
 }

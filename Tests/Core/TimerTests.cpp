@@ -56,6 +56,11 @@ protected:
         workService.reset();
     }
 
+    // Helper to pump timer system - checks for ready timers
+    void pumpTimers() {
+        timerService->processReadyTimers();
+    }
+
     std::shared_ptr<WorkService> workService;
     std::shared_ptr<TimerService> timerService;
 };
@@ -82,8 +87,14 @@ TEST_F(TimerServiceTest, OneShotTimer_Fires) {
     EXPECT_TRUE(timer.isValid());
     EXPECT_FALSE(timer.isRepeating());
 
-    // Wait for timer to fire
-    std::this_thread::sleep_for(150ms);
+    // Wait for timer to fire - automatic pumping via main thread contract
+    auto start = std::chrono::steady_clock::now();
+    while (!fired.load(std::memory_order_acquire) &&
+           std::chrono::steady_clock::now() - start < 500ms) {
+        // Must pump main thread work for automatic timer pumping
+        workService->executeMainThreadWork(10);
+        std::this_thread::sleep_for(10ms);
+    }
 
     EXPECT_TRUE(fired.load(std::memory_order_acquire));
 }
@@ -97,8 +108,12 @@ TEST_F(TimerServiceTest, OneShotTimer_DoesNotRepeat) {
         false  // One-shot
     );
 
-    // Wait longer than one interval
-    std::this_thread::sleep_for(200ms);
+    // Wait longer than one interval - automatic pumping via main thread work
+    auto start = std::chrono::steady_clock::now();
+    while (std::chrono::steady_clock::now() - start < 200ms) {
+        workService->executeMainThreadWork(10);
+        std::this_thread::sleep_for(10ms);
+    }
 
     // Should only fire once
     EXPECT_EQ(count.load(std::memory_order_acquire), 1);
@@ -117,8 +132,12 @@ TEST_F(TimerServiceTest, RepeatingTimer_FiresMultipleTimes) {
     EXPECT_TRUE(timer.isRepeating());
     EXPECT_EQ(timer.getInterval(), 50ms);
 
-    // Wait for multiple intervals
-    std::this_thread::sleep_for(250ms);
+    // Wait for multiple intervals - automatic pumping via main thread work
+    auto start = std::chrono::steady_clock::now();
+    while (std::chrono::steady_clock::now() - start < 250ms) {
+        workService->executeMainThreadWork(10);
+        std::this_thread::sleep_for(10ms);
+    }
 
     // Should fire multiple times (at least 3-4 times)
     // Upper bound should be tight now that we fixed timer drift accumulation
@@ -128,7 +147,11 @@ TEST_F(TimerServiceTest, RepeatingTimer_FiresMultipleTimes) {
 
     // Cancel timer and wait for in-flight executions before 'count' is destroyed
     timer.invalidate();
-    std::this_thread::sleep_for(50ms);
+    auto cancelStart = std::chrono::steady_clock::now();
+    while (std::chrono::steady_clock::now() - cancelStart < 50ms) {
+        workService->executeMainThreadWork(10);
+        std::this_thread::sleep_for(10ms);
+    }
 }
 
 TEST_F(TimerServiceTest, TimerCancellation_PreventsExecution) {
@@ -163,8 +186,12 @@ TEST_F(TimerServiceTest, RepeatingTimer_CancellationStopsFiring) {
         true  // Repeating
     );
 
-    // Let it fire a few times
-    std::this_thread::sleep_for(150ms);
+    // Let it fire a few times - automatic pumping via main thread work
+    auto start = std::chrono::steady_clock::now();
+    while (std::chrono::steady_clock::now() - start < 150ms) {
+        workService->executeMainThreadWork(10);
+        std::this_thread::sleep_for(10ms);
+    }
 
     int countBeforeCancel = count.load(std::memory_order_acquire);
     EXPECT_GE(countBeforeCancel, 2);
@@ -173,7 +200,11 @@ TEST_F(TimerServiceTest, RepeatingTimer_CancellationStopsFiring) {
     timer.invalidate();
 
     // Wait for more intervals
-    std::this_thread::sleep_for(150ms);
+    start = std::chrono::steady_clock::now();
+    while (std::chrono::steady_clock::now() - start < 150ms) {
+        workService->executeMainThreadWork(10);
+        std::this_thread::sleep_for(10ms);
+    }
 
     // Count should not increase significantly after cancellation
     int countAfterCancel = count.load(std::memory_order_acquire);
@@ -196,8 +227,12 @@ TEST_F(TimerServiceTest, MultipleTimers_ExecuteIndependently) {
         true  // Repeating
     );
 
-    // Wait for timers to execute
-    std::this_thread::sleep_for(350ms);
+    // Wait for timers to execute - automatic pumping via main thread work
+    auto start = std::chrono::steady_clock::now();
+    while (std::chrono::steady_clock::now() - start < 350ms) {
+        workService->executeMainThreadWork(10);
+        std::this_thread::sleep_for(10ms);
+    }
 
     // Both repeating timers should have fired multiple times
     EXPECT_GE(count1.load(std::memory_order_acquire), 4);  // At least 4 times at 50ms intervals
@@ -210,7 +245,11 @@ TEST_F(TimerServiceTest, MultipleTimers_ExecuteIndependently) {
 
     // Give any in-flight timer callbacks time to complete
     // This prevents use-after-free when count1/count2 are destroyed
-    std::this_thread::sleep_for(50ms);
+    start = std::chrono::steady_clock::now();
+    while (std::chrono::steady_clock::now() - start < 50ms) {
+        workService->executeMainThreadWork(10);
+        std::this_thread::sleep_for(10ms);
+    }
 }
 
 TEST_F(TimerServiceTest, MainThreadTimer_ExecutesOnMainThread) {
@@ -228,7 +267,7 @@ TEST_F(TimerServiceTest, MainThreadTimer_ExecutesOnMainThread) {
         ExecutionType::MainThread
     );
 
-    // Pump main thread work for a while
+    // Pump main thread work for automatic timer pumping
     auto start = std::chrono::steady_clock::now();
     while (!fired.load(std::memory_order_acquire) &&
            std::chrono::steady_clock::now() - start < 500ms) {
@@ -257,8 +296,12 @@ TEST_F(TimerServiceTest, TimerMove_TransfersOwnership) {
     EXPECT_FALSE(timer1.isValid());  // timer1 should be invalidated
     EXPECT_TRUE(timer2.isValid());   // timer2 should be valid
 
-    // Wait for timer to fire
-    std::this_thread::sleep_for(150ms);
+    // Wait for timer to fire - automatic pumping via main thread work
+    auto start = std::chrono::steady_clock::now();
+    while (std::chrono::steady_clock::now() - start < 150ms) {
+        workService->executeMainThreadWork(10);
+        std::this_thread::sleep_for(10ms);
+    }
 
     EXPECT_GE(count.load(std::memory_order_acquire), 2);
 
@@ -301,13 +344,21 @@ TEST_F(TimerServiceTest, VeryShortInterval_StillWorks) {
         true  // Repeating
     );
 
-    // Wait
-    std::this_thread::sleep_for(100ms);
+    // Wait - automatic pumping via main thread work (frequent for short intervals)
+    auto start = std::chrono::steady_clock::now();
+    while (std::chrono::steady_clock::now() - start < 100ms) {
+        workService->executeMainThreadWork(10);
+        std::this_thread::sleep_for(1ms);  // Pump more frequently for short intervals
+    }
 
     // Should have fired many times
     EXPECT_GE(count.load(std::memory_order_acquire), 10);
 
     // Cancel timer and wait for in-flight executions before 'count' is destroyed
     timer.invalidate();
-    std::this_thread::sleep_for(10ms);
+    start = std::chrono::steady_clock::now();
+    while (std::chrono::steady_clock::now() - start < 10ms) {
+        workService->executeMainThreadWork(10);
+        std::this_thread::sleep_for(1ms);
+    }
 }
