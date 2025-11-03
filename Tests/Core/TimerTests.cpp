@@ -167,12 +167,14 @@ TEST_F(TimerServiceTest, OneShotTimer_Fires) {
     }
 }
 
+// TIMING-SENSITIVE: This test may be flaky on CI due to thread scheduling variability
 TEST_F(TimerServiceTest, OneShotTimer_DoesNotRepeat) {
-    std::atomic<int> count{0};
+    // Use shared_ptr to ensure count outlives any callbacks
+    auto count = std::make_shared<std::atomic<int>>(0);
 
     auto timer = timerService->scheduleTimer(
         50ms,
-        [&count]() { count.fetch_add(1, std::memory_order_relaxed); },
+        [count]() { count->fetch_add(1, std::memory_order_relaxed); },  // Capture by value
         false  // One-shot
     );
 
@@ -184,23 +186,26 @@ TEST_F(TimerServiceTest, OneShotTimer_DoesNotRepeat) {
     }
 
     // Should only fire once
-    EXPECT_EQ(count.load(std::memory_order_acquire), 1);
+    EXPECT_EQ(count->load(std::memory_order_acquire), 1);
 
-    // Cancel timer and wait for in-flight executions before 'count' is destroyed
+    // Cancel timer and wait for in-flight executions
     timer.invalidate();
     start = std::chrono::steady_clock::now();
     while (std::chrono::steady_clock::now() - start < 50ms) {
         workService->executeMainThreadWork(10);
         std::this_thread::sleep_for(1ms);
     }
+    // count's shared_ptr keeps it alive until all callbacks complete
 }
 
+// TIMING-SENSITIVE: This test may be flaky on CI due to thread scheduling variability
 TEST_F(TimerServiceTest, RepeatingTimer_FiresMultipleTimes) {
-    std::atomic<int> count{0};
+    // Use shared_ptr to ensure count outlives any callbacks
+    auto count = std::make_shared<std::atomic<int>>(0);
 
     auto timer = timerService->scheduleTimer(
         50ms,
-        [&count]() { count.fetch_add(1, std::memory_order_relaxed); },
+        [count]() { count->fetch_add(1, std::memory_order_relaxed); },  // Capture by value
         true  // Repeating
     );
 
@@ -217,25 +222,28 @@ TEST_F(TimerServiceTest, RepeatingTimer_FiresMultipleTimes) {
 
     // Should fire multiple times (at least 3-4 times)
     // Upper bound should be tight now that we fixed timer drift accumulation
-    int finalCount = count.load(std::memory_order_acquire);
+    int finalCount = count->load(std::memory_order_acquire);
     EXPECT_GE(finalCount, 3);
     EXPECT_LE(finalCount, 6);  // 250ms / 50ms = 5 expected, allow ±1 for scheduling variance
 
-    // Cancel timer and wait for in-flight executions before 'count' is destroyed
+    // Cancel timer and wait for in-flight executions
     timer.invalidate();
     auto cancelStart = std::chrono::steady_clock::now();
     while (std::chrono::steady_clock::now() - cancelStart < 50ms) {
         workService->executeMainThreadWork(10);
         std::this_thread::sleep_for(10ms);
     }
+    // count's shared_ptr keeps it alive until all callbacks complete
 }
 
+// TIMING-SENSITIVE: This test may be flaky on CI due to thread scheduling variability
 TEST_F(TimerServiceTest, TimerCancellation_PreventsExecution) {
-    std::atomic<bool> fired{false};
+    // Use shared_ptr to ensure fired outlives any callbacks
+    auto fired = std::make_shared<std::atomic<bool>>(false);
 
     auto timer = timerService->scheduleTimer(
         100ms,
-        [&fired]() { fired.store(true, std::memory_order_release); },
+        [fired]() { fired->store(true, std::memory_order_release); },  // Capture by value
         false  // One-shot
     );
 
@@ -250,15 +258,18 @@ TEST_F(TimerServiceTest, TimerCancellation_PreventsExecution) {
     std::this_thread::sleep_for(200ms);
 
     // Should not have fired
-    EXPECT_FALSE(fired.load(std::memory_order_acquire));
+    EXPECT_FALSE(fired->load(std::memory_order_acquire));
+    // fired's shared_ptr keeps it alive until all callbacks complete
 }
 
+// TIMING-SENSITIVE: This test may be flaky on CI due to thread scheduling variability
 TEST_F(TimerServiceTest, RepeatingTimer_CancellationStopsFiring) {
-    std::atomic<int> count{0};
+    // Use shared_ptr to ensure count outlives any callbacks
+    auto count = std::make_shared<std::atomic<int>>(0);
 
     auto timer = timerService->scheduleTimer(
         50ms,
-        [&count]() { count.fetch_add(1, std::memory_order_relaxed); },
+        [count]() { count->fetch_add(1, std::memory_order_relaxed); },  // Capture by value
         true  // Repeating
     );
 
@@ -269,7 +280,7 @@ TEST_F(TimerServiceTest, RepeatingTimer_CancellationStopsFiring) {
         std::this_thread::sleep_for(10ms);
     }
 
-    int countBeforeCancel = count.load(std::memory_order_acquire);
+    int countBeforeCancel = count->load(std::memory_order_acquire);
     EXPECT_GE(countBeforeCancel, 2);
 
     // Cancel the timer
@@ -283,8 +294,9 @@ TEST_F(TimerServiceTest, RepeatingTimer_CancellationStopsFiring) {
     }
 
     // Count should not increase significantly after cancellation
-    int countAfterCancel = count.load(std::memory_order_acquire);
+    int countAfterCancel = count->load(std::memory_order_acquire);
     EXPECT_LE(countAfterCancel, countBeforeCancel + 1);  // Allow for one in-flight execution
+    // count's shared_ptr keeps it alive until all callbacks complete
 }
 
 TEST_F(TimerServiceTest, MultipleTimers_ExecuteIndependently) {
@@ -363,12 +375,14 @@ TEST_F(TimerServiceTest, MainThreadTimer_ExecutesOnMainThread) {
     }
 }
 
+// TIMING-SENSITIVE: This test may be flaky on CI due to thread scheduling variability
 TEST_F(TimerServiceTest, TimerMove_TransfersOwnership) {
-    std::atomic<int> count{0};
+    // Use shared_ptr to ensure count outlives any callbacks
+    auto count = std::make_shared<std::atomic<int>>(0);
 
     auto timer1 = timerService->scheduleTimer(
         50ms,
-        [&count]() { count.fetch_add(1, std::memory_order_relaxed); },
+        [count]() { count->fetch_add(1, std::memory_order_relaxed); },  // Capture by value
         true  // Repeating
     );
 
@@ -387,28 +401,31 @@ TEST_F(TimerServiceTest, TimerMove_TransfersOwnership) {
         std::this_thread::sleep_for(10ms);
     }
 
-    EXPECT_GE(count.load(std::memory_order_acquire), 2);
+    EXPECT_GE(count->load(std::memory_order_acquire), 2);
 
     // Cancel timer2
     timer2.invalidate();
 
     EXPECT_FALSE(timer2.isValid());
 
-    // Wait for in-flight executions before 'count' is destroyed
+    // Wait for in-flight executions
     start = std::chrono::steady_clock::now();
     while (std::chrono::steady_clock::now() - start < 50ms) {
         workService->executeMainThreadWork(10);
         std::this_thread::sleep_for(1ms);
     }
+    // count's shared_ptr keeps it alive until all callbacks complete
 }
 
+// TIMING-SENSITIVE: This test may be flaky on CI due to thread scheduling variability
 TEST_F(TimerServiceTest, TimerDestruction_CancelsTimer) {
-    std::atomic<int> count{0};
+    // Use shared_ptr to ensure count outlives any callbacks
+    auto count = std::make_shared<std::atomic<int>>(0);
 
     {
         auto timer = timerService->scheduleTimer(
             50ms,
-            [&count]() { count.fetch_add(1, std::memory_order_relaxed); },
+            [count]() { count->fetch_add(1, std::memory_order_relaxed); },  // Capture by value
             true  // Repeating
         );
 
@@ -416,14 +433,15 @@ TEST_F(TimerServiceTest, TimerDestruction_CancelsTimer) {
         std::this_thread::sleep_for(100ms);
     }  // timer goes out of scope
 
-    int countAtDestruction = count.load(std::memory_order_acquire);
+    int countAtDestruction = count->load(std::memory_order_acquire);
 
     // Wait longer
     std::this_thread::sleep_for(150ms);
 
     // Count should not increase significantly after timer destruction
-    int countAfterDestruction = count.load(std::memory_order_acquire);
+    int countAfterDestruction = count->load(std::memory_order_acquire);
     EXPECT_LE(countAfterDestruction, countAtDestruction + 1);
+    // count's shared_ptr keeps it alive until all callbacks complete
 }
 
 TEST_F(TimerServiceTest, VeryShortInterval_StillWorks) {
