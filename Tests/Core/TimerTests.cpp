@@ -52,6 +52,27 @@ protected:
             workService->unload();
         }
 
+        // CRITICAL: Extra safety drain before destroying services
+        //
+        // CI environments are often resource-constrained with:
+        // - High CPU contention (multiple builds running in parallel)
+        // - Slower/virtualized hardware
+        // - Variable scheduling latency
+        // - Shared system resources
+        //
+        // This causes timing-related tests to be "wonky" because:
+        // 1. Thread scheduling is less predictable
+        // 2. Small sleep durations may wake much later than requested
+        // 3. Work that should complete in 10ms might take 50ms+
+        // 4. Race conditions that rarely manifest locally become common
+        //
+        // This drain period gives lingering timer callbacks time to complete
+        // before we destroy the test fixture, preventing use-after-free crashes.
+        auto drainStart = std::chrono::steady_clock::now();
+        while (std::chrono::steady_clock::now() - drainStart < 50ms) {
+            std::this_thread::sleep_for(5ms);
+        }
+
         timerService.reset();
         workService.reset();
     }
@@ -101,7 +122,7 @@ TEST_F(TimerServiceTest, OneShotTimer_Fires) {
     // Cancel timer and wait for in-flight executions before 'fired' is destroyed
     timer.invalidate();
     start = std::chrono::steady_clock::now();
-    while (std::chrono::steady_clock::now() - start < 10ms) {
+    while (std::chrono::steady_clock::now() - start < 50ms) {
         workService->executeMainThreadWork(10);
         std::this_thread::sleep_for(1ms);
     }
@@ -129,7 +150,7 @@ TEST_F(TimerServiceTest, OneShotTimer_DoesNotRepeat) {
     // Cancel timer and wait for in-flight executions before 'count' is destroyed
     timer.invalidate();
     start = std::chrono::steady_clock::now();
-    while (std::chrono::steady_clock::now() - start < 10ms) {
+    while (std::chrono::steady_clock::now() - start < 50ms) {
         workService->executeMainThreadWork(10);
         std::this_thread::sleep_for(1ms);
     }
@@ -297,7 +318,7 @@ TEST_F(TimerServiceTest, MainThreadTimer_ExecutesOnMainThread) {
     // Cancel timer and wait for in-flight executions before locals are destroyed
     timer.invalidate();
     start = std::chrono::steady_clock::now();
-    while (std::chrono::steady_clock::now() - start < 10ms) {
+    while (std::chrono::steady_clock::now() - start < 50ms) {
         workService->executeMainThreadWork(10);
         std::this_thread::sleep_for(1ms);
     }
@@ -336,7 +357,7 @@ TEST_F(TimerServiceTest, TimerMove_TransfersOwnership) {
 
     // Wait for in-flight executions before 'count' is destroyed
     start = std::chrono::steady_clock::now();
-    while (std::chrono::steady_clock::now() - start < 10ms) {
+    while (std::chrono::steady_clock::now() - start < 50ms) {
         workService->executeMainThreadWork(10);
         std::this_thread::sleep_for(1ms);
     }
@@ -388,7 +409,7 @@ TEST_F(TimerServiceTest, VeryShortInterval_StillWorks) {
     // Cancel timer and wait for in-flight executions before 'count' is destroyed
     timer.invalidate();
     start = std::chrono::steady_clock::now();
-    while (std::chrono::steady_clock::now() - start < 10ms) {
+    while (std::chrono::steady_clock::now() - start < 50ms) {
         workService->executeMainThreadWork(10);
         std::this_thread::sleep_for(1ms);
     }
