@@ -89,16 +89,17 @@ EntropyWorkResult to_c_work_result(WorkResult result) {
     switch (result) {
         case WorkResult::Complete: return ENTROPY_WORK_COMPLETE;
         case WorkResult::Yield:    return ENTROPY_WORK_YIELD;
+        case WorkResult::YieldUntil: return ENTROPY_WORK_YIELD; // C API doesn't support timed yields yet
         default:                   return ENTROPY_WORK_COMPLETE;
     }
 }
 
-// Convert C WorkResult to C++ enum
-WorkResult to_cpp_work_result(EntropyWorkResult result) {
+// Convert C WorkResult to C++ WorkResultContext
+WorkResultContext to_cpp_work_result_context(EntropyWorkResult result) {
     switch (result) {
-        case ENTROPY_WORK_COMPLETE: return WorkResult::Complete;
-        case ENTROPY_WORK_YIELD:    return WorkResult::Yield;
-        default:                    return WorkResult::Complete;
+        case ENTROPY_WORK_COMPLETE: return WorkResultContext::complete();
+        case ENTROPY_WORK_YIELD:    return WorkResultContext::yield();
+        default:                    return WorkResultContext::complete();
     }
 }
 
@@ -318,9 +319,9 @@ entropy_NodeHandle entropy_work_graph_add_yieldable_node(
         WorkGraph* cpp_graph = to_cpp(graph);
 
         // Wrap the C callback in a YieldableWorkFunction
-        YieldableWorkFunction work = [callback, user_data]() -> WorkResult {
+        YieldableWorkFunction work = [callback, user_data]() -> WorkResultContext {
             EntropyWorkResult c_result = callback(user_data);
-            return to_cpp_work_result(c_result);
+            return to_cpp_work_result_context(c_result);
         };
 
         std::string node_name = name ? name : "";

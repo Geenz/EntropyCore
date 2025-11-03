@@ -237,15 +237,28 @@ std::function<void()> NodeScheduler::createWorkWrapper(NodeHandle node) {
         // Execute the work based on variant type
         bool failed = false;
         bool yielded = false;
+        bool yieldedUntil = false;
+        std::chrono::steady_clock::time_point wakeTime;
         std::exception_ptr exception;
-        
+
         try {
             if (nodeData->isYieldable) {
                 // Handle yieldable work function
                 if (auto* yieldableWork = std::get_if<YieldableWorkFunction>(&nodeData->work)) {
-                    WorkResult result = (*yieldableWork)();
-                    if (result == WorkResult::Yield) {
+                    WorkResultContext result = (*yieldableWork)();
+                    if (result.result == WorkResult::Yield) {
                         yielded = true;
+                    } else if (result.result == WorkResult::YieldUntil && result.wakeTime) {
+                        // Validate that wake time is in the future or current
+                        auto now = std::chrono::steady_clock::now();
+                        if (*result.wakeTime >= now) {
+                            // Future or current time - defer until then
+                            yieldedUntil = true;
+                            wakeTime = *result.wakeTime;
+                        } else {
+                            // Past time - treat as immediate yield
+                            yielded = true;
+                        }
                     }
                 }
             } else {
@@ -258,19 +271,24 @@ std::function<void()> NodeScheduler::createWorkWrapper(NodeHandle node) {
             failed = true;
             exception = std::current_exception();
         }
-        
+
         // Check if destroyed before notifying completion
         if (_destroyed.load(std::memory_order_acquire)) {
             return;  // Scheduler is gone, skip cleanup
         }
-        
+
         // Notify completion, failure, or yield
         if (failed) {
             if (_callbacks.onNodeFailed) {
                 _callbacks.onNodeFailed(node, exception);
             }
+        } else if (yieldedUntil) {
+            // Notify timed yield via callback
+            if (_callbacks.onNodeYieldedUntil) {
+                _callbacks.onNodeYieldedUntil(node, wakeTime);
+            }
         } else if (yielded) {
-            // Notify via callback
+            // Notify immediate yield via callback
             if (_callbacks.onNodeYielded) {
                 _callbacks.onNodeYielded(node);
             }
@@ -313,6 +331,68 @@ void NodeScheduler::publishDeferredEvent(NodeHandle node) {
         size_t queueSize = _deferredQueue.size();
         _eventBus->publish(NodeDeferredEvent(_graph, node, queueSize));
     }
+}
+
+bool NodeScheduler::deferNodeUntil(NodeHandle node, std::chrono::steady_clock::time_point wakeTime) {
+    std::lock_guard<std::shared_mutex> lock(_timedDeferredMutex);
+
+    if (_config.enableDebugLogging) {
+        auto now = std::chrono::steady_clock::now();
+        auto delay = std::chrono::duration_cast<std::chrono::milliseconds>(wakeTime - now);
+        ENTROPY_LOG_DEBUG_CAT("NodeScheduler",
+            "Deferring node until wake time (delay: " + std::to_string(delay.count()) + "ms)");
+    }
+
+    // Add to timed deferred queue (priority queue sorted by wake time)
+    _timedDeferredQueue.push({node, wakeTime});
+
+    return true;
+}
+
+size_t NodeScheduler::processTimedDeferredNodes(size_t maxToSchedule) {
+    auto now = std::chrono::steady_clock::now();
+
+    // Extract nodes whose wake time has passed (preserve full TimedNode for wake time tracking)
+    std::vector<TimedNode> readyNodes;
+    {
+        std::lock_guard<std::shared_mutex> lock(_timedDeferredMutex);
+
+        // Pop all nodes that are ready (wake time <= now)
+        while (!_timedDeferredQueue.empty() &&
+               _timedDeferredQueue.top().wakeTime <= now) {
+            readyNodes.push_back(_timedDeferredQueue.top());
+            _timedDeferredQueue.pop();
+
+            // Check if we've hit the limit (0 means no limit)
+            if (maxToSchedule > 0 && readyNodes.size() >= maxToSchedule) {
+                break;
+            }
+        }
+    }
+
+    if (_config.enableDebugLogging && !readyNodes.empty()) {
+        ENTROPY_LOG_DEBUG_CAT("NodeScheduler",
+            "Processing " + std::to_string(readyNodes.size()) + " timed deferred nodes");
+    }
+
+    // Schedule the ready nodes
+    size_t scheduled = 0;
+    for (size_t i = 0; i < readyNodes.size(); ++i) {
+        if (scheduleNode(readyNodes[i].node)) {
+            scheduled++;
+        } else {
+            // Scheduling failed - hit capacity
+            // Re-defer remaining nodes back to timed queue with original wake times
+            std::lock_guard<std::shared_mutex> lock(_timedDeferredMutex);
+            for (size_t j = i; j < readyNodes.size(); ++j) {
+                // Re-enqueue with preserved original wake time for scheduling precision
+                _timedDeferredQueue.push(readyNodes[j]);
+            }
+            break;
+        }
+    }
+
+    return scheduled;
 }
 
 } // namespace Concurrency

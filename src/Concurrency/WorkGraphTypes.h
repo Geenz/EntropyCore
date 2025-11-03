@@ -22,6 +22,7 @@
 #include <functional>
 #include <memory>
 #include <chrono>
+#include <optional>
 #include "../Graph/AcyclicNodeHandle.h"
 
 namespace EntropyEngine {
@@ -92,24 +93,76 @@ namespace Concurrency {
     
     /**
      * @brief Return value from yieldable work functions
-     * 
+     *
      * Work functions can now return a status to control their execution flow.
      * Complete means the work is done, Yield means suspend and reschedule later.
      * This enables coroutine-like behavior without actual C++ coroutines.
-     * 
+     *
      * @code
-     * auto node = graph.addYieldableNode([]() -> WorkResult {
+     * auto node = graph.addYieldableNode([]() -> WorkResultContext {
      *     if (!dataReady()) {
-     *         return WorkResult::Yield;  // Try again later
+     *         return WorkResultContext::yield();  // Try again later
      *     }
      *     processData();
-     *     return WorkResult::Complete;
+     *     return WorkResultContext::complete();
      * });
      * @endcode
      */
     enum class WorkResult : uint8_t {
         Complete = 0,   ///< Work is done, proceed to completion
-        Yield = 1       ///< Suspend and reschedule for later execution
+        Yield = 1,      ///< Suspend and reschedule immediately for later execution
+        YieldUntil = 2  ///< Suspend and reschedule at specific time (use WorkResultContext)
+    };
+
+    /**
+     * @brief Extended result context for yieldable work functions with timing support
+     *
+     * Provides fine-grained control over when a yielded node should be rescheduled.
+     * Use the static factory methods for convenience.
+     *
+     * @code
+     * // Immediate reschedule (old behavior)
+     * return WorkResultContext::yield();
+     *
+     * // Timed reschedule (new - for timers, polling, etc.)
+     * auto wakeTime = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+     * return WorkResultContext::yieldUntil(wakeTime);
+     *
+     * // Completion
+     * return WorkResultContext::complete();
+     * @endcode
+     */
+    struct WorkResultContext {
+        WorkResult result = WorkResult::Complete;
+        std::optional<std::chrono::steady_clock::time_point> wakeTime;
+
+        /// Creates a completion result
+        static WorkResultContext complete() {
+            return {WorkResult::Complete, std::nullopt};
+        }
+
+        /// Creates an immediate yield result (reschedule ASAP)
+        static WorkResultContext yield() {
+            return {WorkResult::Yield, std::nullopt};
+        }
+
+        /**
+         * @brief Creates a timed yield result (reschedule at specific time)
+         *
+         * Defers node execution until the specified wake time without consuming CPU resources.
+         * The node will be rescheduled for execution when the wake time is reached.
+         *
+         * @param when The time point when the node should be rescheduled
+         *
+         * @note If the wake time is in the past or current time, the system treats it as
+         *       an immediate yield (equivalent to calling yield()), rescheduling as soon
+         *       as possible rather than failing or blocking.
+         *
+         * @return WorkResultContext configured for timed yield
+         */
+        static WorkResultContext yieldUntil(std::chrono::steady_clock::time_point when) {
+            return {WorkResult::YieldUntil, when};
+        }
     };
     
     /**
@@ -257,7 +310,7 @@ namespace Concurrency {
     using NodeHandle = Graph::AcyclicNodeHandle<WorkGraphNode>;          ///< How you reference nodes
     using NodeCallback = std::function<void(NodeHandle)>;                ///< Callbacks that receive nodes
     using WorkFunction = std::function<void()>;                          ///< The actual work to execute (legacy)
-    using YieldableWorkFunction = std::function<WorkResult()>;           ///< Work that can yield/suspend
+    using YieldableWorkFunction = std::function<WorkResultContext()>;    ///< Work that can yield/suspend with timing
     using CompletionCallback = std::function<void(ExecutionResult)>;     ///< Notified when work completes
     
     /**

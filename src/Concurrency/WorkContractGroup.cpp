@@ -975,6 +975,19 @@ std::string WorkContractGroup::description() const {
     return debugString();
 }
 
+size_t WorkContractGroup::checkTimedDeferrals() {
+    std::lock_guard<std::mutex> lock(_timedDeferralCallbackMutex);
+    if (_timedDeferralCallback) {
+        return _timedDeferralCallback();
+    }
+    return 0;
+}
+
+void WorkContractGroup::setTimedDeferralCallback(std::function<size_t()> callback) {
+    std::lock_guard<std::mutex> lock(_timedDeferralCallbackMutex);
+    _timedDeferralCallback = std::move(callback);
+}
+
 } // namespace Concurrency
 } // namespace Core
 } // namespace EntropyEngine

@@ -48,6 +48,27 @@ void TimerService::start() {
 }
 
 void TimerService::stop() {
+    // Step 1: Signal pump to stop (like WorkService::requestStop)
+    _pumpShouldStop.store(true, std::memory_order_release);
+
+    // Step 2: Cancel the pump contract to prevent new schedules
+    {
+        std::lock_guard<std::mutex> lock(_pumpContractMutex);
+        if (_pumpContractHandle.valid()) {
+            _pumpContractHandle.release();
+        }
+        // Clear the pump function to break any weak_ptr references
+        _pumpFunction.reset();
+    }
+
+    // Step 3: Wait for any in-flight pump execution (like WorkService::waitForStop)
+    // Acquiring this mutex blocks until pump releases it
+    {
+        std::lock_guard<std::mutex> lock(_pumpExecutionMutex);
+        // Pump is now guaranteed to be idle
+    }
+
+    // Step 4: Now safe to cleanup - no pump can be running
     // Cancel all active timers
     {
         std::lock_guard<std::mutex> lock(_timersMutex);
@@ -94,6 +115,11 @@ void TimerService::setWorkService(Concurrency::WorkService* workService) {
         if (_workGraph) {
             _workGraph->execute();
         }
+
+        // Start the background pump contract
+        // Runs on AnyThread to avoid monopolizing main thread queue
+        // Main thread timers will still execute on main thread when ready
+        restartPumpContract();
     }
 }
 
@@ -118,10 +144,10 @@ Timer TimerService::scheduleTimer(std::chrono::steady_clock::duration interval,
 
     // Create yieldable node that checks elapsed time
     auto node = _workGraph->addYieldableNode(
-        [timerData]() -> Concurrency::WorkResult {
+        [timerData]() -> Concurrency::WorkResultContext {
             // Check if cancelled
             if (timerData->cancelled.load(std::memory_order_acquire)) {
-                return Concurrency::WorkResult::Complete;
+                return Concurrency::WorkResultContext::complete();
             }
 
             // Check if enough time has elapsed
@@ -140,15 +166,16 @@ Timer TimerService::scheduleTimer(std::chrono::steady_clock::duration interval,
                         timerData->fireTime += timerData->interval;
                     } while (timerData->fireTime <= now);
 
-                    return Concurrency::WorkResult::Yield;  // Reschedule
+                    // Yield until next fire time - NO BUSY WAITING!
+                    return Concurrency::WorkResultContext::yieldUntil(timerData->fireTime);
                 }
 
                 // One-shot timer completes
-                return Concurrency::WorkResult::Complete;
+                return Concurrency::WorkResultContext::complete();
             }
 
-            // Not time yet - yield and try again later
-            return Concurrency::WorkResult::Yield;
+            // Not time yet - yield until fire time instead of immediate reschedule
+            return Concurrency::WorkResultContext::yieldUntil(timerData->fireTime);
         },
         "Timer",
         nullptr,
@@ -161,6 +188,9 @@ Timer TimerService::scheduleTimer(std::chrono::steady_clock::duration interval,
         std::lock_guard<std::mutex> lock(_timersMutex);
         _timers[node.handleIndex()] = timerData;
     }
+
+    // Ensure pump contract is running (thread-safe)
+    restartPumpContract();
 
     // Return Timer handle
     return Timer(this, node, interval, repeating);
@@ -183,6 +213,71 @@ size_t TimerService::getActiveTimerCount() const {
         }
     }
     return activeCount;
+}
+
+void TimerService::restartPumpContract() {
+    // Thread-safe check and restart of pump contract
+    std::lock_guard<std::mutex> lock(_pumpContractMutex);
+
+    // Check if pump is already running or stopping
+    if (_pumpContractHandle.valid() || !_workContractGroup || _pumpShouldStop.load(std::memory_order_acquire)) {
+        return;
+    }
+
+    // Create self-rescheduling pump function (stored as member to keep weak_ptr valid)
+    _pumpFunction = std::make_shared<std::function<void()>>();
+    std::weak_ptr<std::function<void()>> weakPump = _pumpFunction;
+    *_pumpFunction = [this, weakPump]() {
+        // Hold execution mutex for entire pump execution (synchronous cleanup pattern)
+        std::lock_guard<std::mutex> execLock(_pumpExecutionMutex);
+
+        // Check stop flag at start - abort if stopping
+        if (_pumpShouldStop.load(std::memory_order_acquire)) {
+            return;
+        }
+
+        // Safe to access TimerService members now - stop() is blocked
+        processReadyTimers();
+
+        // Check stop flag again before rescheduling
+        if (_pumpShouldStop.load(std::memory_order_acquire)) {
+            return;
+        }
+
+        // Reschedule pump to continue checking for ready timers
+        // This prevents race where timers are added after pump completes but before rescheduling
+        std::lock_guard<std::mutex> contractLock(_pumpContractMutex);
+        if (_workContractGroup) {
+            // Lock the weak_ptr to ensure pump function is still alive
+            auto pumpFunction = weakPump.lock();
+            if (!pumpFunction) {
+                // Pump function released during shutdown, stop rescheduling
+                _pumpContractHandle = Concurrency::WorkContractHandle();  // Reset to invalid handle
+                return;
+            }
+
+            _pumpContractHandle = _workContractGroup->createContract(
+                *pumpFunction,
+                Concurrency::ExecutionType::AnyThread
+            );
+            _pumpContractHandle.schedule();
+        }
+        // Execution mutex released here - stop() can now proceed
+    };
+
+    // Schedule initial execution on background thread
+    _pumpContractHandle = _workContractGroup->createContract(
+        *_pumpFunction,
+        Concurrency::ExecutionType::AnyThread
+    );
+    _pumpContractHandle.schedule();
+}
+
+size_t TimerService::processReadyTimers() {
+    if (_workGraph) {
+        return _workGraph->checkTimedDeferrals();
+    }
+    return 0;
 }
 
 } // namespace Core

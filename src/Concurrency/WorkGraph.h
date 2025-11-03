@@ -72,10 +72,10 @@ namespace Concurrency {
      * }, "data-processor");
      * 
      * // Or create a yieldable node
-     * auto yieldNode = graph.addYieldableNode([]() -> WorkResult {
-     *     if (!ready()) return WorkResult::Yield;
+     * auto yieldNode = graph.addYieldableNode([]() -> WorkResultContext {
+     *     if (!ready()) return WorkResultContext::yield();
      *     process();
-     *     return WorkResult::Complete;
+     *     return WorkResultContext::complete();
      * }, "yielder");
      * @endcode
      */
@@ -401,22 +401,22 @@ namespace Concurrency {
          * 
          * @code
          * // Polling task that yields until ready
-         * auto poller = graph.addYieldableNode([]() -> WorkResult {
+         * auto poller = graph.addYieldableNode([]() -> WorkResultContext {
          *     if (!dataReady()) {
-         *         return WorkResult::Yield;  // Try again later
+         *         return WorkResultContext::yield();  // Try again later
          *     }
          *     processData();
-         *     return WorkResult::Complete;
+         *     return WorkResultContext::complete();
          * }, "data-poller");
-         * 
+         *
          * // Staged processing with yield between stages
          * int stage = 0;
-         * auto staged = graph.addYieldableNode([&stage]() -> WorkResult {
+         * auto staged = graph.addYieldableNode([&stage]() -> WorkResultContext {
          *     switch (stage++) {
-         *         case 0: doStage1(); return WorkResult::Yield;
-         *         case 1: doStage2(); return WorkResult::Yield;
-         *         case 2: doStage3(); return WorkResult::Complete;
-         *         default: return WorkResult::Complete;
+         *         case 0: doStage1(); return WorkResultContext::yield();
+         *         case 1: doStage2(); return WorkResultContext::yield();
+         *         case 2: doStage3(); return WorkResultContext::complete();
+         *         default: return WorkResultContext::complete();
          *     }
          * }, "staged-processor", nullptr, ExecutionType::AnyThread, 10);
          * @endcode
@@ -643,12 +643,12 @@ namespace Concurrency {
         
         /**
          * @brief Manually drain the deferred queue when capacity becomes available
-         * 
+         *
          * Schedules deferred nodes when capacity frees up. Usually automatic via
          * callbacks.
-         * 
+         *
          * @return How many deferred nodes were successfully scheduled
-         * 
+         *
          * @code
          * // After manually cancelling some work
          * workGroup.cancelSomeContracts();
@@ -657,7 +657,27 @@ namespace Concurrency {
          * @endcode
          */
         size_t processDeferredNodes();
-        
+
+        /**
+         * @brief Checks timed deferrals and schedules nodes whose wake time has arrived
+         *
+         * Examines nodes that yielded with a specific wake time (e.g., timers) and
+         * schedules any whose scheduled time has passed. Call this periodically from
+         * your main loop or worker threads to ensure timers fire promptly.
+         *
+         * @return Number of timed nodes successfully scheduled
+         *
+         * @code
+         * // In main loop
+         * while (running) {
+         *     graph.checkTimedDeferrals();  // Wake up any ready timers
+         *     workService->executeMainThreadWork(10);
+         *     std::this_thread::sleep_for(10ms);
+         * }
+         * @endcode
+         */
+        size_t checkTimedDeferrals();
+
         /**
          * @brief Access the event system for monitoring graph execution
          * 
@@ -908,14 +928,26 @@ namespace Concurrency {
         
         /**
          * @brief Handles a node that has yielded execution
-         * 
+         *
          * Transitions the node from Executing to Yielded state and reschedules it
          * for later execution. Checks reschedule limits to prevent infinite loops.
-         * 
+         *
          * @param node The node that yielded
          */
         void onNodeYielded(NodeHandle node);
-        
+
+        /**
+         * @brief Handles timed node yield - node suspended until specific time
+         *
+         * Transitions the node from Executing to Yielded state and defers it
+         * until the specified wake time. The node sleeps passively in a priority
+         * queue consuming no CPU until the wake time arrives.
+         *
+         * @param node The node that yielded
+         * @param wakeTime When the node should be reconsidered for scheduling
+         */
+        void onNodeYieldedUntil(NodeHandle node, std::chrono::steady_clock::time_point wakeTime);
+
         /**
          * @brief Reschedules a yielded node for execution
          * 

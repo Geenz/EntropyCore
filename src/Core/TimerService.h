@@ -196,6 +196,26 @@ public:
      */
     size_t getActiveTimerCount() const;
 
+    /**
+     * @brief Checks for ready timers and schedules them for execution
+     *
+     * Examines timers that are waiting for their scheduled time and wakes up
+     * any whose time has arrived. Call this periodically from your main loop
+     * to ensure timers fire promptly, especially when the system is idle.
+     *
+     * @return Number of timers that were woken up and scheduled
+     *
+     * @code
+     * // In main loop
+     * while (running) {
+     *     timerService->processReadyTimers();
+     *     // ... other work ...
+     *     std::this_thread::sleep_for(10ms);
+     * }
+     * @endcode
+     */
+    size_t processReadyTimers();
+
 private:
     // Only Timer can call cancelTimer
     friend class Timer;
@@ -208,6 +228,14 @@ private:
      * @param node The WorkGraph node handle for the timer
      */
     void cancelTimer(Concurrency::WorkGraph::NodeHandle node);
+
+    /**
+     * @brief Restarts the pump contract if not already running
+     *
+     * Thread-safe. Can be called from multiple threads concurrently.
+     * Uses mutex protection to prevent race conditions.
+     */
+    void restartPumpContract();
 
     /**
      * @brief Internal timer data tracked per node
@@ -230,6 +258,15 @@ private:
 
     // WorkService reference (set during load)
     Concurrency::WorkService* _workService = nullptr;
+
+    // Smart pump contract - only reschedules when active timers exist
+    mutable std::mutex _pumpContractMutex;
+    Concurrency::WorkContractHandle _pumpContractHandle;
+    std::shared_ptr<std::function<void()>> _pumpFunction;  // Kept alive to break weak_ptr cycle
+
+    // Synchronous cleanup: pump holds execution mutex while running
+    std::mutex _pumpExecutionMutex;
+    std::atomic<bool> _pumpShouldStop{false};
 };
 
 } // namespace Core
