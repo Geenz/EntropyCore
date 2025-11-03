@@ -21,10 +21,6 @@ using namespace std::chrono_literals;
 class TimerServiceTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        // NOTE: Timer tests are timing-sensitive and may exhibit platform-specific behavior
-        // in resource-constrained CI environments due to thread scheduling variability.
-        // Windows requires longer drain times (200ms) vs Unix (50ms) for reliable cleanup.
-
         // Create WorkService
         WorkService::Config workConfig;
         workConfig.threadCount = 2;
@@ -46,6 +42,10 @@ protected:
     }
 
     void TearDown() override {
+        // NOTE: Timer tests are timing-sensitive and may exhibit platform-specific behavior
+        // in resource-constrained CI environments due to thread scheduling variability.
+        // Windows requires longer drain times (200ms) vs Unix (50ms) for reliable cleanup.
+
         try {
             // Stop services
             if (timerService) {
