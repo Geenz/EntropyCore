@@ -18,6 +18,15 @@ using namespace EntropyEngine::Core;
 using namespace EntropyEngine::Core::Concurrency;
 using namespace std::chrono_literals;
 
+// Platform-specific drain times for timer test cleanup
+// Windows requires longer drain times due to different thread scheduling characteristics
+// that delay callback completion. Unix systems complete callbacks faster.
+#ifdef _WIN32
+constexpr auto kWindowsDrainTime = 200ms;  // Windows: slower callback completion
+#else
+constexpr auto kUnixDrainTime = 50ms;      // Unix (macOS, Linux): faster callback completion
+#endif
+
 class TimerServiceTest : public ::testing::Test {
 protected:
     void SetUp() override {
@@ -75,13 +84,11 @@ protected:
             // before we destroy the test fixture, preventing use-after-free crashes.
             // Must pump main thread work to ensure callbacks execute properly.
             //
-            // Platform-specific drain times: Windows requires significantly longer (200ms)
-            // due to different thread scheduling characteristics that delay callback completion.
-            // Unix systems (macOS, Linux) complete callbacks faster and only need 50ms.
+            // Use platform-specific drain time constants defined at file scope
 #ifdef _WIN32
-            constexpr auto drainTime = 200ms;  // Windows: slower callback completion
+            constexpr auto drainTime = kWindowsDrainTime;
 #else
-            constexpr auto drainTime = 50ms;   // Unix: faster callback completion
+            constexpr auto drainTime = kUnixDrainTime;
 #endif
             auto drainStart = std::chrono::steady_clock::now();
             while (std::chrono::steady_clock::now() - drainStart < drainTime) {

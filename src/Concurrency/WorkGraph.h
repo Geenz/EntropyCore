@@ -72,10 +72,10 @@ namespace Concurrency {
      * }, "data-processor");
      * 
      * // Or create a yieldable node
-     * auto yieldNode = graph.addYieldableNode([]() -> WorkResult {
-     *     if (!ready()) return WorkResult::Yield;
+     * auto yieldNode = graph.addYieldableNode([]() -> WorkResultContext {
+     *     if (!ready()) return WorkResultContext::yield();
      *     process();
-     *     return WorkResult::Complete;
+     *     return WorkResultContext::complete();
      * }, "yielder");
      * @endcode
      */
@@ -401,22 +401,22 @@ namespace Concurrency {
          * 
          * @code
          * // Polling task that yields until ready
-         * auto poller = graph.addYieldableNode([]() -> WorkResult {
+         * auto poller = graph.addYieldableNode([]() -> WorkResultContext {
          *     if (!dataReady()) {
-         *         return WorkResult::Yield;  // Try again later
+         *         return WorkResultContext::yield();  // Try again later
          *     }
          *     processData();
-         *     return WorkResult::Complete;
+         *     return WorkResultContext::complete();
          * }, "data-poller");
-         * 
+         *
          * // Staged processing with yield between stages
          * int stage = 0;
-         * auto staged = graph.addYieldableNode([&stage]() -> WorkResult {
+         * auto staged = graph.addYieldableNode([&stage]() -> WorkResultContext {
          *     switch (stage++) {
-         *         case 0: doStage1(); return WorkResult::Yield;
-         *         case 1: doStage2(); return WorkResult::Yield;
-         *         case 2: doStage3(); return WorkResult::Complete;
-         *         default: return WorkResult::Complete;
+         *         case 0: doStage1(); return WorkResultContext::yield();
+         *         case 1: doStage2(); return WorkResultContext::yield();
+         *         case 2: doStage3(); return WorkResultContext::complete();
+         *         default: return WorkResultContext::complete();
          *     }
          * }, "staged-processor", nullptr, ExecutionType::AnyThread, 10);
          * @endcode

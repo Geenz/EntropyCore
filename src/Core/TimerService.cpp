@@ -252,7 +252,7 @@ void TimerService::restartPumpContract() {
             auto pumpFunction = weakPump.lock();
             if (!pumpFunction) {
                 // Pump function released during shutdown, stop rescheduling
-                _pumpContractHandle = Concurrency::WorkContractHandle();  // Clear completed contract
+                _pumpContractHandle = Concurrency::WorkContractHandle();  // Reset to invalid handle
                 return;
             }
 
