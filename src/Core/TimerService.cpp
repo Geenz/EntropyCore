@@ -48,9 +48,12 @@ void TimerService::start() {
 }
 
 void TimerService::stop() {
-    // Cancel the pump contract
-    if (_pumpContractHandle.valid()) {
-        _pumpContractHandle.release();
+    // Cancel the pump contract (thread-safe)
+    {
+        std::lock_guard<std::mutex> lock(_pumpContractMutex);
+        if (_pumpContractHandle.valid()) {
+            _pumpContractHandle.release();
+        }
     }
 
     // Cancel all active timers
@@ -100,30 +103,10 @@ void TimerService::setWorkService(Concurrency::WorkService* workService) {
             _workGraph->execute();
         }
 
-        // Schedule smart pump contract on background thread
+        // Start the background pump contract
         // Runs on AnyThread to avoid monopolizing main thread queue
         // Main thread timers will still execute on main thread when ready
-        auto pumpFunction = std::make_shared<std::function<void()>>();
-        *pumpFunction = [this, pumpFunction]() {
-            // Process ready timers (schedules them for execution)
-            processReadyTimers();
-
-            // Reschedule if there are still active timers
-            if (getActiveTimerCount() > 0 && _workContractGroup && _workService) {
-                _pumpContractHandle = _workContractGroup->createContract(
-                    *pumpFunction,
-                    Concurrency::ExecutionType::AnyThread  // Background thread - won't block main thread
-                );
-                _pumpContractHandle.schedule();
-            }
-        };
-
-        // Initial schedule on background thread
-        _pumpContractHandle = _workContractGroup->createContract(
-            *pumpFunction,
-            Concurrency::ExecutionType::AnyThread
-        );
-        _pumpContractHandle.schedule();
+        restartPumpContract();
     }
 }
 
@@ -193,26 +176,8 @@ Timer TimerService::scheduleTimer(std::chrono::steady_clock::duration interval,
         _timers[node.handleIndex()] = timerData;
     }
 
-    // If pump contract is not running, restart it on background thread
-    if (!_pumpContractHandle.valid() && _workContractGroup) {
-        auto pumpFunction = std::make_shared<std::function<void()>>();
-        *pumpFunction = [this, pumpFunction]() {
-            processReadyTimers();
-            if (getActiveTimerCount() > 0 && _workContractGroup && _workService) {
-                _pumpContractHandle = _workContractGroup->createContract(
-                    *pumpFunction,
-                    Concurrency::ExecutionType::AnyThread
-                );
-                _pumpContractHandle.schedule();
-            }
-        };
-
-        _pumpContractHandle = _workContractGroup->createContract(
-            *pumpFunction,
-            Concurrency::ExecutionType::AnyThread
-        );
-        _pumpContractHandle.schedule();
-    }
+    // Ensure pump contract is running (thread-safe)
+    restartPumpContract();
 
     // Return Timer handle
     return Timer(this, node, interval, repeating);
@@ -235,6 +200,39 @@ size_t TimerService::getActiveTimerCount() const {
         }
     }
     return activeCount;
+}
+
+void TimerService::restartPumpContract() {
+    // Thread-safe check and restart of pump contract
+    std::lock_guard<std::mutex> lock(_pumpContractMutex);
+
+    // Check if pump is already running
+    if (_pumpContractHandle.valid() || !_workContractGroup) {
+        return;
+    }
+
+    // Create self-rescheduling pump function
+    auto pumpFunction = std::make_shared<std::function<void()>>();
+    *pumpFunction = [this, pumpFunction]() {
+        processReadyTimers();
+
+        // Reschedule if there are still active timers
+        if (getActiveTimerCount() > 0 && _workContractGroup && _workService) {
+            std::lock_guard<std::mutex> lock(_pumpContractMutex);
+            _pumpContractHandle = _workContractGroup->createContract(
+                *pumpFunction,
+                Concurrency::ExecutionType::AnyThread
+            );
+            _pumpContractHandle.schedule();
+        }
+    };
+
+    // Schedule initial execution on background thread
+    _pumpContractHandle = _workContractGroup->createContract(
+        *pumpFunction,
+        Concurrency::ExecutionType::AnyThread
+    );
+    _pumpContractHandle.schedule();
 }
 
 size_t TimerService::processReadyTimers() {

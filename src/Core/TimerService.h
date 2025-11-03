@@ -230,6 +230,14 @@ private:
     void cancelTimer(Concurrency::WorkGraph::NodeHandle node);
 
     /**
+     * @brief Restarts the pump contract if not already running
+     *
+     * Thread-safe. Can be called from multiple threads concurrently.
+     * Uses mutex protection to prevent race conditions.
+     */
+    void restartPumpContract();
+
+    /**
      * @brief Internal timer data tracked per node
      */
     struct TimerData {
@@ -252,6 +260,7 @@ private:
     Concurrency::WorkService* _workService = nullptr;
 
     // Smart pump contract - only reschedules when active timers exist
+    mutable std::mutex _pumpContractMutex;
     Concurrency::WorkContractHandle _pumpContractHandle;
 };
 

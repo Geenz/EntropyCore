@@ -22,6 +22,7 @@
 #include <functional>
 #include <memory>
 #include <chrono>
+#include <optional>
 #include "../Graph/AcyclicNodeHandle.h"
 
 namespace EntropyEngine {

@@ -249,8 +249,16 @@ std::function<void()> NodeScheduler::createWorkWrapper(NodeHandle node) {
                     if (result.result == WorkResult::Yield) {
                         yielded = true;
                     } else if (result.result == WorkResult::YieldUntil && result.wakeTime) {
-                        yieldedUntil = true;
-                        wakeTime = *result.wakeTime;
+                        // Validate that wake time is in the future
+                        auto now = std::chrono::steady_clock::now();
+                        if (*result.wakeTime > now) {
+                            // Future time - defer until then
+                            yieldedUntil = true;
+                            wakeTime = *result.wakeTime;
+                        } else {
+                            // Past or current time - treat as immediate yield
+                            yielded = true;
+                        }
                     }
                 }
             } else {
