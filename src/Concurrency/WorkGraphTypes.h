@@ -146,7 +146,20 @@ namespace Concurrency {
             return {WorkResult::Yield, std::nullopt};
         }
 
-        /// Creates a timed yield result (reschedule at specific time)
+        /**
+         * @brief Creates a timed yield result (reschedule at specific time)
+         *
+         * Defers node execution until the specified wake time without consuming CPU resources.
+         * The node will be rescheduled for execution when the wake time is reached.
+         *
+         * @param when The time point when the node should be rescheduled
+         *
+         * @note If the wake time is in the past or current time, the system treats it as
+         *       an immediate yield (equivalent to calling yield()), rescheduling as soon
+         *       as possible rather than failing or blocking.
+         *
+         * @return WorkResultContext configured for timed yield
+         */
         static WorkResultContext yieldUntil(std::chrono::steady_clock::time_point when) {
             return {WorkResult::YieldUntil, when};
         }

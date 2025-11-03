@@ -244,9 +244,8 @@ void TimerService::restartPumpContract() {
             return;
         }
 
-        // Reschedule pump to ensure it continues running for new timers
-        // This prevents race condition where pump stops before timers are added.
-        // Rescheduling only happens if not stopping and pump function is still alive.
+        // Reschedule pump to continue checking for ready timers
+        // This prevents race where timers are added after pump completes but before rescheduling
         std::lock_guard<std::mutex> contractLock(_pumpContractMutex);
         if (_workContractGroup) {
             // Lock the weak_ptr to ensure pump function is still alive
