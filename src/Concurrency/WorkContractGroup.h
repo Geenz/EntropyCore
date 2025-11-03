@@ -593,13 +593,7 @@ namespace Concurrency {
          *
          * @return Number of nodes that were scheduled from timed deferral queue
          */
-        size_t checkTimedDeferrals() {
-            std::lock_guard<std::mutex> lock(_timedDeferralCallbackMutex);
-            if (_timedDeferralCallback) {
-                return _timedDeferralCallback();
-            }
-            return 0;
-        }
+        size_t checkTimedDeferrals();
 
         /**
          * @brief Sets a callback for checking timed deferrals
@@ -610,10 +604,7 @@ namespace Concurrency {
          *
          * @param callback Function that checks and schedules timed deferrals, or nullptr to clear
          */
-        void setTimedDeferralCallback(std::function<size_t()> callback) {
-            std::lock_guard<std::mutex> lock(_timedDeferralCallbackMutex);
-            _timedDeferralCallback = std::move(callback);
-        }
+        void setTimedDeferralCallback(std::function<size_t()> callback);
 
     private:
         /**

@@ -352,15 +352,15 @@ bool NodeScheduler::deferNodeUntil(NodeHandle node, std::chrono::steady_clock::t
 size_t NodeScheduler::processTimedDeferredNodes(size_t maxToSchedule) {
     auto now = std::chrono::steady_clock::now();
 
-    // Extract nodes whose wake time has passed
-    std::vector<NodeHandle> readyNodes;
+    // Extract nodes whose wake time has passed (preserve full TimedNode for wake time tracking)
+    std::vector<TimedNode> readyNodes;
     {
         std::lock_guard<std::shared_mutex> lock(_timedDeferredMutex);
 
         // Pop all nodes that are ready (wake time <= now)
         while (!_timedDeferredQueue.empty() &&
                _timedDeferredQueue.top().wakeTime <= now) {
-            readyNodes.push_back(_timedDeferredQueue.top().node);
+            readyNodes.push_back(_timedDeferredQueue.top());
             _timedDeferredQueue.pop();
 
             // Check if we've hit the limit
@@ -377,26 +377,16 @@ size_t NodeScheduler::processTimedDeferredNodes(size_t maxToSchedule) {
 
     // Schedule the ready nodes
     size_t scheduled = 0;
-    bool hitCapacity = false;
     for (size_t i = 0; i < readyNodes.size(); ++i) {
-        if (scheduleNode(readyNodes[i])) {
+        if (scheduleNode(readyNodes[i].node)) {
             scheduled++;
         } else {
             // Scheduling failed - hit capacity
-            // Re-defer remaining nodes back to timed queue to prevent dropping
-            hitCapacity = true;
-
-            // Re-enqueue this node and all remaining nodes
+            // Re-defer remaining nodes back to timed queue with original wake times
             std::lock_guard<std::shared_mutex> lock(_timedDeferredMutex);
             for (size_t j = i; j < readyNodes.size(); ++j) {
-                auto* dag = readyNodes[j].handleOwnerAs<Graph::DirectedAcyclicGraph<WorkGraphNode>>();
-                auto* nodeData = dag ? dag->getNodeData(readyNodes[j]) : nullptr;
-                if (nodeData) {
-                    // Re-defer with original wake time
-                    // Get wake time from the timer data associated with this node
-                    auto fireTime = std::chrono::steady_clock::now() + std::chrono::milliseconds(1);
-                    _timedDeferredQueue.push({readyNodes[j], fireTime});
-                }
+                // Re-enqueue with preserved original wake time for scheduling precision
+                _timedDeferredQueue.push(readyNodes[j]);
             }
             break;
         }
