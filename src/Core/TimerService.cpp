@@ -57,6 +57,8 @@ void TimerService::stop() {
         if (_pumpContractHandle.valid()) {
             _pumpContractHandle.release();
         }
+        // Clear the pump function to break any weak_ptr references
+        _pumpFunction.reset();
     }
 
     // Step 3: Wait for any in-flight pump execution (like WorkService::waitForStop)
@@ -222,9 +224,10 @@ void TimerService::restartPumpContract() {
         return;
     }
 
-    // Create self-rescheduling pump function
-    auto pumpFunction = std::make_shared<std::function<void()>>();
-    *pumpFunction = [this, pumpFunction]() {
+    // Create self-rescheduling pump function (stored as member to keep weak_ptr valid)
+    _pumpFunction = std::make_shared<std::function<void()>>();
+    std::weak_ptr<std::function<void()>> weakPump = _pumpFunction;
+    *_pumpFunction = [this, weakPump]() {
         // Hold execution mutex for entire pump execution (synchronous cleanup pattern)
         std::lock_guard<std::mutex> execLock(_pumpExecutionMutex);
 
@@ -242,8 +245,13 @@ void TimerService::restartPumpContract() {
         }
 
         // Reschedule if there are still active timers
+        // Acquire locks in consistent order: _pumpContractMutex before _timersMutex
+        std::lock_guard<std::mutex> contractLock(_pumpContractMutex);
         if (getActiveTimerCount() > 0 && _workContractGroup && _workService) {
-            std::lock_guard<std::mutex> contractLock(_pumpContractMutex);
+            // Lock the weak_ptr to ensure pump function is still alive
+            auto pumpFunction = weakPump.lock();
+            if (!pumpFunction) return; // Already destroyed, stop rescheduling
+
             _pumpContractHandle = _workContractGroup->createContract(
                 *pumpFunction,
                 Concurrency::ExecutionType::AnyThread
@@ -255,7 +263,7 @@ void TimerService::restartPumpContract() {
 
     // Schedule initial execution on background thread
     _pumpContractHandle = _workContractGroup->createContract(
-        *pumpFunction,
+        *_pumpFunction,
         Concurrency::ExecutionType::AnyThread
     );
     _pumpContractHandle.schedule();

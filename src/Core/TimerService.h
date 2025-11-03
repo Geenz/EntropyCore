@@ -262,6 +262,7 @@ private:
     // Smart pump contract - only reschedules when active timers exist
     mutable std::mutex _pumpContractMutex;
     Concurrency::WorkContractHandle _pumpContractHandle;
+    std::shared_ptr<std::function<void()>> _pumpFunction;  // Kept alive to break weak_ptr cycle
 
     // Synchronous cleanup: pump holds execution mutex while running
     std::mutex _pumpExecutionMutex;

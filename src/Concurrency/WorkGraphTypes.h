@@ -99,12 +99,12 @@ namespace Concurrency {
      * This enables coroutine-like behavior without actual C++ coroutines.
      *
      * @code
-     * auto node = graph.addYieldableNode([]() -> WorkResult {
+     * auto node = graph.addYieldableNode([]() -> WorkResultContext {
      *     if (!dataReady()) {
-     *         return WorkResult::Yield;  // Try again later
+     *         return WorkResultContext::yield();  // Try again later
      *     }
      *     processData();
-     *     return WorkResult::Complete;
+     *     return WorkResultContext::complete();
      * });
      * @endcode
      */
