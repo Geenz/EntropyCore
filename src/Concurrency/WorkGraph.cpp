@@ -65,6 +65,7 @@ WorkGraph::WorkGraph(WorkContractGroup* workContractGroup, const WorkGraphConfig
     _scheduler = std::make_unique<NodeScheduler>(
         _workContractGroup,
         this,
+        &_graphMutex,
         _config.enableEvents ? getEventBus() : nullptr,
         schedulerConfig
     );

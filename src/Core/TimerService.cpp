@@ -48,6 +48,11 @@ void TimerService::start() {
 }
 
 void TimerService::stop() {
+    // Early exit if already unloaded (WorkContractGroup destroyed)
+    if (!_workContractGroup) {
+        return;
+    }
+
     // Step 1: Signal pump to stop (like WorkService::requestStop)
     _pumpShouldStop.store(true, std::memory_order_release);
 

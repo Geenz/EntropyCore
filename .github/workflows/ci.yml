@@ -270,3 +270,87 @@ jobs:
         with:
           name: EntropyCore-macOS-universal
           path: EntropyCore-macOS-universal/**
+
+  sanitizer-asan-ubsan:
+    name: Sanitizer Tests (ASAN + UBSAN)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build g++ cmake
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgGitCommitId: 'c59b04f668d20c7dd83f478835e8266a3cc51270'
+
+      - name: Configure CMake with ASAN/UBSAN
+        run: >
+          cmake -S . -B build-asan -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DENTROPY_ENABLE_TESTS=ON
+          -DENABLE_SANITIZERS=ON
+          -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
+
+      - name: Build tests with ASAN/UBSAN
+        run: cmake --build build-asan --target EntropyCoreTests
+
+      - name: Run tests with ASAN/UBSAN
+        working-directory: build-asan
+        run: ./EntropyCoreTests --gtest_brief=1
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:abort_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:abort_on_error=1:print_stacktrace=1
+
+      - name: Upload ASAN/UBSAN logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sanitizer-asan-logs
+          path: build-asan/**/*.log
+
+  sanitizer-tsan:
+    name: Sanitizer Tests (TSAN)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build g++ cmake
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgGitCommitId: 'c59b04f668d20c7dd83f478835e8266a3cc51270'
+
+      - name: Configure CMake with TSAN
+        run: >
+          cmake -S . -B build-tsan -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DENTROPY_ENABLE_TESTS=ON
+          -DENABLE_SANITIZERS=ON
+          -DENABLE_TSAN=ON
+          -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
+
+      - name: Build tests with TSAN
+        run: cmake --build build-tsan --target EntropyCoreTests
+
+      - name: Run tests with TSAN
+        working-directory: build-tsan
+        run: ./EntropyCoreTests --gtest_brief=1
+        env:
+          TSAN_OPTIONS: halt_on_error=1:abort_on_error=1:second_deadlock_stack=1
+
+      - name: Upload TSAN logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sanitizer-tsan-logs
+          path: build-tsan/**/*.log

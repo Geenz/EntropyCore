@@ -217,7 +217,10 @@ std::function<void()> NodeScheduler::createWorkWrapper(NodeHandle node) {
         if (_destroyed.load(std::memory_order_acquire)) {
             return;  // Scheduler is gone, do nothing
         }
-        
+
+        // Lock the graph mutex for reading while accessing DAG structure
+        std::shared_lock<std::shared_mutex> graphLock(*_graphMutex);
+
         auto* dag = node.handleOwnerAs<Graph::DirectedAcyclicGraph<WorkGraphNode>>();
         auto* nodeData = dag ? dag->getNodeData(node) : nullptr;
         if (!nodeData) {

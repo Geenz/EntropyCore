@@ -15,6 +15,8 @@ option(ENTROPY_ENABLE_TESTS "Enable/build tests for EntropyCore" OFF)
 option(ENTROPY_BUILD_EXAMPLES "Build EntropyCore example executables" OFF)
 # Entropy does not depend on C++ RTTI. You may optionally disable RTTI for these targets if desired.
 option(ENTROPY_REQUIRE_NO_RTTI "Disable C++ RTTI for Entropy targets" OFF)
+# Enable sanitizers for debugging and testing
+option(ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer" ON)
 
 # Default behavior: on single-config generators, enable tests in Debug/RelWithDebInfo
 # No build-dir heuristics; on multi-config generators we do not auto-enable by default.
@@ -31,6 +33,28 @@ set(ENTROPY_BUILD_TESTS ${ENTROPY_ENABLE_TESTS} CACHE BOOL "Build tests for Entr
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
+# Configure sanitizers
+if(ENABLE_SANITIZERS)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+        # ThreadSanitizer is mutually exclusive with AddressSanitizer
+        # To use TSAN instead: cmake -DENABLE_TSAN=ON
+        if(ENABLE_TSAN)
+            set(SANITIZER_FLAGS "-fsanitize=thread -fno-omit-frame-pointer -g")
+            set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${SANITIZER_FLAGS}")
+            set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${SANITIZER_FLAGS}")
+            message(STATUS "ThreadSanitizer (TSAN) enabled")
+        else()
+            set(SANITIZER_FLAGS "-fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer -g")
+            set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${SANITIZER_FLAGS}")
+            set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${SANITIZER_FLAGS}")
+            message(STATUS "Sanitizers enabled: AddressSanitizer (ASAN) and UndefinedBehaviorSanitizer (UBSAN)")
+        endif()
+    else()
+        message(WARNING "Sanitizers requested but not supported by ${CMAKE_CXX_COMPILER_ID}")
+    endif()
+endif()
+
 #
 # # Configure vcpkg
 if(DEFINED CMAKE_TOOLCHAIN_FILE)
