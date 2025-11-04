@@ -92,16 +92,11 @@ namespace Debug {
         mutable std::shared_mutex _mutex;
         std::unordered_map<const INamed*, Entry> _objects;
         
-        static DebugRegistry* s_instance;
-        static std::mutex s_instanceMutex;
-        
     public:
         static DebugRegistry& getInstance() {
-            std::lock_guard<std::mutex> lock(s_instanceMutex);
-            if (!s_instance) {
-                s_instance = new DebugRegistry();
-            }
-            return *s_instance;
+            // Meyer's singleton - thread-safe in C++11, avoids static destruction order fiasco
+            static DebugRegistry instance;
+            return instance;
         }
         
         /**
@@ -268,8 +263,4 @@ namespace Debug {
 } // namespace Debug
 } // namespace Core
 } // namespace EntropyEngine
-
-// Initialize static members
-inline EntropyEngine::Core::Debug::DebugRegistry* EntropyEngine::Core::Debug::DebugRegistry::s_instance = nullptr;
-inline std::mutex EntropyEngine::Core::Debug::DebugRegistry::s_instanceMutex;
 

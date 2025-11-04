@@ -50,9 +50,9 @@ public:
     TestWorkServiceSingleton& operator=(const TestWorkServiceSingleton&) = delete;
 };
 
-// Static member definitions
-std::unique_ptr<Concurrency::WorkService> TestWorkServiceSingleton::instance = nullptr;
-std::mutex TestWorkServiceSingleton::mutex;
+// Static member definitions - marked inline to avoid ODR violations in header
+inline std::unique_ptr<Concurrency::WorkService> TestWorkServiceSingleton::instance = nullptr;
+inline std::mutex TestWorkServiceSingleton::mutex;
 
 } // namespace Testing
 } // namespace Core
