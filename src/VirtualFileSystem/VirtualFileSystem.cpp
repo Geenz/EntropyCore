@@ -139,14 +139,15 @@ FileOperationHandle VirtualFileSystem::submitSerialized(std::string path, std::f
                     }
                 }
                 // Use bounded advisory fallback for all supported cases (including NotSupported)
-                if (!vfsLock->try_lock_for(advTimeout)) {
+                // Construct unique_lock with the mutex and defer_lock, then try_lock_for through it
+                pathLock = std::unique_lock<std::timed_mutex>(*vfsLock, std::defer_lock);
+                if (!pathLock.try_lock_for(advTimeout)) {
                     auto key = backend ? backend->normalizeKey(p) : this->normalizePath(p);
                     auto ms = advTimeout.count();
                     s.setError(FileError::Timeout, std::string("Advisory lock acquisition timed out after ") + std::to_string(ms) + " ms (key=" + key + ")", p);
                     s.complete(FileOpStatus::Failed);
                     return;
                 }
-                pathLock = std::unique_lock<std::timed_mutex>(*vfsLock, std::adopt_lock);
             }
         }
 
