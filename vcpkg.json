@@ -14,10 +14,6 @@
     "name" : "gtest"
   } ],
   "features": {
-    "tracy": {
-      "description": "Enable Tracy profiler integration",
-      "dependencies": ["tracy"]
-    },
     "tests": {
       "description": "Enable testing with GoogleTest",
       "dependencies": ["gtest"]

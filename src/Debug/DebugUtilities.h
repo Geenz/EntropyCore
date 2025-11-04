@@ -351,43 +351,6 @@ namespace Debug {
         return true;
     }
 
-    /**
-     * @brief Memory usage tracking structure
-     * 
-     * Tracks allocations, deallocations, and peak usage. Would integrate with
-     * memory allocator for real-time statistics in full implementation.
-     * 
-     * @code
-     * auto stats = getMemoryStats();
-     * LOG_INFO("Current memory: {} MB, Peak: {} MB",
-     *          stats.currentBytes / (1024.0 * 1024.0),
-     *          stats.peakBytes / (1024.0 * 1024.0));
-     * 
-     * if (stats.allocationCount > stats.deallocationCount + 1000) {
-     *     LOG_WARN("Potential memory leak detected");
-     * }
-     * @endcode
-     */
-    struct MemoryStats {
-        size_t currentBytes = 0;
-        size_t peakBytes = 0;
-        size_t allocationCount = 0;
-        size_t deallocationCount = 0;
-    };
-
-    /**
-     * @brief Get current memory statistics
-     * 
-     * Returns memory usage statistics. Stub implementation - integrate with
-     * memory allocator for actual tracking. Debug builds only.
-     * 
-     * @return Current memory statistics
-     */
-    [[nodiscard]] inline MemoryStats getMemoryStats() {
-        // This would hook into the memory system
-        return MemoryStats{};
-    }
-
 } // namespace Debug
 } // namespace Core
 } // namespace EntropyEngine

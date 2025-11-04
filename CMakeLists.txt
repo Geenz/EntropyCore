@@ -38,10 +38,6 @@ if(DEFINED CMAKE_TOOLCHAIN_FILE)
 endif()
 
 # Find packages
-option(ENTROPY_WITH_TRACY "Enable Tracy profiler integration" OFF)
-if(ENTROPY_WITH_TRACY)
-    find_package(Tracy CONFIG QUIET)
-endif()
 find_package(Boost REQUIRED COMPONENTS type_index)
 find_package(efsw CONFIG REQUIRED)
 
@@ -91,7 +87,6 @@ set(ENTROPY_CORE_HEADERS
         src/Core/EntropyInterop.h
         src/Core/entropy_c_api.h
         src/EntropyCore.h
-        src/ServiceLocator.h
         src/Core/EntropyService.h
         src/Core/EntropyServiceRegistry.h
         src/Core/EntropyApplication.h
@@ -105,7 +100,6 @@ set(ENTROPY_CORE_HEADERS
         src/Graph/AcyclicNodeHandle.h
         src/Debug/INamed.h
         src/Debug/DebugUtilities.h
-        src/Debug/Profiling.h
         src/Debug/Debug.h
         src/Logging/LogLevel.h
         src/Logging/LogEntry.h
@@ -217,13 +211,6 @@ target_link_libraries(EntropyCore
 target_compile_definitions(EntropyCore PRIVATE ENTROPYCORE_BUILDING)
 # EntropyCore is always static - no ENTROPYCORE_SHARED definition needed
 
-# Link Tracy if enabled and available
-if(ENTROPY_WITH_TRACY)
-  if(TARGET Tracy::TracyClient)
-    target_link_libraries(EntropyCore PUBLIC Tracy::TracyClient)
-  endif()
-endif()
-
 if(ENTROPY_BUILD_EXAMPLES)
   add_executable(WorkContractExample Examples/WorkContractExample.cpp)
   target_link_libraries(WorkContractExample PRIVATE EntropyCore)
@@ -307,16 +294,6 @@ if(ENTROPY_BUILD_EXAMPLES)
   # Custom AppDelegate example with main thread work pump
   add_executable(CustomAppDelegateExample Examples/CustomAppDelegateExample.cpp)
   target_link_libraries(CustomAppDelegateExample PRIVATE EntropyCore)
-
-  # Link Tracy to examples if available
-  if(ENTROPY_WITH_TRACY)
-    if(TARGET Tracy::TracyClient)
-      target_link_libraries(WorkContractExample PRIVATE Tracy::TracyClient)
-      target_link_libraries(WorkGraphYieldableExample PRIVATE Tracy::TracyClient)
-      target_link_libraries(EntropyObjectExample PRIVATE Tracy::TracyClient)
-      target_link_libraries(EntropyObjectHandleExample PRIVATE Tracy::TracyClient)
-    endif()
-  endif()
 endif()
 
 # Platform and compiler-specific settings
@@ -361,14 +338,6 @@ else()
 endif()
 
 # Define preprocessor macros
-if(ENTROPY_WITH_TRACY AND TARGET Tracy::TracyClient)
-    target_compile_definitions(EntropyCore
-        PUBLIC
-            TRACY_ENABLE
-            TRACY_ON_DEMAND
-    )
-endif()
-
 # Add EntropyDebug macro for Debug and RelWithDebInfo builds via generator expression
 target_compile_definitions(EntropyCore PUBLIC $<$<OR:$<CONFIG:Debug>,$<CONFIG:RelWithDebInfo>>:EntropyDebug>)
 
