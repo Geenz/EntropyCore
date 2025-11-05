@@ -103,9 +103,10 @@ FileOperationHandle VirtualFileSystem::submitSerialized(std::string path, std::f
     auto policy = _cfg.advisoryFallback;
 
     return submit(std::move(path), [backend, vfsLock, advTimeout, policy, op=std::move(op)](FileOperationHandle::OpState& s, const std::string& p, const ExecContext& ctx) mutable {
-        // No-op if no backend available
+        // Fail if no backend available - don't silently skip the operation
         if (!backend) {
-            s.complete(FileOpStatus::Complete);
+            s.setError(FileError::NotSupported, "No file system backend available for path", p);
+            s.complete(FileOpStatus::Failed);
             return;
         }
 

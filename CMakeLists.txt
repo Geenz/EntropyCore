@@ -15,8 +15,8 @@ option(ENTROPY_ENABLE_TESTS "Enable/build tests for EntropyCore" OFF)
 option(ENTROPY_BUILD_EXAMPLES "Build EntropyCore example executables" OFF)
 # Entropy does not depend on C++ RTTI. You may optionally disable RTTI for these targets if desired.
 option(ENTROPY_REQUIRE_NO_RTTI "Disable C++ RTTI for Entropy targets" OFF)
-# Enable sanitizers for debugging and testing
-option(ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer" ON)
+# Enable sanitizers for debugging and testing (OFF by default - enable explicitly in CI/testing)
+option(ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
 
 # Default behavior: on single-config generators, enable tests in Debug/RelWithDebInfo
 # No build-dir heuristics; on multi-config generators we do not auto-enable by default.

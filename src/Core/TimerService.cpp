@@ -35,7 +35,8 @@ std::vector<TypeSystem::TypeID> TimerService::dependsOnTypes() const {
 }
 
 void TimerService::load() {
-    // Create WorkContractGroup for timer nodes (starts with refcount=1)
+    // Create WorkContractGroup for timer nodes
+    // Note: Initial refcount=1 is set by EntropyObject base class (see EntropyObject.h:56)
     _workContractGroup = new Concurrency::WorkContractGroup(_config.workContractGroupSize);
 
     // Create WorkGraph using the WorkContractGroup
