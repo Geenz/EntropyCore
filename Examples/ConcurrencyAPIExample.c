@@ -107,6 +107,7 @@ void reentrant_work(void* user_data) {
             if (status == ENTROPY_OK) {
                 entropy_work_contract_schedule(left, &status);
             }
+            entropy_work_contract_handle_destroy(left);
 
             entropy_WorkContractHandle right = entropy_work_contract_group_create_contract(
                 ctx->group, reentrant_work, right_child, ENTROPY_EXEC_ANY_THREAD, &status
@@ -115,6 +116,7 @@ void reentrant_work(void* user_data) {
             if (status == ENTROPY_OK) {
                 entropy_work_contract_schedule(right, &status);
             }
+            entropy_work_contract_handle_destroy(right);
         }
     } else {
         ENTROPY_LOG_DEBUG_CAT_F("Reentrant",
@@ -264,12 +266,15 @@ int main(void) {
             entropy_work_contract_schedule(root_handle, &status);
             ENTROPY_LOG_INFO_CAT_F("Example", "Root task scheduled - it will spawn children recursively");
         }
-    }
 
-    // Wait for the recursive tree to complete
-    ENTROPY_LOG_INFO_CAT_F("Example", "Waiting for re-entrant task tree to complete...");
-    entropy_work_contract_group_wait(group, &status);
-    ENTROPY_LOG_INFO_CAT_F("Example", "Re-entrant task tree completed");
+        // Wait for the recursive tree to complete
+        ENTROPY_LOG_INFO_CAT_F("Example", "Waiting for re-entrant task tree to complete...");
+        entropy_work_contract_group_wait(group, &status);
+        ENTROPY_LOG_INFO_CAT_F("Example", "Re-entrant task tree completed");
+
+        // Destroy the root handle
+        entropy_work_contract_handle_destroy(root_handle);
+    }
 
     // 9. Print statistics
     ENTROPY_LOG_INFO_CAT_F("Example", "Step 9: Final statistics:");
@@ -286,6 +291,15 @@ int main(void) {
     ENTROPY_LOG_INFO_CAT_F("Example", "Step 10: Cleaning up...");
     entropy_work_service_stop(service, &status);
     ENTROPY_LOG_DEBUG_CAT_F("Example", "Service stopped");
+
+    // Destroy handle wrappers
+    ENTROPY_LOG_DEBUG_CAT_F("Example", "Destroying work contract handles...");
+    for (int i = 0; i < 10; i++) {
+        entropy_work_contract_handle_destroy(handles[i]);
+    }
+    for (int i = 0; i < 3; i++) {
+        entropy_work_contract_handle_destroy(main_handles[i]);
+    }
 
     entropy_work_service_destroy(service);
     ENTROPY_LOG_DEBUG_CAT_F("Example", "Service destroyed");

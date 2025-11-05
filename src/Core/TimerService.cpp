@@ -36,10 +36,11 @@ std::vector<TypeSystem::TypeID> TimerService::dependsOnTypes() const {
 
 void TimerService::load() {
     // Create WorkContractGroup for timer nodes
-    _workContractGroup = std::make_unique<Concurrency::WorkContractGroup>(_config.workContractGroupSize);
+    // Note: Initial refcount=1 is set by EntropyObject base class (see EntropyObject.h:56)
+    _workContractGroup = new Concurrency::WorkContractGroup(_config.workContractGroupSize);
 
     // Create WorkGraph using the WorkContractGroup
-    _workGraph = std::make_unique<Concurrency::WorkGraph>(_workContractGroup.get());
+    _workGraph = std::make_unique<Concurrency::WorkGraph>(_workContractGroup);
 }
 
 void TimerService::start() {
@@ -48,6 +49,11 @@ void TimerService::start() {
 }
 
 void TimerService::stop() {
+    // Early exit if already unloaded (WorkContractGroup destroyed)
+    if (!_workContractGroup) {
+        return;
+    }
+
     // Step 1: Signal pump to stop (like WorkService::requestStop)
     _pumpShouldStop.store(true, std::memory_order_release);
 
@@ -84,7 +90,7 @@ void TimerService::stop() {
 
     // Unregister WorkContractGroup from WorkService
     if (_workService && _workContractGroup) {
-        _workService->removeWorkContractGroup(_workContractGroup.get());
+        _workService->removeWorkContractGroup(_workContractGroup);
     }
 }
 
@@ -97,7 +103,14 @@ void TimerService::unload() {
 
     // Clean up WorkGraph and WorkContractGroup
     _workGraph.reset();
-    _workContractGroup.reset();
+
+    // Release our reference to the WorkContractGroup
+    // Object will be deleted when all references are released (including WorkService snapshots)
+    if (_workContractGroup) {
+        _workContractGroup->release();
+        _workContractGroup = nullptr;
+    }
+
     _workService = nullptr;
 }
 
@@ -106,7 +119,7 @@ void TimerService::setWorkService(Concurrency::WorkService* workService) {
 
     // Register our WorkContractGroup with the WorkService
     if (_workService && _workContractGroup) {
-        auto status = _workService->addWorkContractGroup(_workContractGroup.get());
+        auto status = _workService->addWorkContractGroup(_workContractGroup);
         if (status != Concurrency::WorkService::GroupOperationStatus::Added) {
             throw std::runtime_error("Failed to register TimerService WorkContractGroup with WorkService");
         }

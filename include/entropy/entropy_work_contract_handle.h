@@ -136,6 +136,30 @@ ENTROPY_API void entropy_work_contract_release(
 );
 
 /**
+ * @brief Destroy a work contract handle
+ *
+ * Frees the handle wrapper allocated by entropy_work_contract_group_create_contract().
+ * Does NOT release the contract slot (call entropy_work_contract_release() first if needed).
+ *
+ * Safe to call on NULL handles (no-op).
+ *
+ * @param handle Handle to destroy (can be NULL)
+ *
+ * @threadsafety Thread-safe
+ * @ownership Handle becomes invalid after this call
+ *
+ * @code
+ * // Typical cleanup sequence:
+ * entropy_work_contract_release(handle);  // Release the slot
+ * entropy_work_contract_handle_destroy(handle);  // Free the wrapper
+ * handle = NULL; // Good practice
+ * @endcode
+ */
+ENTROPY_API void entropy_work_contract_handle_destroy(
+    entropy_WorkContractHandle handle
+);
+
+/**
  * @brief Reports whether the contract is currently scheduled
  *
  * @param handle The work contract handle (required, must be valid)

@@ -28,8 +28,6 @@ WorkGraph::WorkGraph(WorkContractGroup* workContractGroup, const WorkGraphConfig
     : Debug::Named("WorkGraph")
     , _workContractGroup(workContractGroup)
     , _config(config) {
-    ENTROPY_PROFILE_ZONE();
-    
     if (_config.enableDebugLogging) {
         ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph constructor called");
     }
@@ -67,6 +65,7 @@ WorkGraph::WorkGraph(WorkContractGroup* workContractGroup, const WorkGraphConfig
     _scheduler = std::make_unique<NodeScheduler>(
         _workContractGroup,
         this,
+        &_graphMutex,
         _config.enableEvents ? getEventBus() : nullptr,
         schedulerConfig
     );
@@ -205,8 +204,6 @@ WorkGraph::WorkGraph(WorkContractGroup* workContractGroup, const WorkGraphConfig
 }
 
 WorkGraph::~WorkGraph() {
-    ENTROPY_PROFILE_ZONE();
-    
     if (_config.enableDebugLogging) {
         ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph destructor starting, pending nodes: " + std::to_string(_pendingNodes.load()));
     }
@@ -245,7 +242,6 @@ WorkGraph::NodeHandle WorkGraph::addNode(std::function<void()> work,
                                         const std::string& name,
                                         void* userData,
                                         ExecutionType executionType) {
-    ENTROPY_PROFILE_ZONE();
     std::unique_lock<std::shared_mutex> lock(_graphMutex);
     
     // Create node with the work and execution type
@@ -290,7 +286,6 @@ WorkGraph::NodeHandle WorkGraph::addYieldableNode(YieldableWorkFunction work,
                                                   void* userData,
                                                   ExecutionType executionType,
                                                   std::optional<uint32_t> maxReschedules) {
-    ENTROPY_PROFILE_ZONE();
     std::unique_lock<std::shared_mutex> lock(_graphMutex);
     
     // Create node with yieldable work function
@@ -339,7 +334,6 @@ WorkGraph::NodeHandle WorkGraph::addYieldableNode(YieldableWorkFunction work,
 }
 
 void WorkGraph::addDependency(NodeHandle from, NodeHandle to) {
-    ENTROPY_PROFILE_ZONE();
     std::unique_lock<std::shared_mutex> lock(_graphMutex);
     
     // Add edge in the DAG (this checks for cycles)
@@ -464,8 +458,6 @@ void WorkGraph::resume() {
 }
 
 void WorkGraph::execute() {
-    ENTROPY_PROFILE_ZONE();
-    
     if (_config.enableDebugLogging) {
         ENTROPY_LOG_INFO_CAT("Concurrency", "WorkGraph::execute() starting");
     }
@@ -632,8 +624,6 @@ void WorkGraph::onNodeComplete(NodeHandle node) {
 }
 
 WorkGraph::WaitResult WorkGraph::wait() {
-    ENTROPY_PROFILE_ZONE();
-    
     if (_config.enableDebugLogging) {
         ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph::wait() called");
     }

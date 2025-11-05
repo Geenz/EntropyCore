@@ -150,10 +150,12 @@ public:
      */
     NodeScheduler(WorkContractGroup* contractGroup,
                   const WorkGraph* graph,
+                  std::shared_mutex* graphMutex,
                   Core::EventBus* eventBus = nullptr,
                   const Config& config = {})
         : _contractGroup(contractGroup)
         , _graph(graph)
+        , _graphMutex(graphMutex)
         , _eventBus(eventBus)
         , _config(config) {
     }
@@ -467,6 +469,7 @@ public:
 private:
     WorkContractGroup* _contractGroup;         ///< Where we schedule work (not owned)
     const WorkGraph* _graph;                   ///< Graph we're scheduling for (not owned)
+    std::shared_mutex* _graphMutex;            ///< Mutex protecting graph structure (not owned)
     Core::EventBus* _eventBus;                 ///< Optional event system for notifications
     Config _config;                            ///< Scheduler configuration
     Callbacks _callbacks;                      ///< Lifecycle event callbacks

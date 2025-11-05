@@ -6,12 +6,6 @@ include(CMakeFindDependencyMacro)
 find_dependency(Boost REQUIRED COMPONENTS type_index)
 find_dependency(efsw CONFIG REQUIRED)
 
-# Find optional dependencies based on how the package was built
-set(ENTROPY_WITH_TRACY @ENTROPY_WITH_TRACY@)
-if(ENTROPY_WITH_TRACY)
-    find_dependency(Tracy CONFIG REQUIRED)
-endif()
-
 # Include the exported targets
 include("${CMAKE_CURRENT_LIST_DIR}/EntropyCoreTargets.cmake")
 

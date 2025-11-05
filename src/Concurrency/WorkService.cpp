@@ -141,24 +141,35 @@ namespace Concurrency {
     }
 
     WorkService::GroupOperationStatus WorkService::removeWorkContractGroup(WorkContractGroup* contractGroup) {
-        std::unique_lock<std::shared_mutex> lock(_workContractGroupsMutex);
+        // First, stop the group to prevent new work selection
+        // Workers will skip this group via isStopping() checks
+        contractGroup->stop();
 
-        auto it = std::find(_workContractGroups.begin(), _workContractGroups.end(), contractGroup);
-        if (it == _workContractGroups.end()) {
-            return GroupOperationStatus::NotFound;
+        {
+            std::unique_lock<std::shared_mutex> lock(_workContractGroupsMutex);
+
+            auto it = std::find(_workContractGroups.begin(), _workContractGroups.end(), contractGroup);
+            if (it == _workContractGroups.end()) {
+                return GroupOperationStatus::NotFound;
+            }
+
+            // Remove the group from the list
+            _workContractGroups.erase(it);
+            _workContractGroupCount--;
+
+            // Notify scheduler of group change
+            _scheduler->notifyGroupsChanged(_workContractGroups);
+
+            // Clear the concurrency provider for this group
+            contractGroup->setConcurrencyProvider(nullptr);
         }
+        // Lock released here
 
-        // Remove the group
-        _workContractGroups.erase(it);
-        _workContractGroupCount--;
+        // Wait for any in-flight contract executions to complete
+        // This ensures no worker is actively using the group
+        contractGroup->wait();
 
-        // Notify scheduler of group change
-        _scheduler->notifyGroupsChanged(_workContractGroups);
-
-        // Clear the concurrency provider for this group
-        contractGroup->setConcurrencyProvider(nullptr);
-
-        // Release the retain taken during add
+        // Now safe to release our reference
         contractGroup->release();
 
         return GroupOperationStatus::Removed;
@@ -200,87 +211,82 @@ namespace Concurrency {
         WorkContractGroup* lastExecutedGroup = nullptr;
 
         while (!token.stop_requested()) {
-            // Get current snapshot of groups with shared_lock (HOT PATH)
-            std::vector<WorkContractGroup*> groupsSnapshot;
+            WorkContractGroup* selectedGroup = nullptr;
+
+            // Hold shared_lock while reading from _workContractGroups
+            // Multiple workers can hold shared_lock concurrently
+            // removeWorkContractGroup() with unique_lock will wait for all readers
             {
                 std::shared_lock<std::shared_mutex> lock(_workContractGroupsMutex);
-                groupsSnapshot = _workContractGroups;
-            }
 
-            if (groupsSnapshot.empty()) {
-                // Check for ready timers before sleeping
-                checkTimedDeferrals();
+                if (!_workContractGroups.empty()) {
+                    // Create scheduling context
+                    IWorkScheduler::SchedulingContext context{
+                        stThreadId,
+                        stSoftFailureCount,
+                        lastExecutedGroup
+                    };
 
-                // Wait on condition variable instead of sleeping
-                std::unique_lock<std::mutex> lock(_workAvailableMutex);
-                _workAvailableCV.wait_for(lock, std::chrono::milliseconds(1), [this, &token]() {
-                    return _workAvailable.load() || token.stop_requested();
-                });
-                continue;
-            }
+                    // Ask scheduler for next group - reads directly from _workContractGroups
+                    auto scheduleResult = _scheduler->selectNextGroup(_workContractGroups, context);
 
-            // Create scheduling context
-            IWorkScheduler::SchedulingContext context{
-                stThreadId,
-                stSoftFailureCount,
-                lastExecutedGroup
-            };
-
-            // Ask scheduler for next group
-            auto scheduleResult = _scheduler->selectNextGroup(groupsSnapshot, context);
-
-            if (scheduleResult.group) {
-                // Skip stopped/paused groups
-                if (scheduleResult.group->isStopping()) {
-                    // Group is paused, try another one
-                    stSoftFailureCount++;
-                    continue;
-                }
-
-                // Try to get work from the selected group
-                // Double-check the group isn't stopping right before we use it
-                if (scheduleResult.group->isStopping()) {
-                    stSoftFailureCount++;
-                    continue;
-                }
-
-                auto contract = scheduleResult.group->selectForExecution();
-                if (contract.valid()) {
-                    // Check stop token again before executing work to prevent deadlocks during shutdown
-                    if (token.stop_requested()) {
-                        // Abort without executing: transition Executing -> Free safely during shutdown
-                        scheduleResult.group->abortExecution(contract);
-                        break;
+                    // Select group if valid and not stopping
+                    if (scheduleResult.group && !scheduleResult.group->isStopping()) {
+                        selectedGroup = scheduleResult.group;
                     }
-
-                    // Execute the work (includes all cleanup)
-                    scheduleResult.group->executeContract(contract);
-
-                    // Notify scheduler of successful execution
-                    _scheduler->notifyWorkExecuted(scheduleResult.group, stThreadId);
-
-                    // Update tracking
-                    lastExecutedGroup = scheduleResult.group;
-                    stSoftFailureCount = 0;
-                    continue;
                 }
             }
+            // Shared lock released here
 
-            // No work found
-            if (scheduleResult.shouldSleep || stSoftFailureCount >= _config.maxSoftFailureCount) {
-                // Check for ready timers before sleeping
+            if (!selectedGroup) {
+                // No work found - check for ready timers before sleeping
                 checkTimedDeferrals();
 
-                // Use condition variable for efficient waiting
+                // Use condition variable for efficient waiting (100us timeout as safety valve)
                 std::unique_lock<std::mutex> lock(_workAvailableMutex);
                 _workAvailable = false;
-                _workAvailableCV.wait_for(lock, std::chrono::milliseconds(10), [this, &token]() {
+                _workAvailableCV.wait_for(lock, std::chrono::microseconds(100), [this, &token]() {
                     return _workAvailable.load() || token.stop_requested();
                 });
                 stSoftFailureCount = 0;
+                continue;
+            }
+
+            // Try to get work from selected group
+            auto contract = selectedGroup->selectForExecution();
+            if (contract.valid()) {
+                // Check stop token again before executing work to prevent deadlocks during shutdown
+                if (token.stop_requested()) {
+                    // Abort without executing: transition Executing -> Free safely during shutdown
+                    selectedGroup->abortExecution(contract);
+                    break;
+                }
+
+                // Execute the work (includes all cleanup)
+                selectedGroup->executeContract(contract);
+
+                // Notify scheduler of successful execution
+                _scheduler->notifyWorkExecuted(selectedGroup, stThreadId);
+
+                // Update tracking
+                lastExecutedGroup = selectedGroup;
+                stSoftFailureCount = 0;
             } else {
                 stSoftFailureCount++;
-                std::this_thread::yield();
+                if (stSoftFailureCount >= _config.maxSoftFailureCount) {
+                    // Check for ready timers before sleeping
+                    checkTimedDeferrals();
+
+                    // Use condition variable for efficient waiting (1ms timeout as safety valve)
+                    std::unique_lock<std::mutex> lock(_workAvailableMutex);
+                    _workAvailable = false;
+                    _workAvailableCV.wait_for(lock, std::chrono::milliseconds(1), [this, &token]() {
+                        return _workAvailable.load() || token.stop_requested();
+                    });
+                    stSoftFailureCount = 0;
+                } else {
+                    std::this_thread::yield();
+                }
             }
         }
     }

@@ -67,7 +67,7 @@ jobs:
           path: EntropyCore-Windows-x64/**
 
   build-and-test-linux:
-    name: Build and test (Linux, GCC)
+    name: Build and test (Linux, GCC 14)
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -76,7 +76,13 @@ jobs:
       - name: Install prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build g++ cmake
+          sudo apt-get install -y ninja-build gcc-14 g++-14 cmake
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
+          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-14 100
+          sudo update-alternatives --install /usr/bin/cc cc /usr/bin/gcc-14 100
+          sudo update-alternatives --install /usr/bin/c++ c++ /usr/bin/g++-14 100
+          gcc --version
+          g++ --version
 
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11
@@ -270,3 +276,141 @@ jobs:
         with:
           name: EntropyCore-macOS-universal
           path: EntropyCore-macOS-universal/**
+
+  sanitizer-asan-ubsan:
+    name: Sanitizer Tests (ASAN + UBSAN, GCC 14)
+    runs-on: ubuntu-24.04
+    continue-on-error: true  # Don't fail CI, but report issues
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build gcc-14 g++-14 cmake
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
+          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-14 100
+          sudo update-alternatives --install /usr/bin/cc cc /usr/bin/gcc-14 100
+          sudo update-alternatives --install /usr/bin/c++ c++ /usr/bin/g++-14 100
+          gcc --version
+          g++ --version
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgGitCommitId: 'c59b04f668d20c7dd83f478835e8266a3cc51270'
+
+      - name: Configure CMake with ASAN/UBSAN
+        run: >
+          cmake -S . -B build-asan -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DENTROPY_ENABLE_TESTS=ON
+          -DENABLE_SANITIZERS=ON
+          -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
+
+      - name: Build tests with ASAN/UBSAN
+        run: cmake --build build-asan --target EntropyCoreTests
+
+      - name: Run tests with ASAN/UBSAN
+        working-directory: build-asan
+        run: ./EntropyCoreTests --gtest_brief=1 2>&1 | tee asan-ubsan-output.log
+        continue-on-error: true  # Capture failures but don't stop
+        env:
+          ASAN_OPTIONS: detect_leaks=1:check_initialization_order=1:detect_stack_use_after_return=1:strict_string_checks=1:detect_invalid_pointer_pairs=2:halt_on_error=1:abort_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:abort_on_error=1:print_stacktrace=1
+
+      - name: Check for ASAN/UBSAN issues
+        if: always()
+        working-directory: build-asan
+        run: |
+          echo "## ASAN/UBSAN Results" >> $GITHUB_STEP_SUMMARY
+          if grep -q "SUMMARY.*Sanitizer" asan-ubsan-output.log 2>/dev/null; then
+            echo "⚠️ **Issues detected!**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            grep -A 5 "SUMMARY.*Sanitizer" asan-ubsan-output.log | head -20 >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "📋 See full logs in artifacts: \`sanitizer-asan-ubsan-results\`" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "✅ **No issues detected**" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload ASAN/UBSAN results
+        if: always()  # Always upload, even on success
+        uses: actions/upload-artifact@v4
+        with:
+          name: sanitizer-asan-ubsan-results
+          path: |
+            build-asan/asan-ubsan-output.log
+            build-asan/**/*.log
+
+  sanitizer-tsan:
+    name: Sanitizer Tests (TSAN, GCC 14)
+    runs-on: ubuntu-24.04
+    continue-on-error: true  # Don't fail CI, but report issues
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build gcc-14 g++-14 cmake
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
+          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-14 100
+          sudo update-alternatives --install /usr/bin/cc cc /usr/bin/gcc-14 100
+          sudo update-alternatives --install /usr/bin/c++ c++ /usr/bin/g++-14 100
+          gcc --version
+          g++ --version
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgGitCommitId: 'c59b04f668d20c7dd83f478835e8266a3cc51270'
+
+      - name: Configure CMake with TSAN
+        run: >
+          cmake -S . -B build-tsan -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DENTROPY_ENABLE_TESTS=ON
+          -DENABLE_SANITIZERS=ON
+          -DENABLE_TSAN=ON
+          -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
+
+      - name: Build tests with TSAN
+        run: cmake --build build-tsan --target EntropyCoreTests
+
+      - name: Run tests with TSAN
+        working-directory: build-tsan
+        run: ./EntropyCoreTests --gtest_brief=1 2>&1 | tee tsan-output.log
+        continue-on-error: true  # Capture failures but don't stop
+        env:
+          TSAN_OPTIONS: detect_deadlocks=1:second_deadlock_stack=1:history_size=7:io_sync=1:halt_on_error=1:abort_on_error=1
+
+      - name: Check for TSAN issues
+        if: always()
+        working-directory: build-tsan
+        run: |
+          echo "## TSAN Results" >> $GITHUB_STEP_SUMMARY
+          if grep -q "WARNING.*ThreadSanitizer" tsan-output.log 2>/dev/null; then
+            echo "⚠️ **Issues detected!**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            grep -E "(WARNING.*ThreadSanitizer|SUMMARY.*ThreadSanitizer)" tsan-output.log | head -20 >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "📋 See full logs in artifacts: \`sanitizer-tsan-results\`" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "✅ **No issues detected**" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload TSAN results
+        if: always()  # Always upload, even on success
+        uses: actions/upload-artifact@v4
+        with:
+          name: sanitizer-tsan-results
+          path: |
+            build-tsan/tsan-output.log
+            build-tsan/**/*.log

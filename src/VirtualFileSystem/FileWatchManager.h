@@ -81,6 +81,12 @@ private:
     std::vector<WatchSlot> _slots;                        ///< Slot-based storage
     mutable std::mutex _slotMutex;                        ///< Protects slots and watcher
 
+    // Separate map for efsw ID to slot index lookups
+    // This prevents lock-order-inversion: efsw callbacks (which hold efsw's internal mutex)
+    // need to map IDs to slots, but we can't hold _slotMutex when calling efsw methods.
+    mutable std::mutex _efswIdMapMutex;                   ///< Protects _efswIdToSlot map
+    std::unordered_map<long, uint32_t> _efswIdToSlot;     ///< Maps efsw::WatchID to slot index
+
     /**
      * @brief Allocates a new slot for a watch
      * @return Pair of (slot index, generation) or (UINT32_MAX, 0) if failed

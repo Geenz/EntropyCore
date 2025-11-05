@@ -19,7 +19,6 @@
 
 #include "INamed.h"
 #include "DebugUtilities.h"
-#include "Profiling.h"
 #include <unordered_map>
 #include <shared_mutex>
 #include <mutex>
@@ -45,13 +44,8 @@ namespace Debug {
          * configuration reporting. Safe to call multiple times.
          */
         static void initialize() {
-            ENTROPY_PROFILE_APP_INFO("Entropy Engine", 14);
             ENTROPY_LOG_INFO_CAT("Debug", "Debug system initialized");
-            
-            #ifdef TRACY_ENABLE
-                ENTROPY_LOG_INFO_CAT("Debug", "Tracy profiler enabled");
-            #endif
-            
+
             #ifdef EntropyDebug
                 ENTROPY_LOG_INFO_CAT("Debug", "Debug build - assertions enabled");
             #else
@@ -98,16 +92,11 @@ namespace Debug {
         mutable std::shared_mutex _mutex;
         std::unordered_map<const INamed*, Entry> _objects;
         
-        static DebugRegistry* s_instance;
-        static std::mutex s_instanceMutex;
-        
     public:
         static DebugRegistry& getInstance() {
-            std::lock_guard<std::mutex> lock(s_instanceMutex);
-            if (!s_instance) {
-                s_instance = new DebugRegistry();
-            }
-            return *s_instance;
+            // Meyer's singleton - thread-safe in C++11, avoids static destruction order fiasco
+            static DebugRegistry instance;
+            return instance;
         }
         
         /**
@@ -119,8 +108,6 @@ namespace Debug {
          * @param typeName Human-readable type name for grouping
          */
         void registerObject(const INamed* object, std::string_view typeName) {
-            ENTROPY_PROFILE_ZONE();
-            
             std::unique_lock<std::shared_mutex> lock(_mutex);
             _objects[object] = Entry{
                 object,
@@ -141,8 +128,6 @@ namespace Debug {
          * @param object The object to stop tracking
          */
         void unregisterObject(const INamed* object) {
-            ENTROPY_PROFILE_ZONE();
-            
             std::unique_lock<std::shared_mutex> lock(_mutex);
             auto it = _objects.find(object);
             if (it != _objects.end()) {
@@ -162,8 +147,6 @@ namespace Debug {
          * @return Vector of matching object pointers
          */
         [[nodiscard]] std::vector<const INamed*> findByName(std::string_view name) const {
-            ENTROPY_PROFILE_ZONE();
-            
             std::shared_lock<std::shared_mutex> lock(_mutex);
             std::vector<const INamed*> results;
             
@@ -185,8 +168,6 @@ namespace Debug {
          * @return Vector of all objects of this type
          */
         [[nodiscard]] std::vector<const INamed*> findByType(std::string_view typeName) const {
-            ENTROPY_PROFILE_ZONE();
-            
             std::shared_lock<std::shared_mutex> lock(_mutex);
             std::vector<const INamed*> results;
             
@@ -216,8 +197,6 @@ namespace Debug {
          * ```
          */
         void logAllObjects() const {
-            ENTROPY_PROFILE_ZONE();
-            
             std::shared_lock<std::shared_mutex> lock(_mutex);
             
             auto headerMsg = std::format("=== Registered Debug Objects ({}) ===", _objects.size());
@@ -284,8 +263,4 @@ namespace Debug {
 } // namespace Debug
 } // namespace Core
 } // namespace EntropyEngine
-
-// Initialize static members
-inline EntropyEngine::Core::Debug::DebugRegistry* EntropyEngine::Core::Debug::DebugRegistry::s_instance = nullptr;
-inline std::mutex EntropyEngine::Core::Debug::DebugRegistry::s_instanceMutex;
 

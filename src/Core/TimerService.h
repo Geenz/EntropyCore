@@ -249,7 +249,7 @@ private:
     };
 
     Config _config;
-    std::unique_ptr<Concurrency::WorkContractGroup> _workContractGroup;
+    Concurrency::WorkContractGroup* _workContractGroup = nullptr;
     std::unique_ptr<Concurrency::WorkGraph> _workGraph;
 
     // Timer data storage - protected by mutex

@@ -19,7 +19,6 @@
 
 // Core common utilities
 #include "CoreCommon.h"
-#include "ServiceLocator.h"
 
 // Core object model
 #include "Core/EntropyClass.h"
@@ -37,7 +36,6 @@
 // Debug
 #include "Debug/INamed.h"
 #include "Debug/DebugUtilities.h"
-#include "Debug/Profiling.h"
 #include "Debug/Debug.h"
 
 // Logging
