@@ -112,68 +112,108 @@ FileWatchManager::FileWatchManager(VirtualFileSystem* vfs)
 }
 
 FileWatchManager::~FileWatchManager() {
-    std::lock_guard lock(_slotMutex);
+    // Phase 1: Stop all watches and collect them (holding _slotMutex)
+    std::vector<FileWatch*> watchesToRelease;
+    {
+        std::lock_guard lock(_slotMutex);
 
-    // Stop all watches and release references
-    for (auto& slot : _slots) {
-        if (slot.occupied && slot.watch) {
-            slot.watch->stop();
-            slot.watch->release(); // Release the manager's reference
-            slot.watch = nullptr;
+        for (auto& slot : _slots) {
+            if (slot.occupied && slot.watch) {
+                slot.watch->stop();
+                watchesToRelease.push_back(slot.watch);
+                slot.watch = nullptr;
+            }
         }
     }
+    // _slotMutex is now unlocked
 
-    // Destroy watcher before listener
+    // Phase 2: Destroy watcher and listener (NOT holding _slotMutex to avoid lock-order-inversion)
+    // This may trigger efsw to lock its internal mutex
     _watcher.reset();
     _listener.reset();
+
+    // Phase 3: Release watch references (no locks needed, refcount is atomic)
+    for (FileWatch* watch : watchesToRelease) {
+        watch->release(); // Release the manager's reference
+    }
+
+    // Phase 4: Clear the ID map
+    {
+        std::lock_guard mapLock(_efswIdMapMutex);
+        _efswIdToSlot.clear();
+    }
 }
 
 FileWatch* FileWatchManager::createWatch(const std::string& path,
                                         FileWatchCallback callback,
                                         const WatchOptions& options) {
-    std::lock_guard lock(_slotMutex);
+    uint32_t index;
+    uint32_t generation;
+    FileWatch* watch = nullptr;
+    efsw::FileWatcher* watcher = nullptr;
 
-    // Ensure efsw watcher is initialized
-    ensureWatcherInitialized();
-    if (!_watcher) {
-        ENTROPY_LOG_ERROR("Failed to initialize file watcher");
-        return nullptr;
+    // Phase 1: Allocate slot and create watch (holding _slotMutex)
+    {
+        std::lock_guard lock(_slotMutex);
+
+        // Ensure efsw watcher is initialized
+        ensureWatcherInitialized();
+        if (!_watcher) {
+            ENTROPY_LOG_ERROR("Failed to initialize file watcher");
+            return nullptr;
+        }
+
+        // Allocate slot
+        auto slot_info = allocateSlot();
+        index = slot_info.first;
+        generation = slot_info.second;
+        if (index == UINT32_MAX) {
+            ENTROPY_LOG_ERROR("Failed to allocate watch slot (out of slots)");
+            return nullptr;
+        }
+
+        // Create FileWatch object (refcount starts at 1)
+        watch = new FileWatch(this, path, callback, options);
+
+        // Stamp the object with handle identity using EntropyObject's built-in facility
+        HandleAccess::set(*watch, this, index, generation);
+
+        // Store in slot immediately so it's discoverable
+        WatchSlot& slot = _slots[index];
+        slot.watch = watch;
+        slot.generation = generation;
+        slot.occupied = true;
+
+        // Cache watcher pointer for use outside the lock
+        watcher = _watcher.get();
     }
+    // _slotMutex is now unlocked
 
-    // Allocate slot
-    auto [index, generation] = allocateSlot();
-    if (index == UINT32_MAX) {
-        ENTROPY_LOG_ERROR("Failed to allocate watch slot (out of slots)");
-        return nullptr;
-    }
+    // Phase 2: Add watch to efsw (NOT holding _slotMutex to avoid lock-order-inversion)
+    // efsw may lock its internal mutex here
+    efsw::WatchID efswId = watcher->addWatch(path, _listener.get(), options.recursive);
 
-    // Create FileWatch object (refcount starts at 1)
-    FileWatch* watch = new FileWatch(this, path, callback, options);
-
-    // Stamp the object with handle identity using EntropyObject's built-in facility
-    HandleAccess::set(*watch, this, index, generation);
-
-    // Add watch to efsw
-    efsw::WatchID efswId = _watcher->addWatch(path, _listener.get(), options.recursive);
     if (efswId < 0) {
+        // Failed - clean up the slot
         ENTROPY_LOG_ERROR("Failed to add watch for path: " + path);
+
+        std::lock_guard lock(_slotMutex);
         freeSlot(index);
         HandleAccess::clear(*watch);
         watch->release(); // Delete the watch
         return nullptr;
     }
 
-    // Initialize watch state
+    // Phase 3: Store efswId in the watch and in the ID map
     watch->_efswId = efswId;
     watch->_watching.store(true, std::memory_order_release);
 
-    // Store in slot
-    WatchSlot& slot = _slots[index];
-    slot.watch = watch;
-    slot.generation = generation;
-    slot.occupied = true;
+    {
+        std::lock_guard lock(_efswIdMapMutex);
+        _efswIdToSlot[efswId] = index;
+    }
 
-    ENTROPY_LOG_INFO("Created file watch for: " + path + " (slot " + std::to_string(index) + ")");
+    ENTROPY_LOG_INFO("Created file watch for: " + path + " (slot " + std::to_string(index) + ", efswId " + std::to_string(efswId) + ")");
 
     // Return with refcount=1 (caller owns the reference)
     return watch;
@@ -304,12 +344,12 @@ void FileWatchManager::onFileEvent(uint32_t slotIndex, const FileWatchInfo& info
 }
 
 uint32_t FileWatchManager::findSlotByEfswId(efsw::WatchID efswId) const {
-    std::lock_guard lock(_slotMutex);
+    // Use the separate ID map to avoid lock-order-inversion with efsw's internal mutex
+    std::lock_guard lock(_efswIdMapMutex);
 
-    for (size_t i = 0; i < _slots.size(); ++i) {
-        if (_slots[i].occupied && _slots[i].watch && _slots[i].watch->_efswId == efswId) {
-            return static_cast<uint32_t>(i);
-        }
+    auto it = _efswIdToSlot.find(efswId);
+    if (it != _efswIdToSlot.end()) {
+        return it->second;
     }
 
     return UINT32_MAX; // Not found
@@ -320,20 +360,38 @@ void FileWatchManager::removeEfswWatch(FileWatch* watch) {
         return;
     }
 
-    std::lock_guard lock(_slotMutex);
+    efsw::WatchID efswId = 0;
+    efsw::FileWatcher* watcher = nullptr;
+    uint32_t index = UINT32_MAX;
 
-    if (_watcher && watch->_efswId != 0) {
-        _watcher->removeWatch(watch->_efswId);
+    // Phase 1: Get efswId and free the slot (holding _slotMutex)
+    {
+        std::lock_guard lock(_slotMutex);
+
+        efswId = watch->_efswId;
+        watcher = _watcher.get();
+
+        // Free slot if this watch is still in it
+        if (watch->hasHandle() && watch->handleOwnerAs<FileWatchManager>() == this) {
+            index = watch->handleIndex();
+            if (index < _slots.size() && _slots[index].watch == watch) {
+                freeSlot(index);
+                HandleAccess::clear(*watch);
+            }
+        }
+    }
+    // _slotMutex is now unlocked
+
+    // Phase 2: Remove from efsw (NOT holding _slotMutex to avoid lock-order-inversion)
+    if (watcher && efswId != 0) {
+        watcher->removeWatch(efswId);
         watch->_efswId = 0;
     }
 
-    // Free slot if this watch is still in it
-    if (watch->hasHandle() && watch->handleOwnerAs<FileWatchManager>() == this) {
-        uint32_t index = watch->handleIndex();
-        if (index < _slots.size() && _slots[index].watch == watch) {
-            freeSlot(index);
-            HandleAccess::clear(*watch);
-        }
+    // Phase 3: Remove from ID map
+    if (efswId != 0) {
+        std::lock_guard lock(_efswIdMapMutex);
+        _efswIdToSlot.erase(efswId);
     }
 }
 

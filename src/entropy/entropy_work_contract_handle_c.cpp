@@ -152,6 +152,16 @@ void entropy_work_contract_release(
     }
 }
 
+void entropy_work_contract_handle_destroy(
+    entropy_WorkContractHandle handle
+) {
+    if (!handle) return;
+
+    // Delete the heap-allocated wrapper created by entropy_work_contract_group_create_contract
+    WorkContractHandle* cpp_handle = to_cpp(handle);
+    delete cpp_handle;
+}
+
 EntropyBool entropy_work_contract_is_scheduled(
     entropy_WorkContractHandle handle,
     EntropyStatus* status
