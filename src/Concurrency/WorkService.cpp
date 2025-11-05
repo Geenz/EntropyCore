@@ -242,10 +242,10 @@ namespace Concurrency {
                 // No work found - check for ready timers before sleeping
                 checkTimedDeferrals();
 
-                // Use condition variable for efficient waiting
+                // Use condition variable for efficient waiting (100us timeout as safety valve)
                 std::unique_lock<std::mutex> lock(_workAvailableMutex);
                 _workAvailable = false;
-                _workAvailableCV.wait_for(lock, std::chrono::milliseconds(10), [this, &token]() {
+                _workAvailableCV.wait_for(lock, std::chrono::microseconds(100), [this, &token]() {
                     return _workAvailable.load() || token.stop_requested();
                 });
                 stSoftFailureCount = 0;
@@ -277,10 +277,10 @@ namespace Concurrency {
                     // Check for ready timers before sleeping
                     checkTimedDeferrals();
 
-                    // Use condition variable for efficient waiting
+                    // Use condition variable for efficient waiting (1ms timeout as safety valve)
                     std::unique_lock<std::mutex> lock(_workAvailableMutex);
                     _workAvailable = false;
-                    _workAvailableCV.wait_for(lock, std::chrono::milliseconds(10), [this, &token]() {
+                    _workAvailableCV.wait_for(lock, std::chrono::milliseconds(1), [this, &token]() {
                         return _workAvailable.load() || token.stop_requested();
                     });
                     stSoftFailureCount = 0;
