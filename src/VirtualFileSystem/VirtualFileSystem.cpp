@@ -142,31 +142,22 @@ FileOperationHandle VirtualFileSystem::submitSerialized(std::string path, std::f
         }
 
         // Fall back to VFS advisory locking (backend returned NotSupported or policy allows fallback)
-        if (!vfsLock) {
-            // Serialization disabled or lock unavailable - execute without locking
+        if (vfsLock) {
+            // Try to acquire the lock with timeout
+            if (!vfsLock->try_lock_for(advTimeout)) {
+                auto key = backend->normalizeKey(p);
+                auto ms = advTimeout.count();
+                s.setError(FileError::Timeout, std::string("Advisory lock acquisition timed out after ") + std::to_string(ms) + " ms (key=" + key + ")", p);
+                s.complete(FileOpStatus::Failed);
+                return;
+            }
+            // Lock acquired - transfer ownership to unique_lock for RAII unlock
+            std::unique_lock<std::timed_mutex> lock(*vfsLock, std::adopt_lock);
             op(s, backend, p, ctx);
-#ifndef NDEBUG
-            assert(s.isComplete.load(std::memory_order_acquire) && "submitSerialized op must call complete() inline");
-#endif
-            return;
+        } else {
+            // Serialization disabled - execute without locking
+            op(s, backend, p, ctx);
         }
-
-        // Acquire VFS advisory lock with timeout
-        if (!vfsLock->try_lock_for(advTimeout)) {
-            auto key = backend->normalizeKey(p);
-            auto ms = advTimeout.count();
-            s.setError(FileError::Timeout, std::string("Advisory lock acquisition timed out after ") + std::to_string(ms) + " ms (key=" + key + ")", p);
-            s.complete(FileOpStatus::Failed);
-            return;
-        }
-
-        // Execute operation with VFS advisory lock held - use RAII guard for unlock
-        struct LockGuard {
-            std::shared_ptr<std::timed_mutex> m;
-            ~LockGuard() { if (m) m->unlock(); }
-        } guard{vfsLock};
-
-        op(s, backend, p, ctx);
 
 #ifndef NDEBUG
         assert(s.isComplete.load(std::memory_order_acquire) && "submitSerialized op must call complete() inline");
