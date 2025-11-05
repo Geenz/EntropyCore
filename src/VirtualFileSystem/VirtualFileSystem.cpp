@@ -151,9 +151,8 @@ FileOperationHandle VirtualFileSystem::submitSerialized(std::string path, std::f
             return;
         }
 
-        // Acquire VFS advisory lock - construct unique_lock exactly once at point of use
-        std::unique_lock<std::timed_mutex> lock(*vfsLock, std::defer_lock);
-        if (!lock.try_lock_for(advTimeout)) {
+        // Acquire VFS advisory lock with timeout
+        if (!vfsLock->try_lock_for(advTimeout)) {
             auto key = backend->normalizeKey(p);
             auto ms = advTimeout.count();
             s.setError(FileError::Timeout, std::string("Advisory lock acquisition timed out after ") + std::to_string(ms) + " ms (key=" + key + ")", p);
@@ -161,7 +160,12 @@ FileOperationHandle VirtualFileSystem::submitSerialized(std::string path, std::f
             return;
         }
 
-        // Execute operation with VFS advisory lock held
+        // Execute operation with VFS advisory lock held - use RAII guard for unlock
+        struct LockGuard {
+            std::shared_ptr<std::timed_mutex> m;
+            ~LockGuard() { if (m) m->unlock(); }
+        } guard{vfsLock};
+
         op(s, backend, p, ctx);
 
 #ifndef NDEBUG
