@@ -77,7 +77,7 @@ jobs:
 
         Download the appropriate archive for your platform:
 
-        - **Linux GCC 15**: `EntropyCore-Linux-gcc-15.tar.gz` / `.zip`
+        - **Linux GCC 14**: `EntropyCore-Linux-gcc-14.tar.gz` / `.zip`
         - **macOS Universal**: `EntropyCore-macOS-universal.tar.gz` / `.zip` (Intel + Apple Silicon)
         - **Windows x64**: `EntropyCore-Windows-x64.tar.gz` / `.zip`
 

@@ -67,7 +67,7 @@ jobs:
           path: EntropyCore-Windows-x64/**
 
   build-and-test-linux:
-    name: Build and test (Linux, GCC 15)
+    name: Build and test (Linux, GCC 14)
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -76,11 +76,11 @@ jobs:
       - name: Install prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build gcc-15 g++-15 cmake
-          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-15 100
-          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-15 100
-          sudo update-alternatives --install /usr/bin/cc cc /usr/bin/gcc-15 100
-          sudo update-alternatives --install /usr/bin/c++ c++ /usr/bin/g++-15 100
+          sudo apt-get install -y ninja-build gcc-14 g++-14 cmake
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
+          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-14 100
+          sudo update-alternatives --install /usr/bin/cc cc /usr/bin/gcc-14 100
+          sudo update-alternatives --install /usr/bin/c++ c++ /usr/bin/g++-14 100
           gcc --version
           g++ --version
 
@@ -108,7 +108,7 @@ jobs:
         run: ctest -VV --output-on-failure -R "TimerServiceTest" || true
 
       - name: Install package (Release)
-        run: cmake --install build-release --prefix "${{ github.workspace }}/EntropyCore-Linux-gcc-15"
+        run: cmake --install build-release --prefix "${{ github.workspace }}/EntropyCore-Linux-gcc-14"
 
       - name: Configure CMake (Ninja, Debug)
         run: >
@@ -121,11 +121,11 @@ jobs:
         run: cmake --build build-debug
 
       - name: Install package (Debug)
-        run: cmake --install build-debug --prefix "${{ github.workspace }}/EntropyCore-Linux-gcc-15/debug"
+        run: cmake --install build-debug --prefix "${{ github.workspace }}/EntropyCore-Linux-gcc-14/debug"
 
       - name: Restructure debug files for vcpkg
         run: |
-          cd "${{ github.workspace }}/EntropyCore-Linux-gcc-15/debug"
+          cd "${{ github.workspace }}/EntropyCore-Linux-gcc-14/debug"
           rm -rf include share
 
       - name: Upload CTest logs
@@ -141,8 +141,8 @@ jobs:
       - name: Upload Linux GCC package artifact
         uses: actions/upload-artifact@v4
         with:
-          name: EntropyCore-Linux-gcc-15
-          path: EntropyCore-Linux-gcc-15/**
+          name: EntropyCore-Linux-gcc-14
+          path: EntropyCore-Linux-gcc-14/**
 
   build-and-test-macos:
     name: Build and test (macOS, AppleClang)
@@ -278,7 +278,7 @@ jobs:
           path: EntropyCore-macOS-universal/**
 
   sanitizer-asan-ubsan:
-    name: Sanitizer Tests (ASAN + UBSAN, GCC 15)
+    name: Sanitizer Tests (ASAN + UBSAN, GCC 14)
     runs-on: ubuntu-24.04
     continue-on-error: true  # Don't fail CI, but report issues
     steps:
@@ -288,11 +288,11 @@ jobs:
       - name: Install prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build gcc-15 g++-15 cmake
-          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-15 100
-          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-15 100
-          sudo update-alternatives --install /usr/bin/cc cc /usr/bin/gcc-15 100
-          sudo update-alternatives --install /usr/bin/c++ c++ /usr/bin/g++-15 100
+          sudo apt-get install -y ninja-build gcc-14 g++-14 cmake
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
+          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-14 100
+          sudo update-alternatives --install /usr/bin/cc cc /usr/bin/gcc-14 100
+          sudo update-alternatives --install /usr/bin/c++ c++ /usr/bin/g++-14 100
           gcc --version
           g++ --version
 
@@ -347,7 +347,7 @@ jobs:
             build-asan/**/*.log
 
   sanitizer-tsan:
-    name: Sanitizer Tests (TSAN, GCC 15)
+    name: Sanitizer Tests (TSAN, GCC 14)
     runs-on: ubuntu-24.04
     continue-on-error: true  # Don't fail CI, but report issues
     steps:
@@ -357,11 +357,11 @@ jobs:
       - name: Install prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build gcc-15 g++-15 cmake
-          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-15 100
-          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-15 100
-          sudo update-alternatives --install /usr/bin/cc cc /usr/bin/gcc-15 100
-          sudo update-alternatives --install /usr/bin/c++ c++ /usr/bin/g++-15 100
+          sudo apt-get install -y ninja-build gcc-14 g++-14 cmake
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
+          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-14 100
+          sudo update-alternatives --install /usr/bin/cc cc /usr/bin/gcc-14 100
+          sudo update-alternatives --install /usr/bin/c++ c++ /usr/bin/g++-14 100
           gcc --version
           g++ --version
 
