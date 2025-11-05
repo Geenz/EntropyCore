@@ -141,24 +141,35 @@ namespace Concurrency {
     }
 
     WorkService::GroupOperationStatus WorkService::removeWorkContractGroup(WorkContractGroup* contractGroup) {
-        std::unique_lock<std::shared_mutex> lock(_workContractGroupsMutex);
+        // First, stop the group to prevent new work selection
+        // Workers will skip this group via isStopping() checks
+        contractGroup->stop();
 
-        auto it = std::find(_workContractGroups.begin(), _workContractGroups.end(), contractGroup);
-        if (it == _workContractGroups.end()) {
-            return GroupOperationStatus::NotFound;
+        {
+            std::unique_lock<std::shared_mutex> lock(_workContractGroupsMutex);
+
+            auto it = std::find(_workContractGroups.begin(), _workContractGroups.end(), contractGroup);
+            if (it == _workContractGroups.end()) {
+                return GroupOperationStatus::NotFound;
+            }
+
+            // Remove the group from the list
+            _workContractGroups.erase(it);
+            _workContractGroupCount--;
+
+            // Notify scheduler of group change
+            _scheduler->notifyGroupsChanged(_workContractGroups);
+
+            // Clear the concurrency provider for this group
+            contractGroup->setConcurrencyProvider(nullptr);
         }
+        // Lock released here
 
-        // Remove the group
-        _workContractGroups.erase(it);
-        _workContractGroupCount--;
+        // Wait for any in-flight contract executions to complete
+        // This ensures no worker is actively using the group
+        contractGroup->wait();
 
-        // Notify scheduler of group change
-        _scheduler->notifyGroupsChanged(_workContractGroups);
-
-        // Clear the concurrency provider for this group
-        contractGroup->setConcurrencyProvider(nullptr);
-
-        // Release the retain taken during add
+        // Now safe to release our reference
         contractGroup->release();
 
         return GroupOperationStatus::Removed;
