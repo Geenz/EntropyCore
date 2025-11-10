@@ -26,7 +26,7 @@ int main() {
 
     // Write
     std::cout << "Calling writeAll...\n";
-    auto w = fh.writeAll("Hello from simple test!\n");
+    auto w = fh.writeAll(std::string_view("Hello from simple test!\n"));
     std::cout << "Waiting for write...\n";
     w.wait();
     std::cout << "Write status: " << static_cast<int>(w.status()) << "\n";

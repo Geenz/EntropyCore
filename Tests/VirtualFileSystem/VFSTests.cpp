@@ -22,7 +22,7 @@ TEST(VFS, WriteReadDelete_InTempDir) {
     const std::string text = "Hello from VFSTests!\n";
 
     // Write
-    auto w = fh.writeAll(text);
+    auto w = fh.writeAll(std::string_view(text));
     w.wait();
     ASSERT_EQ(w.status(), FileOpStatus::Complete) << "writeAll failed: " << w.errorInfo().message;
     EXPECT_EQ(w.bytesWritten(), static_cast<uint64_t>(text.size()));
@@ -47,7 +47,7 @@ TEST(VFS, ListTempDir_ShowsCreatedFile) {
     auto filePath = tmp.join("file.txt");
     auto fh = env.vfs().createFileHandle(filePath.string());
 
-    auto w = fh.writeAll("x");
+    auto w = fh.writeAll(std::string_view("x"));
     w.wait();
     ASSERT_EQ(w.status(), FileOpStatus::Complete) << "writeAll failed: " << w.errorInfo().message;
 

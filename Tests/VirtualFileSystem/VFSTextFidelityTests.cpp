@@ -46,7 +46,7 @@ TEST(VFSTextFidelity, WriteLine_BeyondEOF_ExtendsAndWrites) {
     auto fh = vfs.createFileHandle(path);
 
     // Start with one line
-    auto w0 = fh.writeAll("root\n");
+    auto w0 = fh.writeAll(std::string_view("root\n"));
     w0.wait();
     ASSERT_EQ(w0.status(), FileOpStatus::Complete);
 
