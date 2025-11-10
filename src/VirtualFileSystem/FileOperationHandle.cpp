@@ -35,15 +35,15 @@ FileOpStatus FileOperationHandle::status() const noexcept {
     return _s ? _s->st.load(std::memory_order_acquire) : FileOpStatus::Pending;
 }
 
-std::span<const std::byte> FileOperationHandle::contentsBytes() const {
+std::span<const uint8_t> FileOperationHandle::contentsBytes() const {
     if (!_s) return {};
-    
+
     // Ensure operation is complete before accessing data
     if (!_s->isComplete.load(std::memory_order_acquire)) {
         wait();
     }
-    
-    return std::span<const std::byte>(_s->bytes.data(), _s->bytes.size());
+
+    return std::span<const uint8_t>(_s->bytes.data(), _s->bytes.size());
 }
 
 std::string FileOperationHandle::contentsText() const {

@@ -197,7 +197,7 @@ public:
      * @note Special files (FIFO, device, socket) are rejected with FileError::InvalidPath on Unix.
      * @note Set options.fsync=true for durability guarantee (Unix/POSIX only; forces data to disk).
      */
-    virtual FileOperationHandle writeFile(const std::string& path, std::span<const std::byte> data, WriteOptions options = {}) = 0;
+    virtual FileOperationHandle writeFile(const std::string& path, std::span<const uint8_t> data, WriteOptions options = {}) = 0;
     /**
      * @brief Deletes a file
      * @param path Target path

@@ -73,16 +73,14 @@ FileOperationHandle FileHandle::readLineBinary(size_t lineNumber, uint8_t delimi
         auto buf = rh.contentsBytes();
         size_t idx = 0;
         std::vector<uint8_t> line;
-        auto byteDelim = static_cast<std::byte>(delimiter);
         for (size_t i = 0; i < buf.size(); ++i) {
-            if (buf[i] == byteDelim) {
+            if (buf[i] == delimiter) {
                 if (idx == lineNumber) break; else { line.clear(); ++idx; continue; }
             }
-            line.push_back(static_cast<uint8_t>(buf[i]));
+            line.push_back(buf[i]);
         }
         if (idx != lineNumber) { s.complete(FileOpStatus::Partial); return; }
-        s.bytes.assign(reinterpret_cast<const std::byte*>(line.data()),
-                       reinterpret_cast<const std::byte*>(line.data() + line.size()));
+        s.bytes.assign(line.begin(), line.end());
         s.complete(FileOpStatus::Complete);
     });
 }
@@ -92,7 +90,7 @@ FileOperationHandle FileHandle::writeAll(std::span<const uint8_t> bytes) const {
         WriteOptions opts; opts.truncate = true;
         auto data = std::vector<uint8_t>(bytes.begin(), bytes.end());
         return _vfs->submitSerialized(_meta.path, [opts, data=std::move(data)](FileOperationHandle::OpState& s, std::shared_ptr<IFileSystemBackend> backend, const std::string& p, const ExecContext&) mutable {
-            auto byteSpan = std::as_bytes(std::span<const uint8_t>(data.data(), data.size()));
+            auto byteSpan = std::span<const uint8_t>(data.data(), data.size());
             auto inner = backend->writeFile(p, byteSpan, opts);
             inner.wait();
             auto st = inner.status();
@@ -114,7 +112,7 @@ FileOperationHandle FileHandle::writeAll(std::span<const uint8_t> bytes, const W
     if (_backend && _vfs) {
         auto data = std::vector<uint8_t>(bytes.begin(), bytes.end());
         return _vfs->submitSerialized(_meta.path, [opts, data=std::move(data)](FileOperationHandle::OpState& s, std::shared_ptr<IFileSystemBackend> backend, const std::string& p, const ExecContext&) mutable {
-            auto byteSpan = std::as_bytes(std::span<const uint8_t>(data.data(), data.size()));
+            auto byteSpan = std::span<const uint8_t>(data.data(), data.size());
             if (auto* local = dynamic_cast<LocalFileSystemBackend*>(backend.get())) {
                 local->doWriteFile(s, p, byteSpan, opts);
             } else {
@@ -141,7 +139,7 @@ FileOperationHandle FileHandle::writeRange(uint64_t offset, std::span<const uint
     if (_backend && _vfs) {
         auto data = std::vector<uint8_t>(bytes.begin(), bytes.end());
         return _vfs->submitSerialized(_meta.path, [opts, data=std::move(data)](FileOperationHandle::OpState& s, std::shared_ptr<IFileSystemBackend> backend, const std::string& p, const ExecContext&) mutable {
-            auto byteSpan = std::as_bytes(std::span<const uint8_t>(data.data(), data.size()));
+            auto byteSpan = std::span<const uint8_t>(data.data(), data.size());
             if (auto* local = dynamic_cast<LocalFileSystemBackend*>(backend.get())) {
                 local->doWriteFile(s, p, byteSpan, opts);
             } else {
@@ -170,7 +168,7 @@ FileOperationHandle FileHandle::writeRange(uint64_t offset, std::span<const uint
         wopts.truncate = false;
         auto data = std::vector<uint8_t>(bytes.begin(), bytes.end());
         return _vfs->submitSerialized(_meta.path, [wopts, data=std::move(data)](FileOperationHandle::OpState& s, std::shared_ptr<IFileSystemBackend> backend, const std::string& p, const ExecContext&) mutable {
-            auto byteSpan = std::as_bytes(std::span<const uint8_t>(data.data(), data.size()));
+            auto byteSpan = std::span<const uint8_t>(data.data(), data.size());
             if (auto* local = dynamic_cast<LocalFileSystemBackend*>(backend.get())) {
                 local->doWriteFile(s, p, byteSpan, wopts);
             } else {
@@ -222,7 +220,7 @@ FileOperationHandle FileHandle::writeAll(std::string_view text) const {
         WriteOptions opts; opts.truncate = true;
         auto textCopy = std::string(text);
         return _vfs->submitSerialized(_meta.path, [opts, textCopy=std::move(textCopy)](FileOperationHandle::OpState& s, std::shared_ptr<IFileSystemBackend> backend, const std::string& p, const ExecContext&) mutable {
-            auto spanBytes = std::as_bytes(std::span<const char>(textCopy.data(), textCopy.size()));
+            auto spanBytes = std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(textCopy.data()), textCopy.size());
             if (auto* local = dynamic_cast<LocalFileSystemBackend*>(backend.get())) {
                 local->doWriteFile(s, p, spanBytes, opts);
             } else {
@@ -248,7 +246,7 @@ FileOperationHandle FileHandle::writeAll(std::string_view text, const WriteOptio
     if (_backend && _vfs) {
         auto textCopy = std::string(text);
         return _vfs->submitSerialized(_meta.path, [opts, textCopy=std::move(textCopy)](FileOperationHandle::OpState& s, std::shared_ptr<IFileSystemBackend> backend, const std::string& p, const ExecContext&) mutable {
-            auto spanBytes = std::as_bytes(std::span<const char>(textCopy.data(), textCopy.size()));
+            auto spanBytes = std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(textCopy.data()), textCopy.size());
             if (auto* local = dynamic_cast<LocalFileSystemBackend*>(backend.get())) {
                 local->doWriteFile(s, p, spanBytes, opts);
             } else {

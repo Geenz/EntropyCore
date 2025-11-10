@@ -12,7 +12,7 @@ public:
     
     // Core file operations
     FileOperationHandle readFile(const std::string& path, ReadOptions options = {}) override;
-    FileOperationHandle writeFile(const std::string& path, std::span<const std::byte> data, WriteOptions options = {}) override;
+    FileOperationHandle writeFile(const std::string& path, std::span<const uint8_t> data, WriteOptions options = {}) override;
     FileOperationHandle deleteFile(const std::string& path) override;
     FileOperationHandle createFile(const std::string& path) override;
     
@@ -48,7 +48,7 @@ public:
     AcquireWriteScopeResult acquireWriteScope(const std::string& path, AcquireScopeOptions options = {}) override;
 
     // Synchronous operations for use by VFS submitSerialized (these execute inline, no async work)
-    void doWriteFile(FileOperationHandle::OpState& s, const std::string& path, std::span<const std::byte> data, WriteOptions options);
+    void doWriteFile(FileOperationHandle::OpState& s, const std::string& path, std::span<const uint8_t> data, WriteOptions options);
     void doDeleteFile(FileOperationHandle::OpState& s, const std::string& path);
     void doCreateFile(FileOperationHandle::OpState& s, const std::string& path);
     void doWriteLine(FileOperationHandle::OpState& s, const std::string& path, size_t lineNumber, std::string_view line);

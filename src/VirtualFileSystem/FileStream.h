@@ -23,10 +23,10 @@ public:
     
     // Core I/O operations
     // Read into buffer, returns actual bytes read
-    virtual IoResult read(std::span<std::byte> buffer) = 0;
-    
-    // Write data, returns actual bytes written  
-    virtual IoResult write(std::span<const std::byte> data) = 0;
+    virtual IoResult read(std::span<uint8_t> buffer) = 0;
+
+    // Write data, returns actual bytes written
+    virtual IoResult write(std::span<const uint8_t> data) = 0;
     
     // Positioning
     virtual bool seek(int64_t offset, std::ios_base::seekdir dir = std::ios_base::beg) = 0;
@@ -52,8 +52,8 @@ class BufferedFileStream : public FileStream {
 public:
     BufferedFileStream(std::unique_ptr<FileStream> inner, size_t bufferSize = 8192);
     
-    IoResult read(std::span<std::byte> buffer) override;
-    IoResult write(std::span<const std::byte> data) override;
+    IoResult read(std::span<uint8_t> buffer) override;
+    IoResult write(std::span<const uint8_t> data) override;
     bool seek(int64_t offset, std::ios_base::seekdir dir) override;
     int64_t tell() const override;
     bool good() const override;
@@ -65,8 +65,8 @@ public:
     
 private:
     std::unique_ptr<FileStream> _inner;
-    std::vector<std::byte> _readBuffer;
-    std::vector<std::byte> _writeBuffer;
+    std::vector<uint8_t> _readBuffer;
+    std::vector<uint8_t> _writeBuffer;
     size_t _readPos = 0;
     size_t _readSize = 0;
     size_t _writePos = 0;

@@ -10,7 +10,7 @@ BufferedFileStream::BufferedFileStream(std::unique_ptr<FileStream> inner, size_t
     , _writeBuffer(bufferSize) {
 }
 
-IoResult BufferedFileStream::read(std::span<std::byte> buffer) {
+IoResult BufferedFileStream::read(std::span<uint8_t> buffer) {
     IoResult result;
     
     if (!good()) {
@@ -49,7 +49,7 @@ IoResult BufferedFileStream::read(std::span<std::byte> buffer) {
     return result;
 }
 
-IoResult BufferedFileStream::write(std::span<const std::byte> data) {
+IoResult BufferedFileStream::write(std::span<const uint8_t> data) {
     IoResult result;
     
     if (!good()) {
@@ -149,7 +149,7 @@ void BufferedFileStream::close() {
 
 void BufferedFileStream::flushWriteBuffer() {
     if (_writePos > 0) {
-        auto result = _inner->write(std::span<const std::byte>(_writeBuffer.data(), _writePos));
+        auto result = _inner->write(std::span<const uint8_t>(_writeBuffer.data(), _writePos));
         _writePos = 0;
         _dirty = false;
     }

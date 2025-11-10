@@ -89,7 +89,7 @@ public:
     FileOpStatus status() const noexcept;
 
     // Read results (views) - only valid after wait()
-    std::span<const std::byte> contentsBytes() const;
+    std::span<const uint8_t> contentsBytes() const;
     std::string contentsText() const;
 
     // Write results - only valid after wait()
@@ -134,7 +134,7 @@ public:
         std::function<void()> progress;
 
         // Result data - only valid after completion
-        std::vector<std::byte> bytes;    // for reads
+        std::vector<uint8_t> bytes;    // for reads
         uint64_t wrote = 0;              // for writes
         FileErrorInfo error;             // error details if failed
         std::string text;                // for text preview/read operations

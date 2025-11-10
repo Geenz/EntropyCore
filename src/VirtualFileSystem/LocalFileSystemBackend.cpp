@@ -287,7 +287,7 @@ public:
         }
     }
     
-    IoResult read(std::span<std::byte> buffer) override {
+    IoResult read(std::span<uint8_t> buffer) override {
         IoResult result;
         
         if (!good() || buffer.empty()) {
@@ -306,7 +306,7 @@ public:
         return result;
     }
     
-    IoResult write(std::span<const std::byte> data) override {
+    IoResult write(std::span<const uint8_t> data) override {
         IoResult result;
         
         if (!good() || data.empty()) {
@@ -410,7 +410,7 @@ FileOperationHandle LocalFileSystemBackend::submitWork(const std::string& path,
 }
 
 // Synchronous operations for FileHandle via submitSerialized
-void LocalFileSystemBackend::doWriteFile(FileOperationHandle::OpState& s, const std::string& p, std::span<const std::byte> data, WriteOptions options) {
+void LocalFileSystemBackend::doWriteFile(FileOperationHandle::OpState& s, const std::string& p, std::span<const uint8_t> data, WriteOptions options) {
     // Check for special files (FIFO, device, socket) that shouldn't be written via file operations
     if (isSpecialFile(p)) {
         s.setError(FileError::InvalidPath, "Cannot perform file operations on special files (FIFO, device, socket)", p);
@@ -988,20 +988,20 @@ FileOperationHandle LocalFileSystemBackend::readFile(const std::string& path, Re
     });
 }
 
-FileOperationHandle LocalFileSystemBackend::writeFile(const std::string& path, std::span<const std::byte> data, WriteOptions options) {
+FileOperationHandle LocalFileSystemBackend::writeFile(const std::string& path, std::span<const uint8_t> data, WriteOptions options) {
     // Route backend writes through VFS submitSerialized to honor advisory fallback policy and scope mapping.
     // Delegate the actual I/O to doWriteFile, which executes synchronously under the serialized section.
     if (_vfs) {
-        auto buf = std::vector<std::byte>(data.begin(), data.end());
+        auto buf = std::vector<uint8_t>(data.begin(), data.end());
         return _vfs->submitSerialized(path,
             [this, buf = std::move(buf), options]
             (FileOperationHandle::OpState& s, std::shared_ptr<IFileSystemBackend> /*backend*/, const std::string& p, const ExecContext& /*ctx*/) mutable {
-                this->doWriteFile(s, p, std::span<const std::byte>(buf.data(), buf.size()), options);
+                this->doWriteFile(s, p, std::span<const uint8_t>(buf.data(), buf.size()), options);
             }
         );
     }
     // Fallback: no VFS associated (rare). Execute synchronously via submitWork and doWriteFile.
-    return submitWork(path, [this, data = std::vector<std::byte>(data.begin(), data.end()), options]
+    return submitWork(path, [this, data = std::vector<uint8_t>(data.begin(), data.end()), options]
                             (FileOperationHandle::OpState& s, const std::string& p) mutable {
 
         // Check for special files (FIFO, device, socket)
