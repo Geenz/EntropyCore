@@ -103,7 +103,7 @@ public:
      * @param delimiter Byte delimiter to split lines
      * @return Handle with raw bytes of the line
      */
-    FileOperationHandle readLineBinary(size_t lineNumber, std::byte delimiter) const;
+    FileOperationHandle readLineBinary(size_t lineNumber, char delimiter) const;
 
     // Writes
     /**
@@ -123,22 +123,22 @@ public:
      * @param bytes Data to write
      * @return Handle for the asynchronous write
      */
-    FileOperationHandle writeAll(std::span<const std::byte> bytes) const;
+    FileOperationHandle writeAll(std::span<const char> bytes) const;
     /**
      * @brief Writes raw bytes with explicit WriteOptions
      */
-    FileOperationHandle writeAll(std::span<const std::byte> bytes, const WriteOptions& opts) const;
+    FileOperationHandle writeAll(std::span<const char> bytes, const WriteOptions& opts) const;
     /**
      * @brief Writes bytes starting at a specific offset
      * @param offset Byte offset to begin writing
      * @param bytes Data to write
      * @return Handle for the asynchronous write
      */
-    FileOperationHandle writeRange(uint64_t offset, std::span<const std::byte> bytes) const;
+    FileOperationHandle writeRange(uint64_t offset, std::span<const char> bytes) const;
     /**
      * @brief Writes bytes at offset with explicit WriteOptions (offset is applied to opts)
      */
-    FileOperationHandle writeRange(uint64_t offset, std::span<const std::byte> bytes, const WriteOptions& opts) const;
+    FileOperationHandle writeRange(uint64_t offset, std::span<const char> bytes, const WriteOptions& opts) const;
     /**
      * @brief Replaces a single line by index (0-based)
      * 
