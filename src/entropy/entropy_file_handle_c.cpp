@@ -235,7 +235,7 @@ entropy_FileOperationHandle entropy_file_handle_write_all_bytes(
 
     try {
         auto* cpp_handle = reinterpret_cast<FileHandle*>(handle);
-        std::span<const char> data(reinterpret_cast<const char*>(bytes), length);
+        std::span<const uint8_t> data(bytes, length);
         FileOperationHandle op = cpp_handle->writeAll(data);
         *status = ENTROPY_OK;
         return wrap_file_operation_handle(std::move(op));
@@ -260,7 +260,7 @@ entropy_FileOperationHandle entropy_file_handle_write_all_bytes_with_options(
 
     try {
         auto* cpp_handle = reinterpret_cast<FileHandle*>(handle);
-        std::span<const char> data(reinterpret_cast<const char*>(bytes), length);
+        std::span<const uint8_t> data(bytes, length);
         WriteOptions wo = to_cpp_write_options(options);
         FileOperationHandle op = cpp_handle->writeAll(data, wo);
         *status = ENTROPY_OK;
@@ -286,7 +286,7 @@ entropy_FileOperationHandle entropy_file_handle_write_range(
 
     try {
         auto* cpp_handle = reinterpret_cast<FileHandle*>(handle);
-        std::span<const char> data(reinterpret_cast<const char*>(bytes), length);
+        std::span<const uint8_t> data(bytes, length);
         FileOperationHandle op = cpp_handle->writeRange(offset, data);
         *status = ENTROPY_OK;
         return wrap_file_operation_handle(std::move(op));
