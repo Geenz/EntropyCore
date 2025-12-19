@@ -9,7 +9,7 @@
 #include <format>
 
 namespace EntropyEngine::Core {
-        
+
 void EntropyObject::retain() const noexcept
 {
     _refCount.fetch_add(1, std::memory_order_acq_rel);
@@ -30,10 +30,14 @@ void EntropyObject::release() const noexcept
     {
 #ifdef ENTROPY_DEBUG
         const char* name = className();
-        ENTROPY_LOG_TRACE_CAT("RefCount", 
-            std::format("Delete {} @ {}", 
+        ENTROPY_LOG_TRACE_CAT("RefCount",
+            std::format("Delete {} @ {}",
                 name, static_cast<const void*>(this)));
 #endif
+        // Call memory profiling hook before delete (while pointer is still valid)
+        if (EntropyObjectMemoryHooks::onFree) {
+            EntropyObjectMemoryHooks::onFree(const_cast<void*>(static_cast<const void*>(this)), "EntropyObject");
+        }
         std::atomic_thread_fence(std::memory_order_acquire);
         delete this;
     }

@@ -35,6 +35,30 @@
 
 namespace EntropyEngine::Core {
 
+/**
+ * @brief Memory profiling callbacks for EntropyObject lifecycle tracking
+ *
+ * These callbacks allow external profilers (e.g., Tracy) to track EntropyObject
+ * allocations without adding profiler dependencies to EntropyCore.
+ *
+ * @code
+ * // Example: Register Tracy callbacks in EntropyPortal
+ * EntropyObjectMemoryHooks::onAlloc = [](void* ptr, size_t size, const char* name) {
+ *     TracyAllocN(ptr, size, name);
+ * };
+ * EntropyObjectMemoryHooks::onFree = [](void* ptr, const char* name) {
+ *     TracyFreeN(ptr, name);
+ * };
+ * @endcode
+ */
+struct EntropyObjectMemoryHooks {
+    using AllocCallback = void(*)(void* ptr, size_t size, const char* className);
+    using FreeCallback = void(*)(void* ptr, const char* className);
+
+    static inline AllocCallback onAlloc = nullptr;
+    static inline FreeCallback onFree = nullptr;
+};
+
 // Forward declarations
 namespace TypeSystem {
     class TypeInfo;

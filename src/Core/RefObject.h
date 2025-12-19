@@ -252,7 +252,12 @@ public:
 
 template<typename T, typename... Args>
 [[nodiscard]] RefObject<T> makeRef(Args&&... args) {
-    return RefObject<T>(new T(std::forward<Args>(args)...));
+    T* ptr = new T(std::forward<Args>(args)...);
+    // Call memory profiling hook after allocation
+    if (EntropyObjectMemoryHooks::onAlloc) {
+        EntropyObjectMemoryHooks::onAlloc(ptr, sizeof(T), "EntropyObject");
+    }
+    return RefObject<T>(ptr);
 }
 
 // Transparent hasher/equality for heterogeneous lookup by raw pointer
