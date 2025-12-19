@@ -335,18 +335,102 @@ WorkGraph::NodeHandle WorkGraph::addYieldableNode(YieldableWorkFunction work,
 
 void WorkGraph::addDependency(NodeHandle from, NodeHandle to) {
     std::unique_lock<std::shared_mutex> lock(_graphMutex);
-    
+
     // Add edge in the DAG (this checks for cycles)
     _graph.addEdge(from, to);
-    
+
     // Increment dependency count for the target node
     incrementDependencies(to);
-    
+
     // auto* toData = to.getData();
     // if (toData) {
-    //     std::cout << "Added dependency: " << from.getData()->name << " -> " << toData->name 
+    //     std::cout << "Added dependency: " << from.getData()->name << " -> " << toData->name
     //               << " (deps now: " << toData->pendingDependencies.load() << ")" << std::endl;
     // }
+}
+
+void WorkGraph::reset() {
+    std::unique_lock<std::shared_mutex> lock(_graphMutex);
+
+    if (_config.enableDebugLogging) {
+        ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph::reset() - resetting execution state for " +
+                              std::to_string(_nodeHandles.size()) + " nodes");
+    }
+
+    // Reset execution flag
+    _executionStarted.store(false, std::memory_order_release);
+
+    // Reset counters
+    _pendingNodes.store(static_cast<uint32_t>(_nodeHandles.size()), std::memory_order_release);
+    _completedNodes.store(0, std::memory_order_release);
+    _failedNodes.store(0, std::memory_order_release);
+    _droppedNodes.store(0, std::memory_order_release);
+
+    // Reset each node's state
+    for (auto& handle : _nodeHandles) {
+        auto* nodeData = _graph.getNodeData(handle);
+        if (nodeData) {
+            // Reset to Pending state
+            nodeData->state.store(NodeState::Pending, std::memory_order_release);
+            nodeData->completionProcessed.store(false, std::memory_order_release);
+            nodeData->failedParentCount.store(0, std::memory_order_release);
+            nodeData->rescheduleCount.store(0, std::memory_order_release);
+
+            // Reset pending dependencies by counting incoming edges
+            nodeData->pendingDependencies.store(0, std::memory_order_release);
+        }
+
+        // Update state manager
+        if (_stateManager) {
+            _stateManager->registerNode(handle, NodeState::Pending);
+        }
+    }
+
+    // Restore dependency counts from edge structure
+    for (auto& handle : _nodeHandles) {
+        auto children = _graph.getChildren(handle);
+        for (auto& child : children) {
+            auto* childData = _graph.getNodeData(child);
+            if (childData) {
+                childData->pendingDependencies.fetch_add(1, std::memory_order_acq_rel);
+            }
+        }
+    }
+
+    if (_config.enableDebugLogging) {
+        ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph::reset() complete");
+    }
+}
+
+void WorkGraph::clear() {
+    std::unique_lock<std::shared_mutex> lock(_graphMutex);
+
+    if (_config.enableDebugLogging) {
+        ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph::clear() - removing all " +
+                              std::to_string(_nodeHandles.size()) + " nodes");
+    }
+
+    // Reset execution flag
+    _executionStarted.store(false, std::memory_order_release);
+
+    // Reset counters
+    _pendingNodes.store(0, std::memory_order_release);
+    _completedNodes.store(0, std::memory_order_release);
+    _failedNodes.store(0, std::memory_order_release);
+    _droppedNodes.store(0, std::memory_order_release);
+
+    // Clear the node handles cache
+    _nodeHandles.clear();
+
+    // Clear the underlying DAG
+    _graph.clear();
+
+    // Reset state manager (it will be repopulated as nodes are added)
+    // Note: We don't need to explicitly clear it - registerNode overwrites
+
+    if (_config.enableDebugLogging) {
+        ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph::clear() complete");
+    }
 }
 
 void WorkGraph::incrementDependencies(NodeHandle node) {

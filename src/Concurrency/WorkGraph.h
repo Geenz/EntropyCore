@@ -507,26 +507,81 @@ namespace Concurrency {
          * @endcode
          */
         void addDependency(NodeHandle from, NodeHandle to);
-        
+
+        /**
+         * @brief Resets execution state so the graph can be re-executed
+         *
+         * Keeps all nodes and dependencies intact, but resets:
+         * - Execution started flag
+         * - Pending/completed/failed/dropped counters
+         * - Node states back to Pending
+         * - Node completion processed flags
+         * - Pending dependency counts (restored from edge structure)
+         *
+         * After reset(), you can call execute() again to re-run the same workflow.
+         * This is much faster than destroying and recreating the graph.
+         *
+         * @note Not thread-safe with concurrent execute()/wait() calls
+         *
+         * @code
+         * // Reusable graph pattern
+         * WorkGraph graph(&threadPool);
+         * auto nodeA = graph.addNode([&data]{ process(data); }, "processor");
+         *
+         * for (int frame = 0; frame < 100; ++frame) {
+         *     updateData(data);  // Update what the node operates on
+         *     graph.reset();     // Reset execution state
+         *     graph.execute();   // Re-run the workflow
+         *     graph.wait();
+         * }
+         * @endcode
+         */
+        void reset();
+
+        /**
+         * @brief Removes all nodes and dependencies from the graph
+         *
+         * Clears the entire graph structure. After clear(), the graph is empty
+         * and ready for new nodes to be added. Use when the workflow structure
+         * changes (different number of nodes, different dependencies).
+         *
+         * @note Not thread-safe with concurrent operations
+         *
+         * @code
+         * // Dynamic workflow that changes structure
+         * if (configurationChanged) {
+         *     graph.clear();  // Remove old structure
+         *     // Add new nodes based on new configuration
+         *     for (auto& task : newTasks) {
+         *         graph.addNode(task.work, task.name);
+         *     }
+         * } else {
+         *     graph.reset();  // Just reset execution state
+         * }
+         * graph.execute();
+         * @endcode
+         */
+        void clear();
+
         /**
          * @brief Kicks off your workflow by scheduling all nodes that have no dependencies
-         * 
+         *
          * Finds root nodes and schedules them. Called automatically by execute().
-         * 
+         *
          * @return Number of root nodes that were scheduled
-         * 
+         *
          * @code
          * // Manual execution control
          * graph.addNode([]{ step1(); }, "step1");
-         * graph.addNode([]{ step2(); }, "step2"); 
+         * graph.addNode([]{ step2(); }, "step2");
          * // Both are roots since no dependencies were added
-         * 
+         *
          * size_t roots = graph.scheduleRoots();  // Returns 2
          * LOG_INFO("Started {} independent tasks", roots);
          * @endcode
          */
         size_t scheduleRoots();
-        
+
         /**
          * @brief Lights the fuse on your workflow - starts the cascade of execution
          * 
@@ -755,10 +810,18 @@ namespace Concurrency {
          * @brief Quick check of how much work remains
          * @return Nodes that haven't reached terminal state yet
          */
-        uint32_t getPendingCount() const { 
-            return _pendingNodes.load(std::memory_order_acquire); 
+        uint32_t getPendingCount() const {
+            return _pendingNodes.load(std::memory_order_acquire);
         }
-        
+
+        /**
+         * @brief Get the total number of nodes in the graph
+         * @return Total node count (useful for checking if graph needs rebuilding)
+         */
+        size_t getNodeCount() const {
+            return _nodeHandles.size();
+        }
+
         /**
          * @brief Install a hook that fires whenever a node finishes
          * 

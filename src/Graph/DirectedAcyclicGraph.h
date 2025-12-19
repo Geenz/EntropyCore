@@ -626,6 +626,47 @@ namespace Graph {
         }
 
         /**
+         * @brief Clears all nodes and edges from the graph
+         *
+         * Removes all nodes and edges, resetting the graph to an empty state.
+         * All existing handles become invalid after this operation.
+         *
+         * @code
+         * DirectedAcyclicGraph<int> graph;
+         * auto n1 = graph.addNode(1);
+         * auto n2 = graph.addNode(2);
+         * graph.addEdge(n1, n2);
+         *
+         * graph.clear();
+         * // Graph is now empty, n1 and n2 handles are invalid
+         * bool valid = graph.isHandleValid(n1); // false
+         * @endcode
+         */
+        void clear() {
+            _nodes.clear();
+            _edges.clear();
+            // Clear the free list by replacing with empty queue
+            _freeList = std::queue<uint32_t>();
+
+            // Reserve some initial capacity
+            _nodes.reserve(64);
+            _edges.reserve(64);
+        }
+
+        /**
+         * @brief Gets the number of active nodes in the graph
+         *
+         * @return Count of occupied node slots
+         */
+        size_t nodeCount() const {
+            size_t count = 0;
+            for (const auto& node : _nodes) {
+                if (node.occupied) ++count;
+            }
+            return count;
+        }
+
+        /**
          * @brief Performs topological sort on the graph
          *
          * Returns nodes in dependency order using Kahn's algorithm. For every edge
