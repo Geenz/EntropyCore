@@ -141,6 +141,115 @@ public:
     }
 };
 
+/**
+ * @brief Non-owning weak reference to an EntropyObject
+ *
+ * WeakRef stores a pointer without preventing destruction. Use lock() to
+ * safely acquire a strong RefObject reference - returns empty if the
+ * object has been destroyed.
+ *
+ * @note This is a simple weak reference without a control block. It relies
+ * on tryRetain() which atomically checks if refcount > 0 before incrementing.
+ * If the memory is reused for a different object, lock() may succeed incorrectly.
+ * For safety, ensure WeakRefs are cleared when objects are destroyed.
+ *
+ * @code
+ * RefObject<Mesh> mesh = makeRef<Mesh>();
+ * WeakRef<Mesh> weak = mesh;
+ *
+ * // Later, safely try to use:
+ * if (auto locked = weak.lock()) {
+ *     locked->render();  // Safe - we hold a strong reference
+ * } // else: mesh was destroyed
+ * @endcode
+ */
+template<typename T>
+class WeakRef {
+    static_assert(std::is_base_of_v<EntropyObject, T>,
+                  "T must derive from EntropyObject");
+
+    T* _ptr = nullptr;
+
+public:
+    WeakRef() noexcept = default;
+
+    /// Construct from raw pointer (non-owning, no retain)
+    explicit WeakRef(T* ptr) noexcept : _ptr(ptr) {}
+
+    /// Construct from RefObject (non-owning, no retain)
+    WeakRef(const RefObject<T>& ref) noexcept : _ptr(ref.get()) {}
+
+    /// Construct from derived RefObject
+    template<class U, class = std::enable_if_t<std::is_base_of_v<T, U>>>
+    WeakRef(const RefObject<U>& ref) noexcept : _ptr(static_cast<T*>(ref.get())) {}
+
+    // Default copy/move operations
+    WeakRef(const WeakRef&) noexcept = default;
+    WeakRef& operator=(const WeakRef&) noexcept = default;
+    WeakRef(WeakRef&&) noexcept = default;
+    WeakRef& operator=(WeakRef&&) noexcept = default;
+
+    /// Assign from RefObject
+    WeakRef& operator=(const RefObject<T>& ref) noexcept {
+        _ptr = ref.get();
+        return *this;
+    }
+
+    /// Assign from derived RefObject
+    template<class U, class = std::enable_if_t<std::is_base_of_v<T, U>>>
+    WeakRef& operator=(const RefObject<U>& ref) noexcept {
+        _ptr = static_cast<T*>(ref.get());
+        return *this;
+    }
+
+    /**
+     * @brief Attempt to acquire a strong reference
+     *
+     * Uses tryRetain() to atomically check if the object is still alive
+     * and increment the refcount if so.
+     *
+     * @return RefObject<T> if successful, empty RefObject if object is dead
+     */
+    [[nodiscard]] RefObject<T> lock() const noexcept {
+        if (_ptr && _ptr->tryRetain()) {
+            return RefObject<T>(adopt, _ptr);
+        }
+        return RefObject<T>{};
+    }
+
+    /**
+     * @brief Check if the weak reference has expired
+     *
+     * @note This is a hint only - the object could be destroyed between
+     * calling expired() and using the pointer. Always use lock() for safe access.
+     */
+    [[nodiscard]] bool expired() const noexcept {
+        return _ptr == nullptr || _ptr->refCount() == 0;
+    }
+
+    /// Get raw pointer (unsafe - for debugging/comparison only)
+    [[nodiscard]] T* get() const noexcept { return _ptr; }
+
+    /// Check if pointing to something (may still be expired)
+    explicit operator bool() const noexcept { return _ptr != nullptr; }
+
+    /// Clear the weak reference
+    void reset() noexcept { _ptr = nullptr; }
+
+    friend bool operator==(const WeakRef& a, const WeakRef& b) noexcept {
+        return a._ptr == b._ptr;
+    }
+    friend bool operator!=(const WeakRef& a, const WeakRef& b) noexcept {
+        return !(a == b);
+    }
+    friend bool operator==(const WeakRef& a, const RefObject<T>& b) noexcept {
+        return a._ptr == b.get();
+    }
+    friend bool operator==(const RefObject<T>& a, const WeakRef& b) noexcept {
+        return a.get() == b._ptr;
+    }
+};
+
 template<typename T, typename... Args>
 [[nodiscard]] RefObject<T> makeRef(Args&&... args) {
     return RefObject<T>(new T(std::forward<Args>(args)...));
