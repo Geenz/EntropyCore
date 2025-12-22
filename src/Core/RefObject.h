@@ -142,25 +142,28 @@ public:
 };
 
 /**
- * @brief Non-owning weak reference to an EntropyObject
+ * @brief Non-owning weak reference to an EntropyObject with generation validation
  *
- * WeakRef stores a pointer without preventing destruction. Use lock() to
- * safely acquire a strong RefObject reference - returns empty if the
- * object has been destroyed.
+ * WeakRef stores a pointer and the object's handle generation at construction time.
+ * Use lock() to safely acquire a strong RefObject reference - returns empty if the
+ * object has been destroyed or if the slot has been reused for a different object.
  *
- * @note This is a simple weak reference without a control block. It relies
- * on tryRetain() which atomically checks if refcount > 0 before incrementing.
- * If the memory is reused for a different object, lock() may succeed incorrectly.
- * For safety, ensure WeakRefs are cleared when objects are destroyed.
+ * Generation validation prevents the memory-reuse problem: if the original object
+ * is destroyed and a new object is allocated at the same address, lock() will
+ * detect the generation mismatch and return empty instead of the wrong object.
+ *
+ * @note For full protection, the referenced object should be handle-stamped by
+ * a service/pool using HandleSlotOps::stamp(). Non-stamped objects (generation 0)
+ * fall back to refcount-only validation.
  *
  * @code
- * RefObject<Mesh> mesh = makeRef<Mesh>();
+ * RefObject<Mesh> mesh = meshService->createMesh();  // Stamped with generation
  * WeakRef<Mesh> weak = mesh;
  *
  * // Later, safely try to use:
  * if (auto locked = weak.lock()) {
- *     locked->render();  // Safe - we hold a strong reference
- * } // else: mesh was destroyed
+ *     locked->render();  // Safe - validated by generation + refcount
+ * } // else: mesh was destroyed or slot reused
  * @endcode
  */
 template<typename T>
@@ -169,49 +172,69 @@ class WeakRef {
                   "T must derive from EntropyObject");
 
     T* _ptr = nullptr;
+    uint32_t _generation = 0;  ///< Captured handle generation for validation
 
 public:
     WeakRef() noexcept = default;
 
-    /// Construct from raw pointer (non-owning, no retain)
-    explicit WeakRef(T* ptr) noexcept : _ptr(ptr) {}
+    /// Construct from raw pointer (non-owning, captures current generation)
+    explicit WeakRef(T* ptr) noexcept
+        : _ptr(ptr)
+        , _generation(ptr ? ptr->handleGeneration() : 0) {}
 
-    /// Construct from RefObject (non-owning, no retain)
-    WeakRef(const RefObject<T>& ref) noexcept : _ptr(ref.get()) {}
+    /// Construct from RefObject (non-owning, captures current generation)
+    WeakRef(const RefObject<T>& ref) noexcept
+        : _ptr(ref.get())
+        , _generation(_ptr ? _ptr->handleGeneration() : 0) {}
 
     /// Construct from derived RefObject
     template<class U, class = std::enable_if_t<std::is_base_of_v<T, U>>>
-    WeakRef(const RefObject<U>& ref) noexcept : _ptr(static_cast<T*>(ref.get())) {}
+    WeakRef(const RefObject<U>& ref) noexcept
+        : _ptr(static_cast<T*>(ref.get()))
+        , _generation(_ptr ? _ptr->handleGeneration() : 0) {}
 
-    // Default copy/move operations
+    // Default copy/move operations (copies generation too)
     WeakRef(const WeakRef&) noexcept = default;
     WeakRef& operator=(const WeakRef&) noexcept = default;
     WeakRef(WeakRef&&) noexcept = default;
     WeakRef& operator=(WeakRef&&) noexcept = default;
 
-    /// Assign from RefObject
+    /// Assign from RefObject (captures new generation)
     WeakRef& operator=(const RefObject<T>& ref) noexcept {
         _ptr = ref.get();
+        _generation = _ptr ? _ptr->handleGeneration() : 0;
         return *this;
     }
 
-    /// Assign from derived RefObject
+    /// Assign from derived RefObject (captures new generation)
     template<class U, class = std::enable_if_t<std::is_base_of_v<T, U>>>
     WeakRef& operator=(const RefObject<U>& ref) noexcept {
         _ptr = static_cast<T*>(ref.get());
+        _generation = _ptr ? _ptr->handleGeneration() : 0;
         return *this;
     }
 
     /**
      * @brief Attempt to acquire a strong reference
      *
-     * Uses tryRetain() to atomically check if the object is still alive
-     * and increment the refcount if so.
+     * Validates generation before attempting tryRetain(). If the object's
+     * current generation doesn't match the captured generation, the slot
+     * has been reused and we return empty.
      *
-     * @return RefObject<T> if successful, empty RefObject if object is dead
+     * @return RefObject<T> if successful, empty RefObject if expired or generation mismatch
      */
     [[nodiscard]] RefObject<T> lock() const noexcept {
-        if (_ptr && _ptr->tryRetain()) {
+        if (!_ptr) {
+            return RefObject<T>{};
+        }
+
+        // Generation mismatch means the slot was reused for a different object
+        if (_ptr->handleGeneration() != _generation) {
+            return RefObject<T>{};
+        }
+
+        // Generation matches - try to acquire strong reference
+        if (_ptr->tryRetain()) {
             return RefObject<T>(adopt, _ptr);
         }
         return RefObject<T>{};
@@ -220,24 +243,34 @@ public:
     /**
      * @brief Check if the weak reference has expired
      *
+     * Checks both generation validity and refcount.
+     *
      * @note This is a hint only - the object could be destroyed between
      * calling expired() and using the pointer. Always use lock() for safe access.
      */
     [[nodiscard]] bool expired() const noexcept {
-        return _ptr == nullptr || _ptr->refCount() == 0;
+        if (_ptr == nullptr) return true;
+        if (_ptr->handleGeneration() != _generation) return true;
+        return _ptr->refCount() == 0;
     }
 
     /// Get raw pointer (unsafe - for debugging/comparison only)
     [[nodiscard]] T* get() const noexcept { return _ptr; }
 
+    /// Get the captured generation (for debugging)
+    [[nodiscard]] uint32_t generation() const noexcept { return _generation; }
+
     /// Check if pointing to something (may still be expired)
     explicit operator bool() const noexcept { return _ptr != nullptr; }
 
     /// Clear the weak reference
-    void reset() noexcept { _ptr = nullptr; }
+    void reset() noexcept {
+        _ptr = nullptr;
+        _generation = 0;
+    }
 
     friend bool operator==(const WeakRef& a, const WeakRef& b) noexcept {
-        return a._ptr == b._ptr;
+        return a._ptr == b._ptr && a._generation == b._generation;
     }
     friend bool operator!=(const WeakRef& a, const WeakRef& b) noexcept {
         return !(a == b);
