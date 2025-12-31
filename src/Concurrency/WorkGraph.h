@@ -509,7 +509,7 @@ public:
      * graph.addDependency(C, D);  // to complete
      * @endcode
      */
-    void addDependency(NodeHandle from, NodeHandle to);
+    void addDependency(NodeHandle from, const NodeHandle& to);
 
     /**
      * @brief Resets execution state so the graph can be re-executed
@@ -933,7 +933,7 @@ private:
      *
      * @param node The node that just finished executing successfully
      */
-    void onNodeComplete(NodeHandle node);
+    void onNodeComplete(const NodeHandle& node);
 
     /**
      * @brief Takes a ready node and gets it running in the thread pool
@@ -954,7 +954,7 @@ private:
      *
      * @param node The node that just got another parent to wait for
      */
-    void incrementDependencies(NodeHandle node);
+    void incrementDependencies(const NodeHandle& node);
 
     /**
      * @brief Internal root scheduling - assumes you already hold the graph lock
@@ -974,7 +974,7 @@ private:
      *
      * @param failedNode The node whose failure triggers the cascade
      */
-    void cancelDependents(NodeHandle failedNode);
+    void cancelDependents(const NodeHandle& failedNode);
 
     /**
      * @brief Handles the bookkeeping when a node gets cancelled
@@ -984,7 +984,7 @@ private:
      *
      * @param node The node that's being cancelled
      */
-    void onNodeCancelled(NodeHandle node);
+    void onNodeCancelled(const NodeHandle& node);
 
     /**
      * @brief Deals with the aftermath when a node's work function throws
@@ -994,7 +994,7 @@ private:
      *
      * @param node The node whose work function threw an exception
      */
-    void onNodeFailed(NodeHandle node);
+    void onNodeFailed(const NodeHandle& node);
 
     /**
      * @brief Handles a node that has yielded execution
@@ -1004,7 +1004,7 @@ private:
      *
      * @param node The node that yielded
      */
-    void onNodeYielded(NodeHandle node);
+    void onNodeYielded(const NodeHandle& node);
 
     /**
      * @brief Handles timed node yield - node suspended until specific time
@@ -1016,7 +1016,7 @@ private:
      * @param node The node that yielded
      * @param wakeTime When the node should be reconsidered for scheduling
      */
-    void onNodeYieldedUntil(NodeHandle node, std::chrono::steady_clock::time_point wakeTime);
+    void onNodeYieldedUntil(const NodeHandle& node, std::chrono::steady_clock::time_point wakeTime);
 
     /**
      * @brief Reschedules a yielded node for execution
@@ -1026,7 +1026,7 @@ private:
      *
      * @param node The yielded node to reschedule
      */
-    void rescheduleYieldedNode(NodeHandle node);
+    void rescheduleYieldedNode(const NodeHandle& node);
 };
 
 }  // namespace Concurrency

@@ -40,7 +40,7 @@ std::unique_ptr<SignalTreeBase> WorkContractGroup::createSignalTree(size_t capac
 }
 
 WorkContractGroup::WorkContractGroup(size_t capacity, std::string name)
-    : _capacity(capacity), _contracts(capacity), _name(name) {
+    : _contracts(capacity), _name(std::move(name)), _capacity(capacity) {
     // Create SignalTree for ready contracts
     _readyContracts = createSignalTree(capacity);
 
@@ -60,8 +60,7 @@ WorkContractGroup::WorkContractGroup(size_t capacity, std::string name)
 }
 
 WorkContractGroup::WorkContractGroup(WorkContractGroup&& other) noexcept
-    : _capacity(other._capacity),
-      _contracts(std::move(other._contracts)),
+    : _contracts(std::move(other._contracts)),
       _readyContracts(std::move(other._readyContracts)),
       _mainThreadContracts(std::move(other._mainThreadContracts)),
       _freeListHead(other._freeListHead.load(std::memory_order_acquire)),
@@ -73,6 +72,7 @@ WorkContractGroup::WorkContractGroup(WorkContractGroup&& other) noexcept
       _mainThreadExecutingCount(other._mainThreadExecutingCount.load(std::memory_order_acquire)),
       _mainThreadSelectingCount(other._mainThreadSelectingCount.load(std::memory_order_acquire)),
       _name(std::move(other._name)),
+      _capacity(other._capacity),
       _concurrencyProvider(other._concurrencyProvider),
       _stopping(other._stopping.load(std::memory_order_acquire)) {
     // Clear the other object to prevent double cleanup
@@ -241,7 +241,6 @@ WorkContractHandle WorkContractGroup::createContract(std::function<void()> work,
         uint32_t next = _contracts[idx].nextFree.load(std::memory_order_acquire);
         uint64_t newHead = packHead(next, headTag(head) + 1);
         if (_freeListHead.compare_exchange_weak(head, newHead, std::memory_order_acq_rel, std::memory_order_acquire)) {
-            head = newHead;  // Not necessary, but keeps head updated
             // We successfully popped idx
             uint32_t index = idx;
 

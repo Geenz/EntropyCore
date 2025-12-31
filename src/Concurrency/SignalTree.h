@@ -268,7 +268,7 @@ public:
         // 2. Calculate Leaf Node Array Index
         // Leaf nodes start after all internal nodes.
         // The number of internal nodes is LeafCapacity - 1 (for a complete binary tree)
-        // So, the first leaf node is at index (LeafCapacity - 1).\
+        // So, the first leaf node is at index (LeafCapacity - 1).
         // Each leaf node (uint64_t) can hold 64 signals.
         size_t leafNodeArrayStartIndex = _totalNodes - _leafCapacity;
         size_t leafNodeOffsetInArray = leafIndex / S_BITS_PER_LEAF_NODE;  // Which uint64_t leaf node

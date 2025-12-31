@@ -66,7 +66,7 @@ WorkGraph::WorkGraph(WorkContractGroup* workContractGroup, const WorkGraphConfig
 
     // Set up safe scheduler callbacks with proper lifetime tracking
     NodeScheduler::Callbacks callbacks;
-    callbacks.onNodeExecuting = [this](NodeHandle node) {
+    callbacks.onNodeExecuting = [this](const NodeHandle& node) {
         CallbackGuard guard(this);
         if (!_destroyed.load(std::memory_order_acquire)) {
             if (_config.enableDebugLogging) {
@@ -97,7 +97,7 @@ WorkGraph::WorkGraph(WorkContractGroup* workContractGroup, const WorkGraphConfig
             onNodeComplete(node);
         }
     };
-    callbacks.onNodeFailed = [this](NodeHandle node, std::exception_ptr /*ex*/) {
+    callbacks.onNodeFailed = [this](const NodeHandle& node, const std::exception_ptr& /*ex*/) {
         CallbackGuard guard(this);
         if (!_destroyed.load(std::memory_order_acquire)) {
             if (_config.enableDebugLogging) {
@@ -106,7 +106,7 @@ WorkGraph::WorkGraph(WorkContractGroup* workContractGroup, const WorkGraphConfig
             onNodeFailed(node);
         }
     };
-    callbacks.onNodeDropped = [this](NodeHandle node) {
+    callbacks.onNodeDropped = [this](const NodeHandle& node) {
         CallbackGuard guard(this);
         if (!_destroyed.load(std::memory_order_acquire)) {
             // Mark the node as failed (dropped is effectively a failure)
@@ -136,7 +136,7 @@ WorkGraph::WorkGraph(WorkContractGroup* workContractGroup, const WorkGraphConfig
             }
         }
     };
-    callbacks.onNodeYielded = [this](NodeHandle node) {
+    callbacks.onNodeYielded = [this](const NodeHandle& node) {
         CallbackGuard guard(this);
         if (!_destroyed.load(std::memory_order_acquire)) {
             if (_config.enableDebugLogging) {
@@ -145,7 +145,7 @@ WorkGraph::WorkGraph(WorkContractGroup* workContractGroup, const WorkGraphConfig
             onNodeYielded(node);
         }
     };
-    callbacks.onNodeYieldedUntil = [this](NodeHandle node, std::chrono::steady_clock::time_point wakeTime) {
+    callbacks.onNodeYieldedUntil = [this](const NodeHandle& node, std::chrono::steady_clock::time_point wakeTime) {
         CallbackGuard guard(this);
         if (!_destroyed.load(std::memory_order_acquire)) {
             if (_config.enableDebugLogging) {
@@ -198,37 +198,41 @@ WorkGraph::WorkGraph(WorkContractGroup* workContractGroup, const WorkGraphConfig
 }
 
 WorkGraph::~WorkGraph() {
-    if (_config.enableDebugLogging) {
-        ENTROPY_LOG_DEBUG_CAT("Concurrency",
-                              "WorkGraph destructor starting, pending nodes: " + std::to_string(_pendingNodes.load()));
-    }
-
-    // Set destroyed flag to prevent new callbacks
-    _destroyed.store(true, std::memory_order_release);
-
-    // Unregister callbacks from WorkContractGroup first
-    // This prevents new callbacks from being scheduled
-    if (_workContractGroup) {
-        _workContractGroup->removeOnCapacityAvailable(_capacityCallbackIt);
-        _workContractGroup->setTimedDeferralCallback(nullptr);  // Clear timed deferral callback
-    }
-
-    // Wait for all active callbacks to complete
-    if (_activeCallbacks.load(std::memory_order_acquire) > 0) {
+    try {
         if (_config.enableDebugLogging) {
-            ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph destructor waiting for callbacks: " +
-                                                     std::to_string(_activeCallbacks.load()));
+            ENTROPY_LOG_DEBUG_CAT(
+                "Concurrency", "WorkGraph destructor starting, pending nodes: " + std::to_string(_pendingNodes.load()));
         }
-        std::unique_lock<std::mutex> lock(_waitMutex);
-        _shutdownCondition.wait(lock, [this]() { return _activeCallbacks.load(std::memory_order_acquire) == 0; });
-    }
 
-    // Now safe to proceed with cleanup
-    // Unregister from debug system (if registered)
-    if (_config.enableDebugRegistration) {
-        Debug::DebugRegistry::getInstance().unregisterObject(this);
-        auto msg = std::format("Destroyed WorkGraph '{}'", getName());
-        ENTROPY_LOG_DEBUG_CAT("WorkGraph", msg);
+        // Set destroyed flag to prevent new callbacks
+        _destroyed.store(true, std::memory_order_release);
+
+        // Unregister callbacks from WorkContractGroup first
+        // This prevents new callbacks from being scheduled
+        if (_workContractGroup) {
+            _workContractGroup->removeOnCapacityAvailable(_capacityCallbackIt);
+            _workContractGroup->setTimedDeferralCallback(nullptr);  // Clear timed deferral callback
+        }
+
+        // Wait for all active callbacks to complete
+        if (_activeCallbacks.load(std::memory_order_acquire) > 0) {
+            if (_config.enableDebugLogging) {
+                ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph destructor waiting for callbacks: " +
+                                                         std::to_string(_activeCallbacks.load()));
+            }
+            std::unique_lock<std::mutex> lock(_waitMutex);
+            _shutdownCondition.wait(lock, [this]() { return _activeCallbacks.load(std::memory_order_acquire) == 0; });
+        }
+
+        // Now safe to proceed with cleanup
+        // Unregister from debug system (if registered)
+        if (_config.enableDebugRegistration) {
+            Debug::DebugRegistry::getInstance().unregisterObject(this);
+            auto msg = std::format("Destroyed WorkGraph '{}'", getName());
+            ENTROPY_LOG_DEBUG_CAT("WorkGraph", msg);
+        }
+    } catch (...) {
+        // Suppress exceptions in destructor - cannot propagate
     }
 }
 
@@ -321,11 +325,11 @@ WorkGraph::NodeHandle WorkGraph::addYieldableNode(YieldableWorkFunction work, co
     return handle;
 }
 
-void WorkGraph::addDependency(NodeHandle from, NodeHandle to) {
+void WorkGraph::addDependency(NodeHandle from, const NodeHandle& to) {
     std::unique_lock<std::shared_mutex> lock(_graphMutex);
 
     // Add edge in the DAG (this checks for cycles)
-    _graph.addEdge(from, to);
+    _graph.addEdge(std::move(from), to);
 
     // Increment dependency count for the target node
     incrementDependencies(to);
@@ -421,7 +425,7 @@ void WorkGraph::clear() {
     }
 }
 
-void WorkGraph::incrementDependencies(NodeHandle node) {
+void WorkGraph::incrementDependencies(const NodeHandle& node) {
     if (auto* nodeData = _graph.getNodeData(node)) {
         nodeData->pendingDependencies.fetch_add(1, std::memory_order_acq_rel);
         if (_config.enableDebugLogging) {
@@ -608,14 +612,14 @@ bool WorkGraph::scheduleNode(NodeHandle node) {
         ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph::scheduleNode() called");
     }
     // Always delegate to the scheduler component
-    bool result = _scheduler->scheduleNode(node);
+    bool result = _scheduler->scheduleNode(std::move(node));
     if (_config.enableDebugLogging) {
         ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph::scheduleNode() completed");
     }
     return result;
 }
 
-void WorkGraph::onNodeComplete(NodeHandle node) {
+void WorkGraph::onNodeComplete(const NodeHandle& node) {
     auto* nodeData = _graph.getNodeData(node);
     if (!nodeData) return;
 
@@ -793,7 +797,7 @@ WorkGraph::NodeHandle WorkGraph::addContinuation(const std::vector<NodeHandle>& 
     return continuation;
 }
 
-void WorkGraph::onNodeFailed(NodeHandle node) {
+void WorkGraph::onNodeFailed(const NodeHandle& node) {
     auto* nodeData = _graph.getNodeData(node);
     if (!nodeData) return;
 
@@ -820,7 +824,7 @@ void WorkGraph::onNodeFailed(NodeHandle node) {
     cancelDependents(node);
 }
 
-void WorkGraph::onNodeYielded(NodeHandle node) {
+void WorkGraph::onNodeYielded(const NodeHandle& node) {
     auto* nodeData = _graph.getNodeData(node);
     if (!nodeData) return;
 
@@ -854,7 +858,7 @@ void WorkGraph::onNodeYielded(NodeHandle node) {
     rescheduleYieldedNode(node);
 }
 
-void WorkGraph::onNodeYieldedUntil(NodeHandle node, std::chrono::steady_clock::time_point wakeTime) {
+void WorkGraph::onNodeYieldedUntil(const NodeHandle& node, std::chrono::steady_clock::time_point wakeTime) {
     auto* nodeData = _graph.getNodeData(node);
     if (!nodeData) return;
 
@@ -893,7 +897,7 @@ void WorkGraph::onNodeYieldedUntil(NodeHandle node, std::chrono::steady_clock::t
     }
 }
 
-void WorkGraph::rescheduleYieldedNode(NodeHandle node) {
+void WorkGraph::rescheduleYieldedNode(const NodeHandle& node) {
     auto* nodeData = _graph.getNodeData(node);
     if (!nodeData) return;
 
@@ -930,7 +934,7 @@ void WorkGraph::rescheduleYieldedNode(NodeHandle node) {
     }
 }
 
-void WorkGraph::onNodeCancelled(NodeHandle node) {
+void WorkGraph::onNodeCancelled(const NodeHandle& node) {
     auto* nodeData = _graph.getNodeData(node);
     if (!nodeData) return;
 
@@ -957,7 +961,7 @@ void WorkGraph::onNodeCancelled(NodeHandle node) {
     cancelDependents(node);
 }
 
-void WorkGraph::cancelDependents(NodeHandle failedNode) {
+void WorkGraph::cancelDependents(const NodeHandle& failedNode) {
     std::vector<NodeHandle> nodesToCancel;
 
     {

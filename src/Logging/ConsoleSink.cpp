@@ -68,17 +68,17 @@ void ConsoleSink::formatAndWrite(std::ostream& stream, const LogEntry& entry) {
     // Format: [TIMESTAMP] [LEVEL] [THREAD?] [CATEGORY] MESSAGE [LOCATION?]
 
     // Timestamp
-    auto time_t = std::chrono::system_clock::to_time_t(entry.timestamp);
+    auto timeVal = std::chrono::system_clock::to_time_t(entry.timestamp);
     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(entry.timestamp.time_since_epoch()) % 1000;
 
 #ifdef _WIN32
-    std::tm tm_buf;
-    localtime_s(&tm_buf, &time_t);
-    stream << "[" << std::put_time(&tm_buf, "%H:%M:%S");
+    std::tm tmBuf;
+    localtime_s(&tmBuf, &timeVal);
+    stream << "[" << std::put_time(&tmBuf, "%H:%M:%S");
 #else
-    std::tm tm_buf;
-    localtime_r(&time_t, &tm_buf);
-    stream << "[" << std::put_time(&tm_buf, "%H:%M:%S");
+    std::tm tmBuf;
+    localtime_r(&timeVal, &tmBuf);
+    stream << "[" << std::put_time(&tmBuf, "%H:%M:%S");
 #endif
     stream << "." << std::setfill('0') << std::setw(3) << ms.count() << "] ";
 
@@ -114,7 +114,7 @@ void ConsoleSink::formatAndWrite(std::ostream& stream, const LogEntry& entry) {
         stream << " (" << entry.location.file_name() << ":" << entry.location.line() << ")";
     }
 
-    stream << std::endl;
+    stream << '\n';
 }
 
 }  // namespace Logging
