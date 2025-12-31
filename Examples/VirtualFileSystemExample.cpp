@@ -1,14 +1,15 @@
-#include "EntropyCore.h"
-#include "Concurrency/WorkService.h"
+#include <chrono>
+#include <cstring>
+#include <thread>
+#include <vector>
+
 #include "Concurrency/WorkContractGroup.h"
-#include "VirtualFileSystem/VirtualFileSystem.h"
+#include "Concurrency/WorkService.h"
+#include "EntropyCore.h"
 #include "VirtualFileSystem/DirectoryHandle.h"
 #include "VirtualFileSystem/FileStream.h"
+#include "VirtualFileSystem/VirtualFileSystem.h"
 #include "VirtualFileSystem/WriteBatch.h"
-#include <vector>
-#include <cstring>
-#include <chrono>
-#include <thread>
 
 using namespace EntropyEngine::Core;
 using namespace EntropyEngine::Core::Concurrency;
@@ -78,7 +79,8 @@ int main() {
 
     // Write range (append-like by offset)
     const char* tail = "\nAppended via writeRange.";
-    auto wr = handle.writeRange( rAll.contentsBytes().size(), std::span<const std::byte>(reinterpret_cast<const std::byte*>(tail), strlen(tail)) );
+    auto wr = handle.writeRange(rAll.contentsBytes().size(),
+                                std::span<const std::byte>(reinterpret_cast<const std::byte*>(tail), strlen(tail)));
     wr.wait();
     if (wr.status() != FileOpStatus::Complete) {
         ENTROPY_LOG_ERROR("writeRange failed");
@@ -90,7 +92,7 @@ int main() {
     if (rLine.status() == FileOpStatus::Complete) {
         ENTROPY_LOG_INFO("readLine(1): '" + rLine.contentsText() + "'");
     }
-    
+
     // Test writeLine with atomic rename (improved performance)
     auto wLine = handle.writeLine(1, "Modified line two via atomic rename");
     wLine.wait();
@@ -99,7 +101,7 @@ int main() {
     } else {
         ENTROPY_LOG_ERROR("writeLine failed: " + wLine.errorInfo().message);
     }
-    
+
     // Test streaming API for large files
     ENTROPY_LOG_INFO("Testing streaming API:");
     auto stream = handle.openReadWriteStream();
@@ -107,8 +109,8 @@ int main() {
         // Write some data using stream
         const char* streamData = "\nData written via streaming API";
         stream->seek(0, std::ios::end);
-        auto writeResult = stream->write(std::span<const std::byte>(
-            reinterpret_cast<const std::byte*>(streamData), strlen(streamData)));
+        auto writeResult = stream->write(
+            std::span<const std::byte>(reinterpret_cast<const std::byte*>(streamData), strlen(streamData)));
         stream->flush();
         ENTROPY_LOG_INFO("Wrote " + std::to_string(writeResult.bytesTransferred) + " bytes via stream");
 
@@ -118,7 +120,7 @@ int main() {
         auto readResult = stream->read(buffer);
         ENTROPY_LOG_INFO("Read " + std::to_string(readResult.bytesTransferred) + " bytes via stream");
     }
-    
+
     // Test multiple concurrent operations to verify thread safety
     ENTROPY_LOG_INFO("Testing concurrent operations:");
     std::vector<FileOperationHandle> concurrentOps;
@@ -135,7 +137,7 @@ int main() {
         }
     }
     ENTROPY_LOG_INFO("All concurrent operations completed");
-    
+
     // Demonstrate concurrency: many file operations writing to the SAME file
     ENTROPY_LOG_INFO("1000 file operations writing to the same file (serialized by VFS lock):");
     const std::string sameFile = "vfs_contracts_same_file.txt";
@@ -149,8 +151,7 @@ int main() {
         auto fh = vfs.createFileHandle(sameFile);
         // Each operation writes its own line index. Lines are:
         // "Work contract N wrote!"
-        writeOps.push_back(fh.writeLine(static_cast<size_t>(i),
-            "Work contract " + std::to_string(i + 1) + " wrote!"));
+        writeOps.push_back(fh.writeLine(static_cast<size_t>(i), "Work contract " + std::to_string(i + 1) + " wrote!"));
         ENTROPY_LOG_INFO("Scheduled write " + std::to_string(i + 1));
     }
     // Wait for all write operations to finish
@@ -192,7 +193,8 @@ int main() {
     batchOp.wait();
 
     if (batchOp.status() == FileOpStatus::Complete) {
-        ENTROPY_LOG_INFO("Batch write completed successfully, wrote " + std::to_string(batchOp.bytesWritten()) + " bytes");
+        ENTROPY_LOG_INFO("Batch write completed successfully, wrote " + std::to_string(batchOp.bytesWritten()) +
+                         " bytes");
 
         // Read back the result
         auto batchRead = batchHandle.readAll();
@@ -221,7 +223,8 @@ int main() {
         op.wait();
     }
     auto endIndividual = std::chrono::high_resolution_clock::now();
-    auto individualDuration = std::chrono::duration_cast<std::chrono::milliseconds>(endIndividual - startIndividual).count();
+    auto individualDuration =
+        std::chrono::duration_cast<std::chrono::milliseconds>(endIndividual - startIndividual).count();
 
     // Benchmark: Batch operation
     auto bulkHandle = vfs.createFileHandle("bulk_update_test.txt");
@@ -240,7 +243,8 @@ int main() {
     ENTROPY_LOG_INFO("Individual writes (100 lines): " + std::to_string(individualDuration) + "ms");
     ENTROPY_LOG_INFO("Batch write (100 lines): " + std::to_string(batchDuration) + "ms");
     if (individualDuration > 0) {
-        float speedup = static_cast<float>(individualDuration) / static_cast<float>(batchDuration > 0 ? batchDuration : 1);
+        float speedup =
+            static_cast<float>(individualDuration) / static_cast<float>(batchDuration > 0 ? batchDuration : 1);
         ENTROPY_LOG_INFO("Batch is " + std::to_string(speedup) + "x faster than individual operations");
     }
 
@@ -267,13 +271,17 @@ int main() {
 
     // Query metadata via DirectoryHandle listing with glob (no raw backend)
     auto currentDir = vfs.createDirectoryHandle(".");
-    ListDirectoryOptions bList; bList.globPattern = std::string("metadata_test_*.txt"); bList.sortBy = ListDirectoryOptions::ByName;
-    auto metaList = currentDir.list(bList); metaList.wait();
+    ListDirectoryOptions bList;
+    bList.globPattern = std::string("metadata_test_*.txt");
+    bList.sortBy = ListDirectoryOptions::ByName;
+    auto metaList = currentDir.list(bList);
+    metaList.wait();
     if (metaList.status() == FileOpStatus::Complete) {
         const auto& entries = metaList.directoryEntries();
         ENTROPY_LOG_INFO("Retrieved metadata for " + std::to_string(entries.size()) + " files via directory listing");
         for (const auto& e : entries) {
-            ENTROPY_LOG_INFO("  " + e.fullPath + ": exists=" + std::to_string(e.metadata.exists ? 1 : 0) + ", size=" + std::to_string(e.metadata.size) + " bytes");
+            ENTROPY_LOG_INFO("  " + e.fullPath + ": exists=" + std::to_string(e.metadata.exists ? 1 : 0) +
+                             ", size=" + std::to_string(e.metadata.size) + " bytes");
         }
     }
 
@@ -297,17 +305,21 @@ int main() {
     copyOpts.progressCallback = [](size_t copied, size_t total) {
         int percent = static_cast<int>((copied * 100) / total);
         if (percent % 10 == 0 && copied > 0) {
-            ENTROPY_LOG_INFO("  Copy progress: " + std::to_string(percent) + "% (" +
-                std::to_string(copied) + "/" + std::to_string(total) + " bytes)");
+            ENTROPY_LOG_INFO("  Copy progress: " + std::to_string(percent) + "% (" + std::to_string(copied) + "/" +
+                             std::to_string(total) + " bytes)");
         }
         return true;
     };
 
     // Copy using FileHandle read/write (no raw backend)
-    auto srcRead = sourceHandle.readAll(); srcRead.wait();
+    auto srcRead = sourceHandle.readAll();
+    srcRead.wait();
     if (srcRead.status() == FileOpStatus::Complete) {
-        WriteOptions cwo; cwo.truncate = true; cwo.createIfMissing = true;
-        auto copyWrite = destHandle.writeAll(srcRead.contentsBytes(), cwo); copyWrite.wait();
+        WriteOptions cwo;
+        cwo.truncate = true;
+        cwo.createIfMissing = true;
+        auto copyWrite = destHandle.writeAll(srcRead.contentsBytes(), cwo);
+        copyWrite.wait();
         if (copyWrite.status() == FileOpStatus::Complete) {
             ENTROPY_LOG_INFO("Copy completed: " + std::to_string(copyWrite.bytesWritten()) + " bytes copied");
         } else {
@@ -326,10 +338,14 @@ int main() {
     moveSourceHandle.writeAll("This file will be moved").wait();
 
     // Move implemented as copy then remove via FileHandle operations
-    auto moveRead = moveSourceHandle.readAll(); moveRead.wait();
+    auto moveRead = moveSourceHandle.readAll();
+    moveRead.wait();
     if (moveRead.status() == FileOpStatus::Complete) {
-        WriteOptions mow; mow.truncate = true; mow.createIfMissing = true;
-        auto moveWrite = moveDestHandle.writeAll(moveRead.contentsBytes(), mow); moveWrite.wait();
+        WriteOptions mow;
+        mow.truncate = true;
+        mow.createIfMissing = true;
+        auto moveWrite = moveDestHandle.writeAll(moveRead.contentsBytes(), mow);
+        moveWrite.wait();
         if (moveWrite.status() == FileOpStatus::Complete) {
             moveSourceHandle.remove().wait();
             ENTROPY_LOG_INFO("Move completed successfully");
@@ -343,10 +359,14 @@ int main() {
     // Move with overwrite: write/truncate destination and remove source
     auto moveSource2 = vfs.createFileHandle("file_to_move2.txt");
     moveSource2.writeAll("Second file to move").wait();
-    auto moveRead2 = moveSource2.readAll(); moveRead2.wait();
+    auto moveRead2 = moveSource2.readAll();
+    moveRead2.wait();
     if (moveRead2.status() == FileOpStatus::Complete) {
-        WriteOptions mow2; mow2.truncate = true; mow2.createIfMissing = true;
-        auto moveWrite2 = moveDestHandle.writeAll(moveRead2.contentsBytes(), mow2); moveWrite2.wait();
+        WriteOptions mow2;
+        mow2.truncate = true;
+        mow2.createIfMissing = true;
+        auto moveWrite2 = moveDestHandle.writeAll(moveRead2.contentsBytes(), mow2);
+        moveWrite2.wait();
         if (moveWrite2.status() == FileOpStatus::Complete) {
             moveSource2.remove().wait();
             ENTROPY_LOG_INFO("Move with overwrite completed successfully");
@@ -372,26 +392,37 @@ int main() {
     // Set up watch options with filtering
     WatchOptions watchOpts;
     watchOpts.recursive = true;
-    watchOpts.includePatterns = {"*.txt", "*.log"};  // Only watch text and log files
-    watchOpts.excludePatterns = {"*.tmp", "*.temp"}; // Ignore temp files
+    watchOpts.includePatterns = {"*.txt", "*.log"};   // Only watch text and log files
+    watchOpts.excludePatterns = {"*.tmp", "*.temp"};  // Ignore temp files
 
     // Create a watch with a callback
     std::atomic<int> eventCount{0};
-    auto watch = vfs.watchDirectory("watch_test_dir", [&eventCount](const FileWatchInfo& info) {
-        eventCount++;
-        std::string eventType;
-        switch (info.event) {
-            case FileWatchEvent::Created:  eventType = "Created"; break;
-            case FileWatchEvent::Modified: eventType = "Modified"; break;
-            case FileWatchEvent::Deleted:  eventType = "Deleted"; break;
-            case FileWatchEvent::Renamed:  eventType = "Renamed"; break;
-        }
+    auto watch = vfs.watchDirectory(
+        "watch_test_dir",
+        [&eventCount](const FileWatchInfo& info) {
+            eventCount++;
+            std::string eventType;
+            switch (info.event) {
+                case FileWatchEvent::Created:
+                    eventType = "Created";
+                    break;
+                case FileWatchEvent::Modified:
+                    eventType = "Modified";
+                    break;
+                case FileWatchEvent::Deleted:
+                    eventType = "Deleted";
+                    break;
+                case FileWatchEvent::Renamed:
+                    eventType = "Renamed";
+                    break;
+            }
 
-        ENTROPY_LOG_INFO("File event: " + eventType + " - " + info.path);
-        if (info.oldPath.has_value()) {
-            ENTROPY_LOG_INFO("  Old path: " + info.oldPath.value());
-        }
-    }, watchOpts);
+            ENTROPY_LOG_INFO("File event: " + eventType + " - " + info.path);
+            if (info.oldPath.has_value()) {
+                ENTROPY_LOG_INFO("  Old path: " + info.oldPath.value());
+            }
+        },
+        watchOpts);
 
     if (watch && watch->isWatching()) {
         ENTROPY_LOG_INFO("Started watching directory: watch_test_dir");
@@ -492,7 +523,7 @@ int main() {
 
     if (listingWithHidden.status() == FileOpStatus::Complete) {
         ENTROPY_LOG_INFO("Directory contains " + std::to_string(listingWithHidden.directoryEntries().size()) +
-                        " total entries (including hidden)");
+                         " total entries (including hidden)");
     }
 
     // Recursive listing
@@ -502,7 +533,8 @@ int main() {
     recursiveListing.wait();
 
     if (recursiveListing.status() == FileOpStatus::Complete) {
-        ENTROPY_LOG_INFO("Recursive listing found " + std::to_string(recursiveListing.directoryEntries().size()) + " entries:");
+        ENTROPY_LOG_INFO("Recursive listing found " + std::to_string(recursiveListing.directoryEntries().size()) +
+                         " entries:");
         for (const auto& entry : recursiveListing.directoryEntries()) {
             ENTROPY_LOG_INFO("  " + entry.fullPath);
         }

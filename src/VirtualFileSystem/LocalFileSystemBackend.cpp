@@ -1,268 +1,267 @@
 #include "LocalFileSystemBackend.h"
-#include "VirtualFileSystem.h"
-#include "FileStream.h"
-#include <fstream>
-#include <filesystem>
-#include <sstream>
-#include <cstring>
-#include <random>
-#include <vector>
+
 #include <algorithm>
 #include <cctype>
 #include <cerrno>
-#include <thread>
-#include <cstdlib>
 #include <chrono>
+#include <cstdlib>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <random>
+#include <sstream>
+#include <thread>
+#include <vector>
 
 #include "CoreCommon.h"
+#include "FileStream.h"
+#include "VirtualFileSystem.h"
 
 #if defined(_WIN32)
 #include <windows.h>
 #endif
 
 #if defined(__unix__) || defined(__APPLE__)
-#include <sys/file.h>  // flock()
 #include <fcntl.h>     // open(), fcntl()
-#include <unistd.h>    // close(), access(), fsync()
+#include <sys/file.h>  // flock()
 #include <sys/stat.h>  // stat(), chmod()
+#include <unistd.h>    // close(), access(), fsync()
 #endif
 
-namespace EntropyEngine::Core::IO {
+namespace EntropyEngine::Core::IO
+{
 
 #if defined(_WIN32)
-    static std::string toWinLongPath(const std::string& path) {
-        if (path.rfind("\\\\?\\", 0) == 0) return path;
-        if (path.rfind("\\\\", 0) == 0) {
-            // UNC path: \\server\\share -> \\?\\UNC\\server\\share
-            return std::string("\\\\?\\UNC\\") + path.substr(2);
-        }
-        if (path.size() >= 2 && std::isalpha(static_cast<unsigned char>(path[0])) && path[1] == ':') {
-            return std::string("\\\\?\\") + path;
-        }
-        return path;
+static std::string toWinLongPath(const std::string& path) {
+    if (path.rfind("\\\\?\\", 0) == 0) return path;
+    if (path.rfind("\\\\", 0) == 0) {
+        // UNC path: \\server\\share -> \\?\\UNC\\server\\share
+        return std::string("\\\\?\\UNC\\") + path.substr(2);
     }
+    if (path.size() >= 2 && std::isalpha(static_cast<unsigned char>(path[0])) && path[1] == ':') {
+        return std::string("\\\\?\\") + path;
+    }
+    return path;
+}
 #endif
 
 // Helper function for simple glob pattern matching
 // Supports: * (any sequence), ? (single char)
-namespace {
-    bool matchGlob(const std::string& str, const std::string& pattern) {
-        size_t s = 0, p = 0;
-        size_t starIdx = std::string::npos, matchIdx = 0;
+namespace
+{
+bool matchGlob(const std::string& str, const std::string& pattern) {
+    size_t s = 0, p = 0;
+    size_t starIdx = std::string::npos, matchIdx = 0;
 
-        while (s < str.size()) {
-            if (p < pattern.size() && (pattern[p] == '?' || pattern[p] == str[s])) {
-                // Match single character or exact match
-                ++s;
-                ++p;
-            } else if (p < pattern.size() && pattern[p] == '*') {
-                // Star matches zero or more characters
-                starIdx = p;
-                matchIdx = s;
-                ++p;
-            } else if (starIdx != std::string::npos) {
-                // Backtrack to last star
-                p = starIdx + 1;
-                ++matchIdx;
-                s = matchIdx;
-            } else {
-                // No match
-                return false;
-            }
-        }
-
-        // Skip remaining stars in pattern
-        while (p < pattern.size() && pattern[p] == '*') {
+    while (s < str.size()) {
+        if (p < pattern.size() && (pattern[p] == '?' || pattern[p] == str[s])) {
+            // Match single character or exact match
+            ++s;
             ++p;
-        }
-
-        return p == pattern.size();
-    }
-
-    // Map errno to FileError with platform-specific handling
-    // Mapping notes:
-    // - ENOSPC/EDQUOT → DiskFull (out of space or quota exceeded)
-    // - EACCES/EPERM → AccessDenied (permission denied)
-    // - ENOENT → FileNotFound (missing file/dir)
-    // - EINVAL/ENAMETOOLONG/(EISDIR on POSIX) → InvalidPath (malformed or wrong type)
-    // - ENET*/ETIMEDOUT (POSIX) → NetworkError (remote transport issues)
-    // - default → IOError (local I/O failures)
-    // systemError in FileErrorInfo should carry std::error_code when available.
-    FileError mapErrnoToFileError(int err) {
-        switch (err) {
-            case ENOSPC:
-#if defined(__unix__) || defined(__APPLE__)
-            case EDQUOT:  // Disk quota exceeded (POSIX)
-#endif
-                return FileError::DiskFull;
-            case EACCES:
-            case EPERM:
-                return FileError::AccessDenied;
-            case ENOENT:
-                return FileError::FileNotFound;
-            case EINVAL:
-            case ENAMETOOLONG:
-#if defined(__unix__) || defined(__APPLE__)
-            case EISDIR:
-#endif
-                return FileError::InvalidPath;
-#if defined(__unix__) || defined(__APPLE__)
-            case ENETUNREACH:
-            case ENETDOWN:
-            case ETIMEDOUT:
-                return FileError::NetworkError;
-#endif
-            default:
-                return FileError::IOError;
-        }
-    }
-
-    // Check if path points to a special file (FIFO, device, socket)
-    bool isSpecialFile(const std::filesystem::path& p) {
-        std::error_code ec;
-        auto status = std::filesystem::status(p, ec);
-        if (ec) return false;
-
-        return std::filesystem::is_block_file(status) ||
-               std::filesystem::is_character_file(status) ||
-               std::filesystem::is_fifo(status) ||
-               std::filesystem::is_socket(status);
-    }
-
-    // Create secure temporary file path
-    std::filesystem::path createSecureTempPath(const std::filesystem::path& dir,
-                                               const std::string& base) {
-#if defined(__unix__) || defined(__APPLE__)
-        // Use mkstemp for secure temp file creation (avoid mutating std::string buffer)
-        std::string tmpl = (dir / (base + ".XXXXXX")).string();
-        std::vector<char> buf(tmpl.begin(), tmpl.end());
-        buf.push_back('\0');
-        int fd = ::mkstemp(buf.data());
-        if (fd < 0) {
-            // Fallback to random if mkstemp fails
-            return dir / (base + ".tmp" + std::to_string(std::random_device{}()));
-        }
-        ::close(fd);  // We'll reopen with fstream
-        return std::filesystem::path(buf.data());
-#else
-        // Windows: use random device
-        return dir / (base + ".tmp" + std::to_string(std::random_device{}()));
-#endif
-    }
-
-    // Check current process permissions (platform-specific)
-    bool checkCurrentProcessPermissions(const std::filesystem::path& p,
-                                       bool& canRead, bool& canWrite, bool& canExec) {
-#if defined(__unix__) || defined(__APPLE__)
-        // Use access() for current process permissions
-        canRead = (::access(p.c_str(), R_OK) == 0);
-        canWrite = (::access(p.c_str(), W_OK) == 0);
-        canExec = (::access(p.c_str(), X_OK) == 0);
-        return true;
-#else
-        // Windows: use std::filesystem permissions (checks if anyone can access)
-        std::error_code ec;
-        auto st = std::filesystem::status(p, ec);
-        if (ec) {
-            canRead = canWrite = canExec = false;
+        } else if (p < pattern.size() && pattern[p] == '*') {
+            // Star matches zero or more characters
+            starIdx = p;
+            matchIdx = s;
+            ++p;
+        } else if (starIdx != std::string::npos) {
+            // Backtrack to last star
+            p = starIdx + 1;
+            ++matchIdx;
+            s = matchIdx;
+        } else {
+            // No match
             return false;
         }
-        auto perms = st.permissions();
-        auto has = [&](std::filesystem::perms perm) {
-            return (perms & perm) != std::filesystem::perms::none;
-        };
-        canRead = has(std::filesystem::perms::owner_read) ||
-                 has(std::filesystem::perms::group_read) ||
-                 has(std::filesystem::perms::others_read);
-        canWrite = has(std::filesystem::perms::owner_write) ||
-                  has(std::filesystem::perms::group_write) ||
-                  has(std::filesystem::perms::others_write);
-        canExec = has(std::filesystem::perms::owner_exec) ||
-                 has(std::filesystem::perms::group_exec) ||
-                 has(std::filesystem::perms::others_exec);
-        return true;
+    }
+
+    // Skip remaining stars in pattern
+    while (p < pattern.size() && pattern[p] == '*') {
+        ++p;
+    }
+
+    return p == pattern.size();
+}
+
+// Map errno to FileError with platform-specific handling
+// Mapping notes:
+// - ENOSPC/EDQUOT → DiskFull (out of space or quota exceeded)
+// - EACCES/EPERM → AccessDenied (permission denied)
+// - ENOENT → FileNotFound (missing file/dir)
+// - EINVAL/ENAMETOOLONG/(EISDIR on POSIX) → InvalidPath (malformed or wrong type)
+// - ENET*/ETIMEDOUT (POSIX) → NetworkError (remote transport issues)
+// - default → IOError (local I/O failures)
+// systemError in FileErrorInfo should carry std::error_code when available.
+FileError mapErrnoToFileError(int err) {
+    switch (err) {
+        case ENOSPC:
+#if defined(__unix__) || defined(__APPLE__)
+        case EDQUOT:  // Disk quota exceeded (POSIX)
 #endif
+            return FileError::DiskFull;
+        case EACCES:
+        case EPERM:
+            return FileError::AccessDenied;
+        case ENOENT:
+            return FileError::FileNotFound;
+        case EINVAL:
+        case ENAMETOOLONG:
+#if defined(__unix__) || defined(__APPLE__)
+        case EISDIR:
+#endif
+            return FileError::InvalidPath;
+#if defined(__unix__) || defined(__APPLE__)
+        case ENETUNREACH:
+        case ENETDOWN:
+        case ETIMEDOUT:
+            return FileError::NetworkError;
+#endif
+        default:
+            return FileError::IOError;
     }
 }
+
+// Check if path points to a special file (FIFO, device, socket)
+bool isSpecialFile(const std::filesystem::path& p) {
+    std::error_code ec;
+    auto status = std::filesystem::status(p, ec);
+    if (ec) return false;
+
+    return std::filesystem::is_block_file(status) || std::filesystem::is_character_file(status) ||
+           std::filesystem::is_fifo(status) || std::filesystem::is_socket(status);
+}
+
+// Create secure temporary file path
+std::filesystem::path createSecureTempPath(const std::filesystem::path& dir, const std::string& base) {
+#if defined(__unix__) || defined(__APPLE__)
+    // Use mkstemp for secure temp file creation (avoid mutating std::string buffer)
+    std::string tmpl = (dir / (base + ".XXXXXX")).string();
+    std::vector<char> buf(tmpl.begin(), tmpl.end());
+    buf.push_back('\0');
+    int fd = ::mkstemp(buf.data());
+    if (fd < 0) {
+        // Fallback to random if mkstemp fails
+        return dir / (base + ".tmp" + std::to_string(std::random_device{}()));
+    }
+    ::close(fd);  // We'll reopen with fstream
+    return std::filesystem::path(buf.data());
+#else
+    // Windows: use random device
+    return dir / (base + ".tmp" + std::to_string(std::random_device{}()));
+#endif
+}
+
+// Check current process permissions (platform-specific)
+bool checkCurrentProcessPermissions(const std::filesystem::path& p, bool& canRead, bool& canWrite, bool& canExec) {
+#if defined(__unix__) || defined(__APPLE__)
+    // Use access() for current process permissions
+    canRead = (::access(p.c_str(), R_OK) == 0);
+    canWrite = (::access(p.c_str(), W_OK) == 0);
+    canExec = (::access(p.c_str(), X_OK) == 0);
+    return true;
+#else
+    // Windows: use std::filesystem permissions (checks if anyone can access)
+    std::error_code ec;
+    auto st = std::filesystem::status(p, ec);
+    if (ec) {
+        canRead = canWrite = canExec = false;
+        return false;
+    }
+    auto perms = st.permissions();
+    auto has = [&](std::filesystem::perms perm) { return (perms & perm) != std::filesystem::perms::none; };
+    canRead = has(std::filesystem::perms::owner_read) || has(std::filesystem::perms::group_read) ||
+              has(std::filesystem::perms::others_read);
+    canWrite = has(std::filesystem::perms::owner_write) || has(std::filesystem::perms::group_write) ||
+               has(std::filesystem::perms::others_write);
+    canExec = has(std::filesystem::perms::owner_exec) || has(std::filesystem::perms::group_exec) ||
+              has(std::filesystem::perms::others_exec);
+    return true;
+#endif
+}
+}  // namespace
 
 // POSIX lock-file helpers and directory fsync for durability
-namespace {
+namespace
+{
 #if defined(__unix__) || defined(__APPLE__)
-    struct PosixLockFile {
-        int fd = -1;
-        std::filesystem::path path;
-        ~PosixLockFile() {
-            if (fd >= 0) {
-                // Best-effort unlock then close
-                ::flock(fd, LOCK_UN);
-                ::close(fd);
-            }
-        }
-    };
-
-    static std::unique_ptr<PosixLockFile> acquireSiblingLockPOSIX(
-        const std::filesystem::path& dst,
-        std::chrono::milliseconds timeout,
-        const std::string& suffix,
-        std::error_code& ecOut,
-        bool& timedOut)
-    {
-        using clock = std::chrono::steady_clock;
-        timedOut = false;
-        ecOut.clear();
-        auto lockPath = dst.string() + suffix;
-        int fd = ::open(lockPath.c_str(), O_CREAT | O_CLOEXEC | O_RDWR, 0600);
-        if (fd < 0) { ecOut = std::error_code(errno, std::generic_category()); return nullptr; }
-        auto token = std::make_unique<PosixLockFile>();
-        token->fd = fd;
-        token->path = lockPath;
-
-        auto until = clock::now() + timeout;
-        for (;;) {
-            if (::flock(fd, LOCK_EX | LOCK_NB) == 0) {
-                return token;
-            }
-            int e = errno;
-            if (e != EWOULDBLOCK && e != EAGAIN) {
-                ecOut = std::error_code(e, std::generic_category());
-                return nullptr;
-            }
-            if (clock::now() >= until) {
-                timedOut = true;
-                return nullptr;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+struct PosixLockFile
+{
+    int fd = -1;
+    std::filesystem::path path;
+    ~PosixLockFile() {
+        if (fd >= 0) {
+            // Best-effort unlock then close
+            ::flock(fd, LOCK_UN);
+            ::close(fd);
         }
     }
+};
 
-    static bool fsyncParentDirectoryPOSIX(const std::filesystem::path& p, std::error_code& ecOut) {
-        ecOut.clear();
-        auto parent = p.parent_path();
-        if (parent.empty()) return true;
-        int dfd = ::open(parent.c_str(), O_RDONLY);
-        if (dfd < 0) { ecOut = std::error_code(errno, std::generic_category()); return false; }
-        bool ok = (::fsync(dfd) == 0);
-        int e = ok ? 0 : errno;
-        ::close(dfd);
-        if (!ok) ecOut = std::error_code(e, std::generic_category());
-        return ok;
+static std::unique_ptr<PosixLockFile> acquireSiblingLockPOSIX(const std::filesystem::path& dst,
+                                                              std::chrono::milliseconds timeout,
+                                                              const std::string& suffix, std::error_code& ecOut,
+                                                              bool& timedOut) {
+    using clock = std::chrono::steady_clock;
+    timedOut = false;
+    ecOut.clear();
+    auto lockPath = dst.string() + suffix;
+    int fd = ::open(lockPath.c_str(), O_CREAT | O_CLOEXEC | O_RDWR, 0600);
+    if (fd < 0) {
+        ecOut = std::error_code(errno, std::generic_category());
+        return nullptr;
     }
-#endif
+    auto token = std::make_unique<PosixLockFile>();
+    token->fd = fd;
+    token->path = lockPath;
+
+    auto until = clock::now() + timeout;
+    for (;;) {
+        if (::flock(fd, LOCK_EX | LOCK_NB) == 0) {
+            return token;
+        }
+        int e = errno;
+        if (e != EWOULDBLOCK && e != EAGAIN) {
+            ecOut = std::error_code(e, std::generic_category());
+            return nullptr;
+        }
+        if (clock::now() >= until) {
+            timedOut = true;
+            return nullptr;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
 }
 
+static bool fsyncParentDirectoryPOSIX(const std::filesystem::path& p, std::error_code& ecOut) {
+    ecOut.clear();
+    auto parent = p.parent_path();
+    if (parent.empty()) return true;
+    int dfd = ::open(parent.c_str(), O_RDONLY);
+    if (dfd < 0) {
+        ecOut = std::error_code(errno, std::generic_category());
+        return false;
+    }
+    bool ok = (::fsync(dfd) == 0);
+    int e = ok ? 0 : errno;
+    ::close(dfd);
+    if (!ok) ecOut = std::error_code(e, std::generic_category());
+    return ok;
+}
+#endif
+}  // namespace
+
 // Concrete FileStream implementation for local files
-class LocalFileStream : public FileStream {
+class LocalFileStream : public FileStream
+{
 private:
     mutable std::fstream _stream;
     std::string _path;
     StreamOptions::Mode _mode;
     mutable bool _failFlag = false;
-    
+
 public:
-    LocalFileStream(const std::string& path, StreamOptions::Mode mode) 
-        : _path(path), _mode(mode) {
+    LocalFileStream(const std::string& path, StreamOptions::Mode mode) : _path(path), _mode(mode) {
         std::ios_base::openmode flags = std::ios::binary;
-        
+
         switch (mode) {
             case StreamOptions::Read:
                 flags |= std::ios::in;
@@ -274,60 +273,60 @@ public:
                 flags |= std::ios::in | std::ios::out;
                 break;
         }
-        
+
         _stream.open(path, flags);
         if (!_stream.is_open()) {
             _failFlag = true;
         }
     }
-    
+
     ~LocalFileStream() override {
         if (_stream.is_open()) {
             _stream.close();
         }
     }
-    
+
     IoResult read(std::span<uint8_t> buffer) override {
         IoResult result;
-        
+
         if (!good() || buffer.empty()) {
             result.error = FileError::IOError;
             return result;
         }
-        
+
         _stream.read(reinterpret_cast<char*>(buffer.data()), buffer.size());
         result.bytesTransferred = static_cast<size_t>(_stream.gcount());
         result.complete = (_stream.gcount() == static_cast<std::streamsize>(buffer.size())) || _stream.eof();
-        
+
         if (_stream.bad()) {
             result.error = FileError::IOError;
         }
-        
+
         return result;
     }
-    
+
     IoResult write(std::span<const uint8_t> data) override {
         IoResult result;
-        
+
         if (!good() || data.empty()) {
             result.error = FileError::IOError;
             return result;
         }
-        
+
         auto posBefore = _stream.tellp();
         _stream.write(reinterpret_cast<const char*>(data.data()), data.size());
         auto posAfter = _stream.tellp();
-        
+
         if (_stream.good()) {
             result.bytesTransferred = static_cast<size_t>(posAfter - posBefore);
             result.complete = (result.bytesTransferred == data.size());
         } else {
             result.error = FileError::IOError;
         }
-        
+
         return result;
     }
-    
+
     bool seek(int64_t offset, std::ios_base::seekdir dir) override {
         if (_mode == StreamOptions::Read || _mode == StreamOptions::ReadWrite) {
             _stream.seekg(offset, dir);
@@ -337,7 +336,7 @@ public:
         }
         return _stream.good();
     }
-    
+
     int64_t tell() const override {
         if (_mode == StreamOptions::Read || _mode == StreamOptions::ReadWrite) {
             return static_cast<int64_t>(_stream.tellg());
@@ -347,20 +346,32 @@ public:
         }
         return -1;
     }
-    
-    bool good() const override { return _stream.good() && !_failFlag; }
-    bool eof() const override { return _stream.eof(); }
-    bool fail() const override { return _stream.fail() || _failFlag; }
-    void flush() override { _stream.flush(); }
-    void close() override { _stream.close(); }
-    std::string path() const override { return _path; }
+
+    bool good() const override {
+        return _stream.good() && !_failFlag;
+    }
+    bool eof() const override {
+        return _stream.eof();
+    }
+    bool fail() const override {
+        return _stream.fail() || _failFlag;
+    }
+    void flush() override {
+        _stream.flush();
+    }
+    void close() override {
+        _stream.close();
+    }
+    std::string path() const override {
+        return _path;
+    }
 };
 
 // LocalFileSystemBackend implementation
-LocalFileSystemBackend::LocalFileSystemBackend() {
-}
+LocalFileSystemBackend::LocalFileSystemBackend() {}
 
-FileOperationHandle LocalFileSystemBackend::submitWork(const std::string& path,
+FileOperationHandle LocalFileSystemBackend::submitWork(
+    const std::string& path,
     std::function<void(FileOperationHandle::OpState&, const std::string&, const ExecContext&)> work,
     const ExecContext& ctx) {
     if (!_vfs) {
@@ -374,7 +385,9 @@ FileOperationHandle LocalFileSystemBackend::submitWork(const std::string& path,
     // If we are already executing within the same WorkContractGroup, run inline to avoid nested submission
     if (ctx.group == _vfs->_group) {
         auto st = std::make_shared<FileOperationHandle::OpState>();
-        st->progress = [grp=_vfs->_group]() { if (grp) grp->executeAllBackgroundWork(); };
+        st->progress = [grp = _vfs->_group]() {
+            if (grp) grp->executeAllBackgroundWork();
+        };
         try {
             st->st.store(FileOpStatus::Running, std::memory_order_release);
             work(*st, path, ctx);
@@ -395,22 +408,21 @@ FileOperationHandle LocalFileSystemBackend::submitWork(const std::string& path,
     }
 
     // Otherwise use VFS's submit method to execute work asynchronously
-    return _vfs->submit(path, [work, ctx](FileOperationHandle::OpState& s, const std::string& p, const ExecContext& /*outer*/){
-        work(s, p, ctx);
-    });
+    return _vfs->submit(path, [work, ctx](FileOperationHandle::OpState& s, const std::string& p,
+                                          const ExecContext& /*outer*/) { work(s, p, ctx); });
 }
 
-FileOperationHandle LocalFileSystemBackend::submitWork(const std::string& path,
-    std::function<void(FileOperationHandle::OpState&, const std::string&)> work) {
+FileOperationHandle LocalFileSystemBackend::submitWork(
+    const std::string& path, std::function<void(FileOperationHandle::OpState&, const std::string&)> work) {
     // Delegate to context-aware overload with no executing group (top-level call)
-    ExecContext ctx{ nullptr };
-    return submitWork(path, 
-        [work](FileOperationHandle::OpState& s, const std::string& p, const ExecContext&){ work(s, p); },
-        ctx);
+    ExecContext ctx{nullptr};
+    return submitWork(
+        path, [work](FileOperationHandle::OpState& s, const std::string& p, const ExecContext&) { work(s, p); }, ctx);
 }
 
 // Synchronous operations for FileHandle via submitSerialized
-void LocalFileSystemBackend::doWriteFile(FileOperationHandle::OpState& s, const std::string& p, std::span<const uint8_t> data, WriteOptions options) {
+void LocalFileSystemBackend::doWriteFile(FileOperationHandle::OpState& s, const std::string& p,
+                                         std::span<const uint8_t> data, WriteOptions options) {
     // Check for special files (FIFO, device, socket) that shouldn't be written via file operations
     if (isSpecialFile(p)) {
         s.setError(FileError::InvalidPath, "Cannot perform file operations on special files (FIFO, device, socket)", p);
@@ -439,7 +451,14 @@ void LocalFileSystemBackend::doWriteFile(FileOperationHandle::OpState& s, const 
     });
 
     // Optional cross-process serialization via lock directory
-    struct LockDirGuard { std::filesystem::path path; ~LockDirGuard(){ std::error_code rec; if(!path.empty()) std::filesystem::remove(path, rec);} };
+    struct LockDirGuard
+    {
+        std::filesystem::path path;
+        ~LockDirGuard() {
+            std::error_code rec;
+            if (!path.empty()) std::filesystem::remove(path, rec);
+        }
+    };
     std::optional<LockDirGuard> lockGuard;
     {
         bool useLock = options.useLockFile.value_or(_vfs ? _vfs->_cfg.defaultUseLockFile : false);
@@ -467,17 +486,25 @@ void LocalFileSystemBackend::doWriteFile(FileOperationHandle::OpState& s, const 
                             auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
                             info << "ts=" << ms << "\n";
                         }
-                    } catch (...) { /* ignore */ }
+                    } catch (...) { /* ignore */
+                    }
                     break;
                 }
                 if (std::filesystem::exists(lockPath)) {
                     // Check for stale lock based on age >= timeout
-                    std::error_code tec2; auto lwt = std::filesystem::last_write_time(lockPath, tec2);
+                    std::error_code tec2;
+                    auto lwt = std::filesystem::last_write_time(lockPath, tec2);
                     if (!tec2) {
-                        auto age = std::chrono::system_clock::now() - std::chrono::time_point_cast<std::chrono::system_clock::duration>(lwt - std::filesystem::file_time_type::clock::now() + std::chrono::system_clock::now());
+                        auto age =
+                            std::chrono::system_clock::now() -
+                            std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+                                lwt - std::filesystem::file_time_type::clock::now() + std::chrono::system_clock::now());
                         if (age >= timeout) {
-                            std::error_code rec; std::filesystem::remove_all(lockPath, rec);
-                            if (!rec) { continue; }
+                            std::error_code rec;
+                            std::filesystem::remove_all(lockPath, rec);
+                            if (!rec) {
+                                continue;
+                            }
                         }
                     }
                     // else: not stale yet; fall through to timeout sleep
@@ -488,7 +515,10 @@ void LocalFileSystemBackend::doWriteFile(FileOperationHandle::OpState& s, const 
                     return;
                 }
                 if (std::chrono::steady_clock::now() - start >= timeout) {
-                    s.setError(FileError::Timeout, std::string("Lock-file acquisition timed out after ") + std::to_string(timeout.count()) + " ms (lock=" + lockPath.string() + ")", p);
+                    s.setError(FileError::Timeout,
+                               std::string("Lock-file acquisition timed out after ") + std::to_string(timeout.count()) +
+                                   " ms (lock=" + lockPath.string() + ")",
+                               p);
                     s.complete(FileOpStatus::Failed);
                     return;
                 }
@@ -548,12 +578,22 @@ void LocalFileSystemBackend::doWriteFile(FileOperationHandle::OpState& s, const 
                 switch (werr) {
                     case ERROR_INVALID_NAME:
                     case ERROR_FILENAME_EXCED_RANGE:
-                    case ERROR_PATH_NOT_FOUND: code = FileError::InvalidPath; break;
+                    case ERROR_PATH_NOT_FOUND:
+                        code = FileError::InvalidPath;
+                        break;
                     case ERROR_SHARING_VIOLATION:
-                    case ERROR_LOCK_VIOLATION: code = FileError::Conflict; break;
-                    case ERROR_ACCESS_DENIED: code = FileError::AccessDenied; break;
-                    case ERROR_DISK_FULL: code = FileError::DiskFull; break;
-                    default: code = FileError::IOError; break;
+                    case ERROR_LOCK_VIOLATION:
+                        code = FileError::Conflict;
+                        break;
+                    case ERROR_ACCESS_DENIED:
+                        code = FileError::AccessDenied;
+                        break;
+                    case ERROR_DISK_FULL:
+                        code = FileError::DiskFull;
+                        break;
+                    default:
+                        code = FileError::IOError;
+                        break;
                 }
                 s.setError(code, "Cannot open file for writing", p, std::error_code((int)werr, std::system_category()));
                 s.complete(FileOpStatus::Failed);
@@ -565,7 +605,8 @@ void LocalFileSystemBackend::doWriteFile(FileOperationHandle::OpState& s, const 
             if (stEc) {
                 s.setError(FileError::InvalidPath, "Invalid path or unsupported filename", p, stEc);
             } else {
-                s.setError(FileError::AccessDenied, "Cannot open file for writing", p, std::error_code(saved_errno, std::generic_category()));
+                s.setError(FileError::AccessDenied, "Cannot open file for writing", p,
+                           std::error_code(saved_errno, std::generic_category()));
             }
         }
         s.complete(FileOpStatus::Failed);
@@ -580,13 +621,13 @@ void LocalFileSystemBackend::doWriteFile(FileOperationHandle::OpState& s, const 
     size_t wrote = data.size();
 
     if (options.ensureFinalNewline.value_or(false) && !options.append && (options.truncate || options.offset == 0)) {
-    #if defined(_WIN32)
+#if defined(_WIN32)
         const char* eol = "\r\n";
         const size_t eolLen = 2;
-    #else
+#else
         const char* eol = "\n";
         const size_t eolLen = 1;
-    #endif
+#endif
         bool endsWithLF = (!data.empty() && reinterpret_cast<const char*>(data.data())[data.size() - 1] == '\n');
         if (!endsWithLF) {
             out.write(eol, static_cast<std::streamsize>(eolLen));
@@ -612,7 +653,8 @@ void LocalFileSystemBackend::doWriteFile(FileOperationHandle::OpState& s, const 
             if (::fcntl(fd, F_FULLFSYNC) != 0) {
                 const int sync_errno = errno;
                 ::close(fd);
-                s.setError(FileError::IOError, "F_FULLFSYNC failed", p, std::error_code(sync_errno, std::generic_category()));
+                s.setError(FileError::IOError, "F_FULLFSYNC failed", p,
+                           std::error_code(sync_errno, std::generic_category()));
                 s.complete(FileOpStatus::Failed);
                 return;
             }
@@ -627,7 +669,8 @@ void LocalFileSystemBackend::doWriteFile(FileOperationHandle::OpState& s, const 
             if (::fdatasync(fd) != 0) {
                 const int sync_errno = errno;
                 ::close(fd);
-                s.setError(FileError::IOError, "fdatasync failed", p, std::error_code(sync_errno, std::generic_category()));
+                s.setError(FileError::IOError, "fdatasync failed", p,
+                           std::error_code(sync_errno, std::generic_category()));
                 s.complete(FileOpStatus::Failed);
                 return;
             }
@@ -681,14 +724,16 @@ void LocalFileSystemBackend::doCreateFile(FileOperationHandle::OpState& s, const
     std::ofstream out(osPath, std::ios::out | std::ios::binary);
     if (!out) {
         const int saved_errno = errno;  // Capture errno immediately
-        s.setError(FileError::AccessDenied, "Cannot create file", p, std::error_code(saved_errno, std::generic_category()));
+        s.setError(FileError::AccessDenied, "Cannot create file", p,
+                   std::error_code(saved_errno, std::generic_category()));
         s.complete(FileOpStatus::Failed);
     } else {
         s.complete(FileOpStatus::Complete);
     }
 }
 
-void LocalFileSystemBackend::doWriteLine(FileOperationHandle::OpState& s, const std::string& p, size_t lineNumber, std::string_view line) {
+void LocalFileSystemBackend::doWriteLine(FileOperationHandle::OpState& s, const std::string& p, size_t lineNumber,
+                                         std::string_view line) {
     std::error_code ec;
     const bool createParents = _vfs ? _vfs->_cfg.defaultCreateParentDirs : false;
     if (createParents) {
@@ -723,44 +768,90 @@ void LocalFileSystemBackend::doWriteLine(FileOperationHandle::OpState& s, const 
         const auto& osTemp = tempPath;
 #endif
         std::ofstream out(osTemp, std::ios::out | std::ios::binary | std::ios::trunc);
-        if (!out) { s.setError(FileError::IOError, "Failed to create temp file for writeLine", p); s.complete(FileOpStatus::Failed); return; }
+        if (!out) {
+            s.setError(FileError::IOError, "Failed to create temp file for writeLine", p);
+            s.complete(FileOpStatus::Failed);
+            return;
+        }
         std::string eol;
 #if defined(_WIN32)
         eol = "\r\n";
 #else
         eol = "\n";
 #endif
-        size_t current = 0; bool wroteReplacement = false; std::string buf;
+        size_t current = 0;
+        bool wroteReplacement = false;
+        std::string buf;
         if (in) {
             while (std::getline(in, buf)) {
                 if (!buf.empty() && buf.back() == '\r') buf.pop_back();
-                if (current == lineNumber) { out.write(line.data(), static_cast<std::streamsize>(line.size())); out.write(eol.data(), static_cast<std::streamsize>(eol.size())); wroteReplacement = true; }
-                else { out.write(buf.data(), static_cast<std::streamsize>(buf.size())); out.write(eol.data(), static_cast<std::streamsize>(eol.size())); }
+                if (current == lineNumber) {
+                    out.write(line.data(), static_cast<std::streamsize>(line.size()));
+                    out.write(eol.data(), static_cast<std::streamsize>(eol.size()));
+                    wroteReplacement = true;
+                } else {
+                    out.write(buf.data(), static_cast<std::streamsize>(buf.size()));
+                    out.write(eol.data(), static_cast<std::streamsize>(eol.size()));
+                }
                 ++current;
             }
         }
         if (!wroteReplacement) {
-            while (current < lineNumber) { out.write(eol.data(), static_cast<std::streamsize>(eol.size())); ++current; }
+            while (current < lineNumber) {
+                out.write(eol.data(), static_cast<std::streamsize>(eol.size()));
+                ++current;
+            }
             out.write(line.data(), static_cast<std::streamsize>(line.size()));
             // Preserve final newline policy: if original had a trailing newline, keep one
             out.write(eol.data(), static_cast<std::streamsize>(eol.size()));
         }
-        out.flush(); out.close();
+        out.flush();
+        out.close();
 #if defined(_WIN32)
         // Windows atomic replace with retries
-        bool replaced = false; const int maxRetries = 10; const DWORD retryDelayMs = 25; std::wstring wTarget = std::filesystem::path(p).wstring(); std::wstring wTemp = std::filesystem::path(tempPath).wstring();
+        bool replaced = false;
+        const int maxRetries = 10;
+        const DWORD retryDelayMs = 25;
+        std::wstring wTarget = std::filesystem::path(p).wstring();
+        std::wstring wTemp = std::filesystem::path(tempPath).wstring();
         for (int i = 0; i < maxRetries; ++i) {
-            if (MoveFileExW(wTemp.c_str(), wTarget.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED | MOVEFILE_WRITE_THROUGH)) { replaced = true; break; }
-            DWORD error = GetLastError(); if (error == ERROR_SHARING_VIOLATION || error == ERROR_ACCESS_DENIED || error == ERROR_LOCK_VIOLATION) { Sleep(retryDelayMs); continue; } else { break; }
+            if (MoveFileExW(wTemp.c_str(), wTarget.c_str(),
+                            MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED | MOVEFILE_WRITE_THROUGH)) {
+                replaced = true;
+                break;
+            }
+            DWORD error = GetLastError();
+            if (error == ERROR_SHARING_VIOLATION || error == ERROR_ACCESS_DENIED || error == ERROR_LOCK_VIOLATION) {
+                Sleep(retryDelayMs);
+                continue;
+            } else {
+                break;
+            }
         }
-        if (!replaced) { std::error_code rec; std::filesystem::remove(tempPath, rec); s.setError(FileError::IOError, "Failed to replace file (streaming writeLine)", p); s.complete(FileOpStatus::Failed); return; }
+        if (!replaced) {
+            std::error_code rec;
+            std::filesystem::remove(tempPath, rec);
+            s.setError(FileError::IOError, "Failed to replace file (streaming writeLine)", p);
+            s.complete(FileOpStatus::Failed);
+            return;
+        }
 #else
-        std::error_code rec; std::filesystem::rename(tempPath, p, rec); if (rec) { std::filesystem::remove(tempPath, rec); s.setError(FileError::IOError, "Failed to replace file (streaming writeLine)", p, rec); s.complete(FileOpStatus::Failed); return; }
+        std::error_code rec;
+        std::filesystem::rename(tempPath, p, rec);
+        if (rec) {
+            std::filesystem::remove(tempPath, rec);
+            s.setError(FileError::IOError, "Failed to replace file (streaming writeLine)", p, rec);
+            s.complete(FileOpStatus::Failed);
+            return;
+        }
 #endif
         // Report bytes written
-        std::error_code sec; auto finalSize = std::filesystem::file_size(p, sec); s.wrote = sec ? 0 : finalSize;
-        s.complete(FileOpStatus::Complete); return;
-    } while(false);
+        std::error_code sec;
+        auto finalSize = std::filesystem::file_size(p, sec);
+        s.wrote = sec ? 0 : finalSize;
+        s.complete(FileOpStatus::Complete);
+        return;
+    } while (false);
 #endif
 
     auto targetPath = std::filesystem::path(p);
@@ -771,8 +862,10 @@ void LocalFileSystemBackend::doWriteLine(FileOperationHandle::OpState& s, const 
 #if defined(__unix__) || defined(__APPLE__)
     std::unique_ptr<PosixLockFile> lockToken;
     if (_vfs && _vfs->_cfg.defaultUseLockFile) {
-        std::error_code lockEc; bool timedOut = false;
-        lockToken = acquireSiblingLockPOSIX(targetPath, _vfs->_cfg.lockAcquireTimeout, _vfs->_cfg.lockSuffix, lockEc, timedOut);
+        std::error_code lockEc;
+        bool timedOut = false;
+        lockToken =
+            acquireSiblingLockPOSIX(targetPath, _vfs->_cfg.lockAcquireTimeout, _vfs->_cfg.lockSuffix, lockEc, timedOut);
         if (!lockToken) {
             if (timedOut) {
                 s.setError(FileError::Timeout, "Lock acquisition timed out", p);
@@ -800,7 +893,8 @@ void LocalFileSystemBackend::doWriteLine(FileOperationHandle::OpState& s, const 
     {
         std::ifstream inBin(p, std::ios::in | std::ios::binary);
         if (inBin) {
-            std::ostringstream ss; ss << inBin.rdbuf();
+            std::ostringstream ss;
+            ss << inBin.rdbuf();
             data = ss.str();
             if (data.empty() || data.back() == '\n') {
                 originalFinalNewline = true;
@@ -808,14 +902,22 @@ void LocalFileSystemBackend::doWriteLine(FileOperationHandle::OpState& s, const 
             size_t crlf = 0, lf = 0;
             for (size_t i = 0; i < data.size(); ++i) {
                 if (data[i] == '\n') {
-                    if (i > 0 && data[i-1] == '\r') ++crlf; else ++lf;
+                    if (i > 0 && data[i - 1] == '\r')
+                        ++crlf;
+                    else
+                        ++lf;
                 }
             }
-            if (crlf > lf) eol = "\r\n"; else if (lf > crlf) eol = "\n"; else eol = platformDefaultEol;
+            if (crlf > lf)
+                eol = "\r\n";
+            else if (lf > crlf)
+                eol = "\n";
+            else
+                eol = platformDefaultEol;
         } else {
             // File does not exist yet: adopt platform default EOL and default to final newline present
             eol = platformDefaultEol;
-            originalFinalNewline = true; // backend default for new files: end with a newline
+            originalFinalNewline = true;  // backend default for new files: end with a newline
         }
     }
     if (eol.empty()) eol = platformDefaultEol;
@@ -917,16 +1019,17 @@ FileOperationHandle LocalFileSystemBackend::readFile(const std::string& path, Re
     return submitWork(path, [options](FileOperationHandle::OpState& s, const std::string& p) {
         // Check for special files (FIFO, device, socket)
         if (isSpecialFile(p)) {
-            s.setError(FileError::InvalidPath, "Cannot perform file operations on special files (FIFO, device, socket)", p);
+            s.setError(FileError::InvalidPath, "Cannot perform file operations on special files (FIFO, device, socket)",
+                       p);
             s.complete(FileOpStatus::Failed);
             return;
         }
 
-    #if defined(_WIN32)
+#if defined(_WIN32)
         auto osPathIn = toWinLongPath(p);
-    #else
+#else
         const auto& osPathIn = p;
-    #endif
+#endif
         std::ifstream in(osPathIn, std::ios::in | std::ios::binary);
         if (!in) {
             const int saved_errno = errno;  // Capture errno immediately
@@ -944,28 +1047,40 @@ FileOperationHandle LocalFileSystemBackend::readFile(const std::string& path, Re
                     switch (werr) {
                         case ERROR_INVALID_NAME:
                         case ERROR_FILENAME_EXCED_RANGE:
-                        case ERROR_PATH_NOT_FOUND: code = FileError::InvalidPath; break;
+                        case ERROR_PATH_NOT_FOUND:
+                            code = FileError::InvalidPath;
+                            break;
                         case ERROR_SHARING_VIOLATION:
-                        case ERROR_LOCK_VIOLATION: code = FileError::Conflict; break;
-                        case ERROR_ACCESS_DENIED: code = FileError::AccessDenied; break;
-                        case ERROR_DISK_FULL: code = FileError::DiskFull; break;
-                        default: code = FileError::IOError; break;
+                        case ERROR_LOCK_VIOLATION:
+                            code = FileError::Conflict;
+                            break;
+                        case ERROR_ACCESS_DENIED:
+                            code = FileError::AccessDenied;
+                            break;
+                        case ERROR_DISK_FULL:
+                            code = FileError::DiskFull;
+                            break;
+                        default:
+                            code = FileError::IOError;
+                            break;
                     }
-                    s.setError(code, "Cannot open file for reading", p, std::error_code((int)werr, std::system_category()));
+                    s.setError(code, "Cannot open file for reading", p,
+                               std::error_code((int)werr, std::system_category()));
                 } else
 #endif
                 {
-                    s.setError(FileError::AccessDenied, "Cannot open file for reading", p, std::error_code(saved_errno, std::generic_category()));
+                    s.setError(FileError::AccessDenied, "Cannot open file for reading", p,
+                               std::error_code(saved_errno, std::generic_category()));
                 }
             }
             s.complete(FileOpStatus::Failed);
             return;
         }
-        
+
         if (options.offset > 0) {
             in.seekg(options.offset, std::ios::beg);
         }
-        
+
         if (options.length.has_value()) {
             const size_t requested = options.length.value();
             s.bytes.resize(requested);
@@ -983,30 +1098,31 @@ FileOperationHandle LocalFileSystemBackend::readFile(const std::string& path, Re
             s.bytes.resize(toRead);
             in.read(reinterpret_cast<char*>(s.bytes.data()), toRead);
         }
-        
+
         s.complete(FileOpStatus::Complete);
     });
 }
 
-FileOperationHandle LocalFileSystemBackend::writeFile(const std::string& path, std::span<const uint8_t> data, WriteOptions options) {
+FileOperationHandle LocalFileSystemBackend::writeFile(const std::string& path, std::span<const uint8_t> data,
+                                                      WriteOptions options) {
     // Route backend writes through VFS submitSerialized to honor advisory fallback policy and scope mapping.
     // Delegate the actual I/O to doWriteFile, which executes synchronously under the serialized section.
     if (_vfs) {
         auto buf = std::vector<uint8_t>(data.begin(), data.end());
-        return _vfs->submitSerialized(path,
-            [this, buf = std::move(buf), options]
-            (FileOperationHandle::OpState& s, std::shared_ptr<IFileSystemBackend> /*backend*/, const std::string& p, const ExecContext& /*ctx*/) mutable {
+        return _vfs->submitSerialized(
+            path, [this, buf = std::move(buf), options](FileOperationHandle::OpState& s,
+                                                        std::shared_ptr<IFileSystemBackend> /*backend*/,
+                                                        const std::string& p, const ExecContext& /*ctx*/) mutable {
                 this->doWriteFile(s, p, std::span<const uint8_t>(buf.data(), buf.size()), options);
-            }
-        );
+            });
     }
     // Fallback: no VFS associated (rare). Execute synchronously via submitWork and doWriteFile.
-    return submitWork(path, [this, data = std::vector<uint8_t>(data.begin(), data.end()), options]
-                            (FileOperationHandle::OpState& s, const std::string& p) mutable {
-
+    return submitWork(path, [this, data = std::vector<uint8_t>(data.begin(), data.end()), options](
+                                FileOperationHandle::OpState& s, const std::string& p) mutable {
         // Check for special files (FIFO, device, socket)
         if (isSpecialFile(p)) {
-            s.setError(FileError::InvalidPath, "Cannot perform file operations on special files (FIFO, device, socket)", p);
+            s.setError(FileError::InvalidPath, "Cannot perform file operations on special files (FIFO, device, socket)",
+                       p);
             s.complete(FileOpStatus::Failed);
             return;
         }
@@ -1072,7 +1188,8 @@ FileOperationHandle LocalFileSystemBackend::writeFile(const std::string& path, s
                 if (stEc) {
                     s.setError(FileError::InvalidPath, "Invalid path or unsupported filename", p, stEc);
                 } else {
-                    s.setError(FileError::AccessDenied, "Cannot open file for writing", p, std::error_code(saved_errno, std::generic_category()));
+                    s.setError(FileError::AccessDenied, "Cannot open file for writing", p,
+                               std::error_code(saved_errno, std::generic_category()));
                 }
             }
             s.complete(FileOpStatus::Failed);
@@ -1089,14 +1206,15 @@ FileOperationHandle LocalFileSystemBackend::writeFile(const std::string& path, s
 
         // If ensureFinalNewline is requested and this is a whole-file write (truncate or offset==0 and not append),
         // add a platform-default newline if the payload does not already end with '\n'.
-        if (options.ensureFinalNewline.value_or(false) && !options.append && (options.truncate || options.offset == 0)) {
-        #if defined(_WIN32)
+        if (options.ensureFinalNewline.value_or(false) && !options.append &&
+            (options.truncate || options.offset == 0)) {
+#if defined(_WIN32)
             const char* eol = "\r\n";
             const size_t eolLen = 2;
-        #else
+#else
             const char* eol = "\n";
             const size_t eolLen = 1;
-        #endif
+#endif
             bool endsWithLF = (!data.empty() && reinterpret_cast<const char*>(data.data())[data.size() - 1] == '\n');
             if (!endsWithLF) {
                 out.write(eol, static_cast<std::streamsize>(eolLen));
@@ -1122,7 +1240,8 @@ FileOperationHandle LocalFileSystemBackend::writeFile(const std::string& path, s
                 if (::fcntl(fd, F_FULLFSYNC) != 0) {
                     const int sync_errno = errno;
                     ::close(fd);
-                    s.setError(FileError::IOError, "F_FULLFSYNC failed", p, std::error_code(sync_errno, std::generic_category()));
+                    s.setError(FileError::IOError, "F_FULLFSYNC failed", p,
+                               std::error_code(sync_errno, std::generic_category()));
                     s.complete(FileOpStatus::Failed);
                     return;
                 }
@@ -1168,10 +1287,9 @@ FileOperationHandle LocalFileSystemBackend::writeFile(const std::string& path, s
 
 FileOperationHandle LocalFileSystemBackend::deleteFile(const std::string& path) {
     return submitWork(path, [](FileOperationHandle::OpState& s, const std::string& p) {
-        
         std::error_code ec;
         std::filesystem::remove(p, ec);
-        
+
         if (ec && std::filesystem::exists(p)) {
             s.setError(FileError::IOError, "Failed to delete file", p, ec);
             s.complete(FileOpStatus::Failed);
@@ -1183,7 +1301,6 @@ FileOperationHandle LocalFileSystemBackend::deleteFile(const std::string& path) 
 
 FileOperationHandle LocalFileSystemBackend::createFile(const std::string& path) {
     return submitWork(path, [this](FileOperationHandle::OpState& s, const std::string& p) {
-        
         std::error_code ec;
         const bool createParents = _vfs ? _vfs->_cfg.defaultCreateParentDirs : false;
         if (createParents) {
@@ -1197,7 +1314,7 @@ FileOperationHandle LocalFileSystemBackend::createFile(const std::string& path) 
                 }
             }
         }
-        
+
         std::ofstream out(p, std::ios::out | std::ios::binary | std::ios::trunc);
         if (!out) {
             std::error_code stEc;
@@ -1205,7 +1322,8 @@ FileOperationHandle LocalFileSystemBackend::createFile(const std::string& path) 
             if (stEc) {
                 s.setError(FileError::InvalidPath, "Invalid path or unsupported filename", p, stEc);
             } else {
-                s.setError(FileError::AccessDenied, "Cannot create file", p, std::error_code(errno, std::generic_category()));
+                s.setError(FileError::AccessDenied, "Cannot create file", p,
+                           std::error_code(errno, std::generic_category()));
             }
             s.complete(FileOpStatus::Failed);
         } else {
@@ -1255,8 +1373,7 @@ FileOperationHandle LocalFileSystemBackend::getMetadata(const std::string& path)
             if (!ec) {
                 // Convert file_time_type to system_clock::time_point
                 auto sctp = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
-                    lwt - std::filesystem::file_time_type::clock::now() + std::chrono::system_clock::now()
-                );
+                    lwt - std::filesystem::file_time_type::clock::now() + std::chrono::system_clock::now());
                 meta.lastModified = sctp;
             }
         }
@@ -1283,13 +1400,10 @@ FileOperationHandle LocalFileSystemBackend::getMetadataBatch(const BatchMetadata
             meta.path = path;
 
             WIN32_FIND_DATAW findData;
-            HANDLE hFind = FindFirstFileExW(
-                std::filesystem::path(path).wstring().c_str(),
-                FindExInfoBasic,  // Don't retrieve short names - faster!
-                &findData,
-                FindExSearchNameMatch,
-                nullptr,
-                FIND_FIRST_EX_LARGE_FETCH  // Optimize for batch queries
+            HANDLE hFind = FindFirstFileExW(std::filesystem::path(path).wstring().c_str(),
+                                            FindExInfoBasic,  // Don't retrieve short names - faster!
+                                            &findData, FindExSearchNameMatch, nullptr,
+                                            FIND_FIRST_EX_LARGE_FETCH  // Optimize for batch queries
             );
 
             if (hFind == INVALID_HANDLE_VALUE) {
@@ -1300,8 +1414,7 @@ FileOperationHandle LocalFileSystemBackend::getMetadataBatch(const BatchMetadata
 
             meta.exists = true;
             meta.isDirectory = (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
-            meta.isRegularFile = !meta.isDirectory &&
-                                 (findData.dwFileAttributes & FILE_ATTRIBUTE_NORMAL) != 0;
+            meta.isRegularFile = !meta.isDirectory && (findData.dwFileAttributes & FILE_ATTRIBUTE_NORMAL) != 0;
             meta.isSymlink = (findData.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
 
             // Calculate file size
@@ -1394,7 +1507,7 @@ FileOperationHandle LocalFileSystemBackend::createDirectory(const std::string& p
     return submitWork(path, [](FileOperationHandle::OpState& s, const std::string& p) {
         std::error_code ec;
         std::filesystem::create_directories(p, ec);
-        
+
         if (ec) {
             s.setError(FileError::IOError, "Cannot create directory", p, ec);
             s.complete(FileOpStatus::Failed);
@@ -1408,7 +1521,7 @@ FileOperationHandle LocalFileSystemBackend::removeDirectory(const std::string& p
     return submitWork(path, [](FileOperationHandle::OpState& s, const std::string& p) {
         std::error_code ec;
         std::filesystem::remove_all(p, ec);
-        
+
         if (ec) {
             s.setError(FileError::IOError, "Cannot remove directory", p, ec);
             s.complete(FileOpStatus::Failed);
@@ -1472,25 +1585,19 @@ FileOperationHandle LocalFileSystemBackend::listDirectory(const std::string& pat
 
                 // Get permissions
                 auto perms = status.permissions();
-                auto has = [&](std::filesystem::perms perm) {
-                    return (perms & perm) != std::filesystem::perms::none;
-                };
-                meta.readable = has(std::filesystem::perms::owner_read) ||
-                               has(std::filesystem::perms::group_read) ||
-                               has(std::filesystem::perms::others_read);
-                meta.writable = has(std::filesystem::perms::owner_write) ||
-                               has(std::filesystem::perms::group_write) ||
-                               has(std::filesystem::perms::others_write);
-                meta.executable = has(std::filesystem::perms::owner_exec) ||
-                                 has(std::filesystem::perms::group_exec) ||
-                                 has(std::filesystem::perms::others_exec);
+                auto has = [&](std::filesystem::perms perm) { return (perms & perm) != std::filesystem::perms::none; };
+                meta.readable = has(std::filesystem::perms::owner_read) || has(std::filesystem::perms::group_read) ||
+                                has(std::filesystem::perms::others_read);
+                meta.writable = has(std::filesystem::perms::owner_write) || has(std::filesystem::perms::group_write) ||
+                                has(std::filesystem::perms::others_write);
+                meta.executable = has(std::filesystem::perms::owner_exec) || has(std::filesystem::perms::group_exec) ||
+                                  has(std::filesystem::perms::others_exec);
 
                 // Get last modified time
                 auto lwt = fsEntry.last_write_time(ec);
                 if (!ec) {
                     auto sctp = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
-                        lwt - std::filesystem::file_time_type::clock::now() + std::chrono::system_clock::now()
-                    );
+                        lwt - std::filesystem::file_time_type::clock::now() + std::chrono::system_clock::now());
                     meta.lastModified = sctp;
                 }
 
@@ -1567,9 +1674,8 @@ FileOperationHandle LocalFileSystemBackend::listDirectory(const std::string& pat
             if (options.sortBy != ListDirectoryOptions::None) {
                 switch (options.sortBy) {
                     case ListDirectoryOptions::ByName:
-                        std::sort(entries.begin(), entries.end(), [](const DirectoryEntry& a, const DirectoryEntry& b) {
-                            return a.name < b.name;
-                        });
+                        std::sort(entries.begin(), entries.end(),
+                                  [](const DirectoryEntry& a, const DirectoryEntry& b) { return a.name < b.name; });
                         break;
                     case ListDirectoryOptions::BySize:
                         std::sort(entries.begin(), entries.end(), [](const DirectoryEntry& a, const DirectoryEntry& b) {
@@ -1609,18 +1715,18 @@ std::unique_ptr<FileStream> LocalFileSystemBackend::openStream(const std::string
 
 FileOperationHandle LocalFileSystemBackend::readLine(const std::string& path, size_t lineNumber) {
     return submitWork(path, [lineNumber](FileOperationHandle::OpState& s, const std::string& p) {
-    #if defined(_WIN32)
+#if defined(_WIN32)
         auto osPathIn2 = toWinLongPath(p);
-    #else
+#else
         const auto& osPathIn2 = p;
-    #endif
+#endif
         std::ifstream in(osPathIn2, std::ios::in);
         if (!in) {
             s.setError(FileError::FileNotFound, "File not found or cannot be opened", p);
             s.complete(FileOpStatus::Failed);
             return;
         }
-        
+
         std::string line;
         size_t currentLine = 0;
         while (std::getline(in, line)) {
@@ -1636,17 +1742,17 @@ FileOperationHandle LocalFileSystemBackend::readLine(const std::string& path, si
             }
             currentLine++;
         }
-        
+
         s.complete(FileOpStatus::Partial);  // Line not found
     });
 }
 
-FileOperationHandle LocalFileSystemBackend::writeLine(const std::string& path, size_t lineNumber, std::string_view line) {
-    return submitWork(path, [this, lineNumber, line = std::string(line)]
-                            (FileOperationHandle::OpState& s, const std::string& p) mutable {
-        
+FileOperationHandle LocalFileSystemBackend::writeLine(const std::string& path, size_t lineNumber,
+                                                      std::string_view line) {
+    return submitWork(path, [this, lineNumber, line = std::string(line)](FileOperationHandle::OpState& s,
+                                                                         const std::string& p) mutable {
         std::error_code ec;
-        
+
         // Ensure destination parent directory exists if configured
         const bool createParents = _vfs ? _vfs->_cfg.defaultCreateParentDirs : false;
         if (createParents) {
@@ -1660,13 +1766,13 @@ FileOperationHandle LocalFileSystemBackend::writeLine(const std::string& path, s
                 }
             }
         }
-        
+
         // Generate temporary filename in the same directory as destination for atomic replace
         auto targetPath = std::filesystem::path(p);
         auto dir = targetPath.parent_path();
         auto base = targetPath.filename().string();
         auto tempPath = createSecureTempPath(dir, base);
-        
+
         // Determine existing file content and line-ending style
         std::string data;
         bool originalFinalNewline = false;
@@ -1679,7 +1785,8 @@ FileOperationHandle LocalFileSystemBackend::writeLine(const std::string& path, s
         {
             std::ifstream inBin(p, std::ios::in | std::ios::binary);
             if (inBin) {
-                std::ostringstream ss; ss << inBin.rdbuf();
+                std::ostringstream ss;
+                ss << inBin.rdbuf();
                 data = ss.str();
                 if (!data.empty()) {
                     if (data.back() == '\n') {
@@ -1690,16 +1797,24 @@ FileOperationHandle LocalFileSystemBackend::writeLine(const std::string& path, s
                 size_t crlf = 0, lf = 0;
                 for (size_t i = 0; i < data.size(); ++i) {
                     if (data[i] == '\n') {
-                        if (i > 0 && data[i-1] == '\r') ++crlf; else ++lf;
+                        if (i > 0 && data[i - 1] == '\r')
+                            ++crlf;
+                        else
+                            ++lf;
                     }
                 }
-                if (crlf > lf) eol = "\r\n"; else if (lf > crlf) eol = "\n"; else eol = platformDefaultEol;
+                if (crlf > lf)
+                    eol = "\r\n";
+                else if (lf > crlf)
+                    eol = "\n";
+                else
+                    eol = platformDefaultEol;
             } else {
                 eol = platformDefaultEol;
             }
         }
         if (eol.empty()) eol = platformDefaultEol;
-        
+
         // Parse existing lines without EOLs
         std::vector<std::string> linesVec;
         if (!data.empty()) {
@@ -1720,7 +1835,7 @@ FileOperationHandle LocalFileSystemBackend::writeLine(const std::string& path, s
                 linesVec.push_back(std::move(cur));
             }
         }
-        
+
         // Apply writeLine semantics
         if (lineNumber < linesVec.size()) {
             linesVec[lineNumber] = line;
@@ -1733,7 +1848,7 @@ FileOperationHandle LocalFileSystemBackend::writeLine(const std::string& path, s
                 linesVec.emplace_back(line);
             }
         }
-        
+
         // Write to temp file using chosen EOL and preserving original final-newline presence
         {
             std::ofstream out(tempPath, std::ios::out | std::ios::trunc | std::ios::binary);
@@ -1742,7 +1857,8 @@ FileOperationHandle LocalFileSystemBackend::writeLine(const std::string& path, s
                 s.complete(FileOpStatus::Failed);
                 return;
             }
-            // Decide final newline presence: if original had no content, default to true; otherwise preserve prior policy
+            // Decide final newline presence: if original had no content, default to true; otherwise preserve prior
+            // policy
             const bool finalNewline = data.empty() ? true : originalFinalNewline;
             for (size_t i = 0; i < linesVec.size(); ++i) {
                 out.write(linesVec[i].data(), static_cast<std::streamsize>(linesVec[i].size()));
@@ -1763,34 +1879,35 @@ FileOperationHandle LocalFileSystemBackend::writeLine(const std::string& path, s
                 return;
             }
         }
-        
-        // Atomic replace/rename
-        #if defined(_WIN32)
-            // Use Windows-specific atomic rename with retry logic (to avoid sharing violations)
-            auto wsrc = tempPath.wstring();
-            auto wdst = targetPath.wstring();
-            
-            const int maxRetries = 50;
-            const int retryDelayMs = 10;
-            bool success = false;
-            for (int i = 0; i < maxRetries; ++i) {
-                if (MoveFileExW(wsrc.c_str(), wdst.c_str(), 
-                               MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0) {
-                    success = true; break;
-                }
-                DWORD error = GetLastError();
-                if (error == ERROR_SHARING_VIOLATION || error == ERROR_ACCESS_DENIED || error == ERROR_LOCK_VIOLATION) {
-                    Sleep(retryDelayMs); continue;
-                }
+
+// Atomic replace/rename
+#if defined(_WIN32)
+        // Use Windows-specific atomic rename with retry logic (to avoid sharing violations)
+        auto wsrc = tempPath.wstring();
+        auto wdst = targetPath.wstring();
+
+        const int maxRetries = 50;
+        const int retryDelayMs = 10;
+        bool success = false;
+        for (int i = 0; i < maxRetries; ++i) {
+            if (MoveFileExW(wsrc.c_str(), wdst.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0) {
+                success = true;
                 break;
             }
-            if (!success) {
-                std::filesystem::remove(tempPath, ec);
-                s.setError(FileError::IOError, "Failed to replace destination file", p);
-                s.complete(FileOpStatus::Failed);
-                return;
+            DWORD error = GetLastError();
+            if (error == ERROR_SHARING_VIOLATION || error == ERROR_ACCESS_DENIED || error == ERROR_LOCK_VIOLATION) {
+                Sleep(retryDelayMs);
+                continue;
             }
-        #else
+            break;
+        }
+        if (!success) {
+            std::filesystem::remove(tempPath, ec);
+            s.setError(FileError::IOError, "Failed to replace destination file", p);
+            s.complete(FileOpStatus::Failed);
+            return;
+        }
+#else
             std::filesystem::rename(tempPath, targetPath, ec);
             if (ec) {
                 std::filesystem::remove(tempPath, ec);
@@ -1798,14 +1915,15 @@ FileOperationHandle LocalFileSystemBackend::writeLine(const std::string& path, s
                 s.complete(FileOpStatus::Failed);
                 return;
             }
-        #endif
-        
+#endif
+
         s.wrote = line.size();
         s.complete(FileOpStatus::Complete);
     });
 }
 
-FileOperationHandle LocalFileSystemBackend::copyFile(const std::string& src, const std::string& dst, const CopyOptions& options) {
+FileOperationHandle LocalFileSystemBackend::copyFile(const std::string& src, const std::string& dst,
+                                                     const CopyOptions& options) {
     return submitWork(src, [this, src, dst, options](FileOperationHandle::OpState& s, const std::string&) {
         std::error_code ec;
 
@@ -1860,11 +1978,11 @@ FileOperationHandle LocalFileSystemBackend::copyFile(const std::string& src, con
         // Regular copy with progress callback
         if (options.progressCallback && fileSize > 0) {
             // Chunked copy with progress
-        #if defined(_WIN32)
+#if defined(_WIN32)
             auto osPathSrc = toWinLongPath(src);
-        #else
+#else
             const auto& osPathSrc = src;
-        #endif
+#endif
             std::ifstream in(osPathSrc, std::ios::binary);
             std::ofstream out(dst, std::ios::binary | std::ios::trunc);
 
@@ -1889,7 +2007,9 @@ FileOperationHandle LocalFileSystemBackend::copyFile(const std::string& src, con
                     // Call progress callback - if it returns false, cancel
                     if (!options.progressCallback(totalCopied, fileSize)) {
                         // Ensure streams are closed before cleanup on Windows
-                        out.flush(); out.close(); in.close();
+                        out.flush();
+                        out.close();
+                        in.close();
                         std::filesystem::remove(dst, ec);  // Clean up partial copy before completing
                         s.setError(FileError::Unknown, "Copy cancelled by user", src);
                         s.complete(FileOpStatus::Failed);
@@ -1900,7 +2020,9 @@ FileOperationHandle LocalFileSystemBackend::copyFile(const std::string& src, con
 
             if (!out.good()) {
                 // Close streams before attempting cleanup
-                out.flush(); out.close(); in.close();
+                out.flush();
+                out.close();
+                in.close();
                 std::filesystem::remove(dst, ec);
                 s.setError(FileError::IOError, "Write error during copy", dst);
                 s.complete(FileOpStatus::Failed);
@@ -1910,9 +2032,9 @@ FileOperationHandle LocalFileSystemBackend::copyFile(const std::string& src, con
             s.wrote = totalCopied;
         } else {
             // Fast copy without progress using std::filesystem
-            std::filesystem::copy_options copyOpts = options.overwriteExisting ?
-                std::filesystem::copy_options::overwrite_existing :
-                std::filesystem::copy_options::none;
+            std::filesystem::copy_options copyOpts = options.overwriteExisting
+                                                         ? std::filesystem::copy_options::overwrite_existing
+                                                         : std::filesystem::copy_options::none;
 
             if (!std::filesystem::copy_file(src, dst, copyOpts, ec)) {
                 s.setError(FileError::IOError, "Copy failed", src, ec);
@@ -1933,7 +2055,8 @@ FileOperationHandle LocalFileSystemBackend::copyFile(const std::string& src, con
     });
 }
 
-FileOperationHandle LocalFileSystemBackend::moveFile(const std::string& src, const std::string& dst, bool overwriteExisting) {
+FileOperationHandle LocalFileSystemBackend::moveFile(const std::string& src, const std::string& dst,
+                                                     bool overwriteExisting) {
     return submitWork(src, [this, src, dst, overwriteExisting](FileOperationHandle::OpState& s, const std::string&) {
         std::error_code ec;
 
@@ -1971,7 +2094,7 @@ FileOperationHandle LocalFileSystemBackend::moveFile(const std::string& src, con
         // Remove destination if overwriting
         if (overwriteExisting && std::filesystem::exists(dst, ec)) {
             std::filesystem::remove(dst, ec);
-            ec.clear(); // Clear error if removal fails - rename/copy will handle it
+            ec.clear();  // Clear error if removal fails - rename/copy will handle it
         }
 
         // Try rename first (atomic if on same filesystem)
@@ -1987,8 +2110,9 @@ FileOperationHandle LocalFileSystemBackend::moveFile(const std::string& src, con
         // Rename failed (likely cross-filesystem) - do copy + delete
         ec.clear();
         if (!std::filesystem::copy_file(src, dst,
-            overwriteExisting ? std::filesystem::copy_options::overwrite_existing :
-                              std::filesystem::copy_options::none, ec)) {
+                                        overwriteExisting ? std::filesystem::copy_options::overwrite_existing
+                                                          : std::filesystem::copy_options::none,
+                                        ec)) {
             s.setError(FileError::IOError, "Copy failed during move", src, ec);
             s.complete(FileOpStatus::Failed);
             return;
@@ -2021,7 +2145,7 @@ BackendCapabilities LocalFileSystemBackend::getCapabilities() const {
     return caps;
 }
 
-} // namespace EntropyEngine::Core::IO
+}  // namespace EntropyEngine::Core::IO
 
 // Backend-aware path normalization for LocalFileSystemBackend
 std::string EntropyEngine::Core::IO::LocalFileSystemBackend::normalizeKey(const std::string& path) const {
@@ -2035,7 +2159,7 @@ std::string EntropyEngine::Core::IO::LocalFileSystemBackend::normalizeKey(const 
     auto canon = std::filesystem::weakly_canonical(p, ec);
     std::string s = (ec ? p.lexically_normal().string() : canon.string());
 #if defined(_WIN32)
-    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 #endif
     return s;
 }
@@ -2053,7 +2177,9 @@ std::string EntropyEngine::Core::IO::LocalFileSystemBackend::normalizeKey(const 
 // 3. Use a lock server/database
 //
 // For now, VFS provides in-process serialization which is sufficient for most use cases.
-EntropyEngine::Core::IO::IFileSystemBackend::AcquireWriteScopeResult EntropyEngine::Core::IO::LocalFileSystemBackend::acquireWriteScope(const std::string& path, EntropyEngine::Core::IO::IFileSystemBackend::AcquireScopeOptions options) {
+EntropyEngine::Core::IO::IFileSystemBackend::AcquireWriteScopeResult
+EntropyEngine::Core::IO::LocalFileSystemBackend::acquireWriteScope(
+    const std::string& path, EntropyEngine::Core::IO::IFileSystemBackend::AcquireScopeOptions options) {
     (void)path;
     (void)options;
 
@@ -2068,6 +2194,7 @@ EntropyEngine::Core::IO::IFileSystemBackend::AcquireWriteScopeResult EntropyEngi
         }
     });
     result.status = AcquireWriteScopeResult::Status::NotSupported;
-    result.message = "flock() disabled - incompatible with atomic file replacement (temp+rename). Using VFS advisory locks.";
+    result.message =
+        "flock() disabled - incompatible with atomic file replacement (temp+rename). Using VFS advisory locks.";
     return result;
 }

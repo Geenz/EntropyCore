@@ -73,10 +73,8 @@ extern "C" {
  * }
  * @endcode
  */
-ENTROPY_API entropy_WorkService entropy_work_service_create(
-    const EntropyWorkServiceConfig* config,
-    EntropyStatus* status
-);
+ENTROPY_API entropy_WorkService entropy_work_service_create(const EntropyWorkServiceConfig* config,
+                                                            EntropyStatus* status);
 
 /**
  * @brief Destroys a work service and cleans up all resources
@@ -95,9 +93,7 @@ ENTROPY_API entropy_WorkService entropy_work_service_create(
  * entropy_work_service_destroy(service);
  * @endcode
  */
-ENTROPY_API void entropy_work_service_destroy(
-    entropy_WorkService service
-);
+ENTROPY_API void entropy_work_service_destroy(entropy_WorkService service);
 
 // ============================================================================
 // Service Control
@@ -123,10 +119,7 @@ ENTROPY_API void entropy_work_service_destroy(
  * }
  * @endcode
  */
-ENTROPY_API void entropy_work_service_start(
-    entropy_WorkService service,
-    EntropyStatus* status
-);
+ENTROPY_API void entropy_work_service_start(entropy_WorkService service, EntropyStatus* status);
 
 /**
  * @brief Signals all worker threads to stop (non-blocking)
@@ -144,10 +137,7 @@ ENTROPY_API void entropy_work_service_start(
  * entropy_work_service_request_stop(service, &status);  // Non-blocking
  * @endcode
  */
-ENTROPY_API void entropy_work_service_request_stop(
-    entropy_WorkService service,
-    EntropyStatus* status
-);
+ENTROPY_API void entropy_work_service_request_stop(entropy_WorkService service, EntropyStatus* status);
 
 /**
  * @brief Waits for all worker threads to finish (blocking)
@@ -167,10 +157,7 @@ ENTROPY_API void entropy_work_service_request_stop(
  * entropy_work_service_wait_for_stop(service, &status);  // Wait for completion
  * @endcode
  */
-ENTROPY_API void entropy_work_service_wait_for_stop(
-    entropy_WorkService service,
-    EntropyStatus* status
-);
+ENTROPY_API void entropy_work_service_wait_for_stop(entropy_WorkService service, EntropyStatus* status);
 
 /**
  * @brief Stops all worker threads and waits for them to finish
@@ -189,10 +176,7 @@ ENTROPY_API void entropy_work_service_wait_for_stop(
  * entropy_work_service_stop(service, &status);  // Stop and wait (blocking)
  * @endcode
  */
-ENTROPY_API void entropy_work_service_stop(
-    entropy_WorkService service,
-    EntropyStatus* status
-);
+ENTROPY_API void entropy_work_service_stop(entropy_WorkService service, EntropyStatus* status);
 
 /**
  * @brief Checks if the service is currently running
@@ -208,9 +192,7 @@ ENTROPY_API void entropy_work_service_stop(
  * }
  * @endcode
  */
-ENTROPY_API EntropyBool entropy_work_service_is_running(
-    entropy_WorkService service
-);
+ENTROPY_API EntropyBool entropy_work_service_is_running(entropy_WorkService service);
 
 // ============================================================================
 // Group Management
@@ -240,11 +222,8 @@ ENTROPY_API EntropyBool entropy_work_service_is_running(
  * }
  * @endcode
  */
-ENTROPY_API void entropy_work_service_add_group(
-    entropy_WorkService service,
-    entropy_WorkContractGroup group,
-    EntropyStatus* status
-);
+ENTROPY_API void entropy_work_service_add_group(entropy_WorkService service, entropy_WorkContractGroup group,
+                                                EntropyStatus* status);
 
 /**
  * @brief Unregisters a work group from the service
@@ -266,11 +245,8 @@ ENTROPY_API void entropy_work_service_add_group(
  * entropy_work_service_remove_group(service, physics_group, &status);
  * @endcode
  */
-ENTROPY_API void entropy_work_service_remove_group(
-    entropy_WorkService service,
-    entropy_WorkContractGroup group,
-    EntropyStatus* status
-);
+ENTROPY_API void entropy_work_service_remove_group(entropy_WorkService service, entropy_WorkContractGroup group,
+                                                   EntropyStatus* status);
 
 /**
  * @brief Removes all registered work groups (only when stopped)
@@ -291,10 +267,7 @@ ENTROPY_API void entropy_work_service_remove_group(
  * // Re-add groups and restart...
  * @endcode
  */
-ENTROPY_API void entropy_work_service_clear(
-    entropy_WorkService service,
-    EntropyStatus* status
-);
+ENTROPY_API void entropy_work_service_clear(entropy_WorkService service, EntropyStatus* status);
 
 // ============================================================================
 // Service Statistics
@@ -315,9 +288,7 @@ ENTROPY_API void entropy_work_service_clear(
  * printf("Managing %zu work groups\n", count);
  * @endcode
  */
-ENTROPY_API size_t entropy_work_service_get_group_count(
-    entropy_WorkService service
-);
+ENTROPY_API size_t entropy_work_service_get_group_count(entropy_WorkService service);
 
 /**
  * @brief Gets the current thread count
@@ -334,9 +305,7 @@ ENTROPY_API size_t entropy_work_service_get_group_count(
  * printf("Running with %zu worker threads\n", threads);
  * @endcode
  */
-ENTROPY_API size_t entropy_work_service_get_thread_count(
-    entropy_WorkService service
-);
+ENTROPY_API size_t entropy_work_service_get_thread_count(entropy_WorkService service);
 
 // ============================================================================
 // Main Thread Work Execution
@@ -376,12 +345,9 @@ ENTROPY_API size_t entropy_work_service_get_thread_count(
  * }
  * @endcode
  */
-ENTROPY_API void entropy_work_service_execute_main_thread_work(
-    entropy_WorkService service,
-    size_t max_contracts,
-    EntropyMainThreadWorkResult* result,
-    EntropyStatus* status
-);
+ENTROPY_API void entropy_work_service_execute_main_thread_work(entropy_WorkService service, size_t max_contracts,
+                                                               EntropyMainThreadWorkResult* result,
+                                                               EntropyStatus* status);
 
 /**
  * @brief Execute main thread work from a specific group
@@ -408,12 +374,10 @@ ENTROPY_API void entropy_work_service_execute_main_thread_work(
  * );
  * @endcode
  */
-ENTROPY_API size_t entropy_work_service_execute_main_thread_work_from_group(
-    entropy_WorkService service,
-    entropy_WorkContractGroup group,
-    size_t max_contracts,
-    EntropyStatus* status
-);
+ENTROPY_API size_t entropy_work_service_execute_main_thread_work_from_group(entropy_WorkService service,
+                                                                            entropy_WorkContractGroup group,
+                                                                            size_t max_contracts,
+                                                                            EntropyStatus* status);
 
 /**
  * @brief Check if any registered group has main thread work available
@@ -436,9 +400,7 @@ ENTROPY_API size_t entropy_work_service_execute_main_thread_work_from_group(
  * }
  * @endcode
  */
-ENTROPY_API EntropyBool entropy_work_service_has_main_thread_work(
-    entropy_WorkService service
-);
+ENTROPY_API EntropyBool entropy_work_service_has_main_thread_work(entropy_WorkService service);
 
 #ifdef __cplusplus
 }

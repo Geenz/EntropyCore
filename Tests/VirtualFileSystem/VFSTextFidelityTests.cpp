@@ -1,13 +1,15 @@
 #include <gtest/gtest.h>
+
 #include <string>
-#include "VirtualFileSystem/VirtualFileSystem.h"
-#include "VirtualFileSystem/FileHandle.h"
-#include "VirtualFileSystem/WriteBatch.h"
+
 #include "VFSTestHelpers.h"
+#include "VirtualFileSystem/FileHandle.h"
+#include "VirtualFileSystem/VirtualFileSystem.h"
+#include "VirtualFileSystem/WriteBatch.h"
 
 using namespace EntropyEngine::Core::IO;
-using entropy::test_helpers::ScopedWorkEnv;
 using entropy::test_helpers::ScopedTempDir;
+using entropy::test_helpers::ScopedWorkEnv;
 
 static std::string readLineText(const FileOperationHandle& h) {
     auto bytes = h.contentsBytes();
@@ -28,9 +30,15 @@ TEST(VFSTextFidelity, AppendAndReadLines_PreservesOrder) {
     ASSERT_EQ(c.status(), FileOpStatus::Complete) << c.errorInfo().message;
 
     auto fh = vfs.createFileHandle(path);
-    auto l0 = fh.readLine(0); l0.wait(); ASSERT_EQ(l0.status(), FileOpStatus::Complete);
-    auto l1 = fh.readLine(1); l1.wait(); ASSERT_EQ(l1.status(), FileOpStatus::Complete);
-    auto l2 = fh.readLine(2); l2.wait(); ASSERT_EQ(l2.status(), FileOpStatus::Complete);
+    auto l0 = fh.readLine(0);
+    l0.wait();
+    ASSERT_EQ(l0.status(), FileOpStatus::Complete);
+    auto l1 = fh.readLine(1);
+    l1.wait();
+    ASSERT_EQ(l1.status(), FileOpStatus::Complete);
+    auto l2 = fh.readLine(2);
+    l2.wait();
+    ASSERT_EQ(l2.status(), FileOpStatus::Complete);
 
     EXPECT_EQ(readLineText(l0), "alpha");
     EXPECT_EQ(readLineText(l1), "beta");
@@ -56,7 +64,8 @@ TEST(VFSTextFidelity, WriteLine_BeyondEOF_ExtendsAndWrites) {
     ASSERT_EQ(wl.status(), FileOpStatus::Complete) << wl.errorInfo().message;
 
     // The written line should be readable exactly
-    auto r = fh.readLine(5); r.wait();
+    auto r = fh.readLine(5);
+    r.wait();
     ASSERT_EQ(r.status(), FileOpStatus::Complete);
     EXPECT_EQ(readLineText(r), std::string("delta"));
 }

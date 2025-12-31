@@ -7,10 +7,11 @@
  * This file is part of the Entropy Core project.
  */
 
-#include "../../include/entropy/entropy_work_contract_handle.h"
-#include "../Concurrency/WorkContractHandle.h"
 #include <new>
 #include <stdexcept>
+
+#include "../../include/entropy/entropy_work_contract_handle.h"
+#include "../Concurrency/WorkContractHandle.h"
 
 using namespace EntropyEngine::Core::Concurrency;
 
@@ -18,14 +19,15 @@ using namespace EntropyEngine::Core::Concurrency;
 // Internal Helpers
 // ============================================================================
 
-namespace {
+namespace
+{
 
 // Centralized exception translation for WorkContractHandle operations
 void translate_exception(EntropyStatus* status) {
     if (!status) return;
 
     try {
-        throw; // Re-throw current exception
+        throw;  // Re-throw current exception
     } catch (const std::bad_alloc&) {
         *status = ENTROPY_ERR_NO_MEMORY;
     } catch (const std::invalid_argument&) {
@@ -33,7 +35,7 @@ void translate_exception(EntropyStatus* status) {
     } catch (const std::exception&) {
         *status = ENTROPY_ERR_UNKNOWN;
     } catch (...) {
-        std::terminate(); // Unknown exception = programming bug
+        std::terminate();  // Unknown exception = programming bug
     }
 }
 
@@ -50,28 +52,40 @@ inline entropy_WorkContractHandle to_c(WorkContractHandle* handle) {
 // Convert C++ ScheduleResult to C enum
 EntropyScheduleResult to_c_schedule_result(ScheduleResult result) {
     switch (result) {
-        case ScheduleResult::Scheduled:        return ENTROPY_SCHEDULE_SCHEDULED;
-        case ScheduleResult::AlreadyScheduled: return ENTROPY_SCHEDULE_ALREADY_SCHEDULED;
-        case ScheduleResult::NotScheduled:     return ENTROPY_SCHEDULE_NOT_SCHEDULED;
-        case ScheduleResult::Executing:        return ENTROPY_SCHEDULE_EXECUTING;
-        case ScheduleResult::Invalid:          return ENTROPY_SCHEDULE_INVALID;
-        default:                               return ENTROPY_SCHEDULE_INVALID;
+        case ScheduleResult::Scheduled:
+            return ENTROPY_SCHEDULE_SCHEDULED;
+        case ScheduleResult::AlreadyScheduled:
+            return ENTROPY_SCHEDULE_ALREADY_SCHEDULED;
+        case ScheduleResult::NotScheduled:
+            return ENTROPY_SCHEDULE_NOT_SCHEDULED;
+        case ScheduleResult::Executing:
+            return ENTROPY_SCHEDULE_EXECUTING;
+        case ScheduleResult::Invalid:
+            return ENTROPY_SCHEDULE_INVALID;
+        default:
+            return ENTROPY_SCHEDULE_INVALID;
     }
 }
 
 // Convert C++ ContractState to C enum
 EntropyContractState to_c_contract_state(ContractState state) {
     switch (state) {
-        case ContractState::Free:      return ENTROPY_CONTRACT_FREE;
-        case ContractState::Allocated: return ENTROPY_CONTRACT_ALLOCATED;
-        case ContractState::Scheduled: return ENTROPY_CONTRACT_SCHEDULED;
-        case ContractState::Executing: return ENTROPY_CONTRACT_EXECUTING;
-        case ContractState::Completed: return ENTROPY_CONTRACT_COMPLETED;
-        default:                       return ENTROPY_CONTRACT_FREE;
+        case ContractState::Free:
+            return ENTROPY_CONTRACT_FREE;
+        case ContractState::Allocated:
+            return ENTROPY_CONTRACT_ALLOCATED;
+        case ContractState::Scheduled:
+            return ENTROPY_CONTRACT_SCHEDULED;
+        case ContractState::Executing:
+            return ENTROPY_CONTRACT_EXECUTING;
+        case ContractState::Completed:
+            return ENTROPY_CONTRACT_COMPLETED;
+        default:
+            return ENTROPY_CONTRACT_FREE;
     }
 }
 
-} // anonymous namespace
+}  // anonymous namespace
 
 // ============================================================================
 // WorkContractHandle C API Implementation
@@ -79,10 +93,7 @@ EntropyContractState to_c_contract_state(ContractState state) {
 
 extern "C" {
 
-EntropyScheduleResult entropy_work_contract_schedule(
-    entropy_WorkContractHandle handle,
-    EntropyStatus* status
-) {
+EntropyScheduleResult entropy_work_contract_schedule(entropy_WorkContractHandle handle, EntropyStatus* status) {
     if (!status) return ENTROPY_SCHEDULE_INVALID;
     *status = ENTROPY_OK;
 
@@ -101,10 +112,7 @@ EntropyScheduleResult entropy_work_contract_schedule(
     }
 }
 
-EntropyScheduleResult entropy_work_contract_unschedule(
-    entropy_WorkContractHandle handle,
-    EntropyStatus* status
-) {
+EntropyScheduleResult entropy_work_contract_unschedule(entropy_WorkContractHandle handle, EntropyStatus* status) {
     if (!status) return ENTROPY_SCHEDULE_INVALID;
     *status = ENTROPY_OK;
 
@@ -123,9 +131,7 @@ EntropyScheduleResult entropy_work_contract_unschedule(
     }
 }
 
-EntropyBool entropy_work_contract_is_valid(
-    entropy_WorkContractHandle handle
-) {
+EntropyBool entropy_work_contract_is_valid(entropy_WorkContractHandle handle) {
     if (!handle) return ENTROPY_FALSE;
 
     try {
@@ -136,9 +142,7 @@ EntropyBool entropy_work_contract_is_valid(
     }
 }
 
-void entropy_work_contract_release(
-    entropy_WorkContractHandle handle
-) {
+void entropy_work_contract_release(entropy_WorkContractHandle handle) {
     if (!handle) return;
 
     try {
@@ -152,9 +156,7 @@ void entropy_work_contract_release(
     }
 }
 
-void entropy_work_contract_handle_destroy(
-    entropy_WorkContractHandle handle
-) {
+void entropy_work_contract_handle_destroy(entropy_WorkContractHandle handle) {
     if (!handle) return;
 
     // Delete the heap-allocated wrapper created by entropy_work_contract_group_create_contract
@@ -162,10 +164,7 @@ void entropy_work_contract_handle_destroy(
     delete cpp_handle;
 }
 
-EntropyBool entropy_work_contract_is_scheduled(
-    entropy_WorkContractHandle handle,
-    EntropyStatus* status
-) {
+EntropyBool entropy_work_contract_is_scheduled(entropy_WorkContractHandle handle, EntropyStatus* status) {
     if (!status) return ENTROPY_FALSE;
     *status = ENTROPY_OK;
 
@@ -183,10 +182,7 @@ EntropyBool entropy_work_contract_is_scheduled(
     }
 }
 
-EntropyBool entropy_work_contract_is_executing(
-    entropy_WorkContractHandle handle,
-    EntropyStatus* status
-) {
+EntropyBool entropy_work_contract_is_executing(entropy_WorkContractHandle handle, EntropyStatus* status) {
     if (!status) return ENTROPY_FALSE;
     *status = ENTROPY_OK;
 
@@ -204,10 +200,7 @@ EntropyBool entropy_work_contract_is_executing(
     }
 }
 
-EntropyContractState entropy_work_contract_get_state(
-    entropy_WorkContractHandle handle,
-    EntropyStatus* status
-) {
+EntropyContractState entropy_work_contract_get_state(entropy_WorkContractHandle handle, EntropyStatus* status) {
     if (!status) return ENTROPY_CONTRACT_FREE;
     *status = ENTROPY_OK;
 
@@ -239,4 +232,4 @@ EntropyContractState entropy_work_contract_get_state(
     }
 }
 
-} // extern "C"
+}  // extern "C"

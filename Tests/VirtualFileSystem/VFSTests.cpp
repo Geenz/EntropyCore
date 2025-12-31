@@ -1,16 +1,18 @@
 #include <gtest/gtest.h>
+
 #include <algorithm>
 #include <string>
+
 #include "EntropyCore.h"
-#include "VirtualFileSystem/VirtualFileSystem.h"
-#include "VirtualFileSystem/FileHandle.h"
-#include "VirtualFileSystem/DirectoryHandle.h"
 #include "VFSTestHelpers.h"
+#include "VirtualFileSystem/DirectoryHandle.h"
+#include "VirtualFileSystem/FileHandle.h"
+#include "VirtualFileSystem/VirtualFileSystem.h"
 
 using namespace EntropyEngine::Core;
 using namespace EntropyEngine::Core::IO;
-using entropy::test_helpers::ScopedWorkEnv;
 using entropy::test_helpers::ScopedTempDir;
+using entropy::test_helpers::ScopedWorkEnv;
 
 TEST(VFS, WriteReadDelete_InTempDir) {
     ScopedWorkEnv env;
@@ -57,6 +59,6 @@ TEST(VFS, ListTempDir_ShowsCreatedFile) {
     ASSERT_EQ(list.status(), FileOpStatus::Complete) << "list failed: " << list.errorInfo().message;
 
     const auto& entries = list.directoryEntries();
-    const bool found = std::any_of(entries.begin(), entries.end(), [](const auto& e){ return e.name == "file.txt"; });
+    const bool found = std::any_of(entries.begin(), entries.end(), [](const auto& e) { return e.name == "file.txt"; });
     EXPECT_TRUE(found) << "Expected to find file.txt in temp dir listing";
 }

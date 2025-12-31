@@ -3,15 +3,16 @@
  * @brief Implementation of VirtualFileSystem C API
  */
 
-#include "entropy/entropy_virtual_file_system.h"
-#include "VirtualFileSystem/VirtualFileSystem.h"
-#include "VirtualFileSystem/FileHandle.h"
-#include "VirtualFileSystem/DirectoryHandle.h"
-#include "VirtualFileSystem/WriteBatch.h"
-#include "Concurrency/WorkContractGroup.h"
+#include <chrono>
 #include <new>
 #include <string>
-#include <chrono>
+
+#include "Concurrency/WorkContractGroup.h"
+#include "VirtualFileSystem/DirectoryHandle.h"
+#include "VirtualFileSystem/FileHandle.h"
+#include "VirtualFileSystem/VirtualFileSystem.h"
+#include "VirtualFileSystem/WriteBatch.h"
+#include "entropy/entropy_virtual_file_system.h"
 
 using namespace EntropyEngine::Core;
 using namespace EntropyEngine::Core::IO;
@@ -58,10 +59,7 @@ static VirtualFileSystem::Config to_cpp_config(const EntropyVFSConfig* c) {
 
 extern "C" {
 
-entropy_VirtualFileSystem entropy_vfs_create(
-    entropy_WorkContractGroup group,
-    EntropyStatus* status
-) {
+entropy_VirtualFileSystem entropy_vfs_create(entropy_WorkContractGroup group, EntropyStatus* status) {
     if (!status) return nullptr;
     if (!group) {
         *status = ENTROPY_ERR_INVALID_ARG;
@@ -70,7 +68,7 @@ entropy_VirtualFileSystem entropy_vfs_create(
 
     try {
         auto* cpp_group = reinterpret_cast<WorkContractGroup*>(group);
-        auto* vfs = new(std::nothrow) VirtualFileSystem(cpp_group);
+        auto* vfs = new (std::nothrow) VirtualFileSystem(cpp_group);
         if (!vfs) {
             *status = ENTROPY_ERR_NO_MEMORY;
             return nullptr;
@@ -83,11 +81,8 @@ entropy_VirtualFileSystem entropy_vfs_create(
     }
 }
 
-entropy_VirtualFileSystem entropy_vfs_create_with_config(
-    entropy_WorkContractGroup group,
-    const EntropyVFSConfig* config,
-    EntropyStatus* status
-) {
+entropy_VirtualFileSystem entropy_vfs_create_with_config(entropy_WorkContractGroup group,
+                                                         const EntropyVFSConfig* config, EntropyStatus* status) {
     if (!status) return nullptr;
     if (!group || !config) {
         *status = ENTROPY_ERR_INVALID_ARG;
@@ -97,7 +92,7 @@ entropy_VirtualFileSystem entropy_vfs_create_with_config(
     try {
         auto* cpp_group = reinterpret_cast<WorkContractGroup*>(group);
         auto cpp_config = to_cpp_config(config);
-        auto* vfs = new(std::nothrow) VirtualFileSystem(cpp_group, cpp_config);
+        auto* vfs = new (std::nothrow) VirtualFileSystem(cpp_group, cpp_config);
         if (!vfs) {
             *status = ENTROPY_ERR_NO_MEMORY;
             return nullptr;
@@ -116,11 +111,8 @@ void entropy_vfs_destroy(entropy_VirtualFileSystem vfs) {
     delete cpp_vfs;
 }
 
-entropy_FileHandle entropy_vfs_create_file_handle(
-    entropy_VirtualFileSystem vfs,
-    const char* path,
-    EntropyStatus* status
-) {
+entropy_FileHandle entropy_vfs_create_file_handle(entropy_VirtualFileSystem vfs, const char* path,
+                                                  EntropyStatus* status) {
     if (!status) return nullptr;
     if (!vfs || !path) {
         *status = ENTROPY_ERR_INVALID_ARG;
@@ -132,7 +124,7 @@ entropy_FileHandle entropy_vfs_create_file_handle(
         auto cpp_handle = cpp_vfs->createFileHandle(path);
 
         // FileHandle is value-semantic, so we need to allocate on heap
-        auto* handle = new(std::nothrow) FileHandle(std::move(cpp_handle));
+        auto* handle = new (std::nothrow) FileHandle(std::move(cpp_handle));
         if (!handle) {
             *status = ENTROPY_ERR_NO_MEMORY;
             return nullptr;
@@ -145,11 +137,8 @@ entropy_FileHandle entropy_vfs_create_file_handle(
     }
 }
 
-entropy_DirectoryHandle entropy_vfs_create_directory_handle(
-    entropy_VirtualFileSystem vfs,
-    const char* path,
-    EntropyStatus* status
-) {
+entropy_DirectoryHandle entropy_vfs_create_directory_handle(entropy_VirtualFileSystem vfs, const char* path,
+                                                            EntropyStatus* status) {
     if (!status) return nullptr;
     if (!vfs || !path) {
         *status = ENTROPY_ERR_INVALID_ARG;
@@ -161,7 +150,7 @@ entropy_DirectoryHandle entropy_vfs_create_directory_handle(
         auto cpp_handle = cpp_vfs->createDirectoryHandle(path);
 
         // DirectoryHandle is value-semantic, so allocate on heap
-        auto* handle = new(std::nothrow) DirectoryHandle(std::move(cpp_handle));
+        auto* handle = new (std::nothrow) DirectoryHandle(std::move(cpp_handle));
         if (!handle) {
             *status = ENTROPY_ERR_NO_MEMORY;
             return nullptr;
@@ -174,11 +163,8 @@ entropy_DirectoryHandle entropy_vfs_create_directory_handle(
     }
 }
 
-entropy_WriteBatch entropy_vfs_create_write_batch(
-    entropy_VirtualFileSystem vfs,
-    const char* path,
-    EntropyStatus* status
-) {
+entropy_WriteBatch entropy_vfs_create_write_batch(entropy_VirtualFileSystem vfs, const char* path,
+                                                  EntropyStatus* status) {
     if (!status) return nullptr;
     if (!vfs || !path) {
         *status = ENTROPY_ERR_INVALID_ARG;
@@ -203,4 +189,4 @@ entropy_WriteBatch entropy_vfs_create_write_batch(
     }
 }
 
-} // extern "C"
+}  // extern "C"

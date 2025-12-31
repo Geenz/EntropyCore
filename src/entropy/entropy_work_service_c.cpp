@@ -7,11 +7,12 @@
  * This file is part of the Entropy Core project.
  */
 
-#include "../../include/entropy/entropy_work_service.h"
-#include "../Concurrency/WorkService.h"
-#include "../Concurrency/WorkContractGroup.h"
-#include <new>
 #include <limits>
+#include <new>
+
+#include "../../include/entropy/entropy_work_service.h"
+#include "../Concurrency/WorkContractGroup.h"
+#include "../Concurrency/WorkService.h"
 
 using namespace EntropyEngine::Core::Concurrency;
 
@@ -19,14 +20,15 @@ using namespace EntropyEngine::Core::Concurrency;
 // Internal Helpers
 // ============================================================================
 
-namespace {
+namespace
+{
 
 // Centralized exception translation
 void translate_exception(EntropyStatus* status) {
     if (!status) return;
 
     try {
-        throw; // Re-throw current exception
+        throw;  // Re-throw current exception
     } catch (const std::bad_alloc&) {
         *status = ENTROPY_ERR_NO_MEMORY;
     } catch (const std::invalid_argument&) {
@@ -34,7 +36,7 @@ void translate_exception(EntropyStatus* status) {
     } catch (const std::exception&) {
         *status = ENTROPY_ERR_UNKNOWN;
     } catch (...) {
-        std::terminate(); // Unknown exception = programming bug
+        std::terminate();  // Unknown exception = programming bug
     }
 }
 
@@ -64,15 +66,14 @@ inline WorkContractGroup* to_cpp_group(entropy_WorkContractGroup group) {
 }
 
 // Convert C++ MainThreadWorkResult to C struct
-void to_c_result(const WorkService::MainThreadWorkResult& cpp_result,
-                 EntropyMainThreadWorkResult* c_result) {
+void to_c_result(const WorkService::MainThreadWorkResult& cpp_result, EntropyMainThreadWorkResult* c_result) {
     if (!c_result) return;
     c_result->contracts_executed = cpp_result.contractsExecuted;
     c_result->groups_with_work = cpp_result.groupsWithWork;
     c_result->more_work_available = cpp_result.moreWorkAvailable ? ENTROPY_TRUE : ENTROPY_FALSE;
 }
 
-} // anonymous namespace
+}  // anonymous namespace
 
 // ============================================================================
 // WorkService C API Implementation
@@ -80,10 +81,7 @@ void to_c_result(const WorkService::MainThreadWorkResult& cpp_result,
 
 extern "C" {
 
-entropy_WorkService entropy_work_service_create(
-    const EntropyWorkServiceConfig* config,
-    EntropyStatus* status
-) {
+entropy_WorkService entropy_work_service_create(const EntropyWorkServiceConfig* config, EntropyStatus* status) {
     if (!status) return nullptr;
     *status = ENTROPY_OK;
 
@@ -94,7 +92,7 @@ entropy_WorkService entropy_work_service_create(
 
     try {
         WorkService::Config cpp_config = to_cpp_config(config);
-        auto* service = new(std::nothrow) WorkService(cpp_config);
+        auto* service = new (std::nothrow) WorkService(cpp_config);
         if (!service) {
             *status = ENTROPY_ERR_NO_MEMORY;
             return nullptr;
@@ -106,9 +104,7 @@ entropy_WorkService entropy_work_service_create(
     }
 }
 
-void entropy_work_service_destroy(
-    entropy_WorkService service
-) {
+void entropy_work_service_destroy(entropy_WorkService service) {
     if (!service) return;
 
     try {
@@ -119,10 +115,7 @@ void entropy_work_service_destroy(
     }
 }
 
-void entropy_work_service_start(
-    entropy_WorkService service,
-    EntropyStatus* status
-) {
+void entropy_work_service_start(entropy_WorkService service, EntropyStatus* status) {
     if (!status) return;
     *status = ENTROPY_OK;
 
@@ -143,10 +136,7 @@ void entropy_work_service_start(
     }
 }
 
-void entropy_work_service_request_stop(
-    entropy_WorkService service,
-    EntropyStatus* status
-) {
+void entropy_work_service_request_stop(entropy_WorkService service, EntropyStatus* status) {
     if (!status) return;
     *status = ENTROPY_OK;
 
@@ -163,10 +153,7 @@ void entropy_work_service_request_stop(
     }
 }
 
-void entropy_work_service_wait_for_stop(
-    entropy_WorkService service,
-    EntropyStatus* status
-) {
+void entropy_work_service_wait_for_stop(entropy_WorkService service, EntropyStatus* status) {
     if (!status) return;
     *status = ENTROPY_OK;
 
@@ -183,10 +170,7 @@ void entropy_work_service_wait_for_stop(
     }
 }
 
-void entropy_work_service_stop(
-    entropy_WorkService service,
-    EntropyStatus* status
-) {
+void entropy_work_service_stop(entropy_WorkService service, EntropyStatus* status) {
     if (!status) return;
     *status = ENTROPY_OK;
 
@@ -203,9 +187,7 @@ void entropy_work_service_stop(
     }
 }
 
-EntropyBool entropy_work_service_is_running(
-    entropy_WorkService service
-) {
+EntropyBool entropy_work_service_is_running(entropy_WorkService service) {
     if (!service) return ENTROPY_FALSE;
 
     try {
@@ -216,11 +198,8 @@ EntropyBool entropy_work_service_is_running(
     }
 }
 
-void entropy_work_service_add_group(
-    entropy_WorkService service,
-    entropy_WorkContractGroup group,
-    EntropyStatus* status
-) {
+void entropy_work_service_add_group(entropy_WorkService service, entropy_WorkContractGroup group,
+                                    EntropyStatus* status) {
     if (!status) return;
     *status = ENTROPY_OK;
 
@@ -253,11 +232,8 @@ void entropy_work_service_add_group(
     }
 }
 
-void entropy_work_service_remove_group(
-    entropy_WorkService service,
-    entropy_WorkContractGroup group,
-    EntropyStatus* status
-) {
+void entropy_work_service_remove_group(entropy_WorkService service, entropy_WorkContractGroup group,
+                                       EntropyStatus* status) {
     if (!status) return;
     *status = ENTROPY_OK;
 
@@ -287,10 +263,7 @@ void entropy_work_service_remove_group(
     }
 }
 
-void entropy_work_service_clear(
-    entropy_WorkService service,
-    EntropyStatus* status
-) {
+void entropy_work_service_clear(entropy_WorkService service, EntropyStatus* status) {
     if (!status) return;
     *status = ENTROPY_OK;
 
@@ -311,9 +284,7 @@ void entropy_work_service_clear(
     }
 }
 
-size_t entropy_work_service_get_group_count(
-    entropy_WorkService service
-) {
+size_t entropy_work_service_get_group_count(entropy_WorkService service) {
     if (!service) return 0;
 
     try {
@@ -324,9 +295,7 @@ size_t entropy_work_service_get_group_count(
     }
 }
 
-size_t entropy_work_service_get_thread_count(
-    entropy_WorkService service
-) {
+size_t entropy_work_service_get_thread_count(entropy_WorkService service) {
     if (!service) return 0;
 
     try {
@@ -337,12 +306,8 @@ size_t entropy_work_service_get_thread_count(
     }
 }
 
-void entropy_work_service_execute_main_thread_work(
-    entropy_WorkService service,
-    size_t max_contracts,
-    EntropyMainThreadWorkResult* result,
-    EntropyStatus* status
-) {
+void entropy_work_service_execute_main_thread_work(entropy_WorkService service, size_t max_contracts,
+                                                   EntropyMainThreadWorkResult* result, EntropyStatus* status) {
     if (!status) return;
     *status = ENTROPY_OK;
 
@@ -364,12 +329,9 @@ void entropy_work_service_execute_main_thread_work(
     }
 }
 
-size_t entropy_work_service_execute_main_thread_work_from_group(
-    entropy_WorkService service,
-    entropy_WorkContractGroup group,
-    size_t max_contracts,
-    EntropyStatus* status
-) {
+size_t entropy_work_service_execute_main_thread_work_from_group(entropy_WorkService service,
+                                                                entropy_WorkContractGroup group, size_t max_contracts,
+                                                                EntropyStatus* status) {
     if (!status) return 0;
     *status = ENTROPY_OK;
 
@@ -389,9 +351,7 @@ size_t entropy_work_service_execute_main_thread_work_from_group(
     }
 }
 
-EntropyBool entropy_work_service_has_main_thread_work(
-    entropy_WorkService service
-) {
+EntropyBool entropy_work_service_has_main_thread_work(entropy_WorkService service) {
     if (!service) return ENTROPY_FALSE;
 
     try {
@@ -402,4 +362,4 @@ EntropyBool entropy_work_service_has_main_thread_work(
     }
 }
 
-} // extern "C"
+}  // extern "C"

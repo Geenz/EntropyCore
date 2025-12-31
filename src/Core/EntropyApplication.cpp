@@ -8,32 +8,36 @@
  */
 
 #include "Core/EntropyApplication.h"
-#include "Concurrency/WorkService.h"
-#include "Core/TimerService.h"
-#include <utility>
-#include <thread>
+
 #include <cstdlib>
 #include <memory>
+#include <thread>
+#include <utility>
+
+#include "Concurrency/WorkService.h"
+#include "Core/TimerService.h"
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #else
-#include <signal.h>
-#include <unistd.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <signal.h>
+#include <unistd.h>
 #endif
 
-namespace EntropyEngine { namespace Core {
-
+namespace EntropyEngine
+{
+namespace Core
+{
 
 EntropyApplication& EntropyApplication::shared() {
     return *sharedPtr();
 }
 
 std::shared_ptr<EntropyApplication> EntropyApplication::sharedPtr() {
-    static std::shared_ptr<EntropyApplication> inst{ std::shared_ptr<EntropyApplication>(new EntropyApplication()) };
+    static std::shared_ptr<EntropyApplication> inst{std::shared_ptr<EntropyApplication>(new EntropyApplication())};
     return inst;
 }
 
@@ -114,7 +118,7 @@ int EntropyApplication::run() {
         HANDLE ctrlH = static_cast<HANDLE>(_ctrlEvent);
         while (!stopToken.stop_requested() && !_terminateRequested.load(std::memory_order_acquire)) {
             if (ctrlH) {
-                DWORD w = WaitForSingleObject(ctrlH, 100); // 100ms timeout for responsiveness
+                DWORD w = WaitForSingleObject(ctrlH, 100);  // 100ms timeout for responsiveness
                 if (w == WAIT_OBJECT_0) {
                     auto type = _lastCtrlType.load(std::memory_order_relaxed);
                     handleConsoleSignal(type);
@@ -130,7 +134,7 @@ int EntropyApplication::run() {
                 struct pollfd pfd;
                 pfd.fd = _signalPipe[0];
                 pfd.events = POLLIN;
-                int ret = poll(&pfd, 1, 100); // 100ms timeout for responsiveness
+                int ret = poll(&pfd, 1, 100);  // 100ms timeout for responsiveness
 
                 if (ret > 0 && (pfd.revents & POLLIN)) {
                     // Signal received - drain pipe and handle
@@ -202,13 +206,14 @@ void EntropyApplication::terminate(int code) {
     _loopCv.notify_all();
 }
 #if defined(_WIN32)
-namespace {
-    // Free function with exact signature expected by SetConsoleCtrlHandler
-    static BOOL WINAPI EntropyConsoleCtrlHandler(DWORD ctrlType) {
-        EntropyEngine::Core::EntropyApplication::shared().notifyConsoleSignalFromHandler(ctrlType);
-        return TRUE;
-    }
+namespace
+{
+// Free function with exact signature expected by SetConsoleCtrlHandler
+static BOOL WINAPI EntropyConsoleCtrlHandler(DWORD ctrlType) {
+    EntropyEngine::Core::EntropyApplication::shared().notifyConsoleSignalFromHandler(ctrlType);
+    return TRUE;
 }
+}  // namespace
 
 void EntropyApplication::installSignalHandlers() {
     if (_handlersInstalled.exchange(true)) return;
@@ -247,7 +252,7 @@ void EntropyApplication::handleConsoleSignal(unsigned long ctrlType) {
         case CTRL_SHUTDOWN_EVENT:
             break;
         default:
-            return; // ignore others
+            return;  // ignore others
     }
 
     bool first = !_signalSeen.exchange(true);
@@ -256,8 +261,10 @@ void EntropyApplication::handleConsoleSignal(unsigned long ctrlType) {
         // Optionally consult delegate; if vetoed, just return on first request
         bool allow = true;
         if (_delegate) {
-            try { allow = _delegate->applicationShouldTerminate(); }
-            catch (...) { /* swallow in signal path */ }
+            try {
+                allow = _delegate->applicationShouldTerminate();
+            } catch (...) { /* swallow in signal path */
+            }
         }
         if (allow) {
             terminate(0);
@@ -266,7 +273,7 @@ void EntropyApplication::handleConsoleSignal(unsigned long ctrlType) {
         if (!_escalationStarted.exchange(true)) {
             auto deadline = _cfg.shutdownDeadline;
             std::weak_ptr<EntropyApplication> weak = EntropyApplication::sharedPtr();
-            std::thread([weak, deadline]{
+            std::thread([weak, deadline] {
                 auto endAt = std::chrono::steady_clock::now() + deadline;
                 std::this_thread::sleep_until(endAt);
                 if (auto sp = weak.lock()) {
@@ -295,12 +302,13 @@ void EntropyApplication::handleConsoleSignal(unsigned long ctrlType) {
 }
 #else
 // Unix/POSIX signal handling
-namespace {
-    // Signal handler - must be async-signal-safe
-    static void EntropySigHandler(int signum) {
-        EntropyEngine::Core::EntropyApplication::shared().notifyPosixSignalFromHandler(signum);
-    }
+namespace
+{
+// Signal handler - must be async-signal-safe
+static void EntropySigHandler(int signum) {
+    EntropyEngine::Core::EntropyApplication::shared().notifyPosixSignalFromHandler(signum);
 }
+}  // namespace
 
 void EntropyApplication::installSignalHandlers() {
     if (_handlersInstalled.exchange(true)) return;
@@ -321,7 +329,7 @@ void EntropyApplication::installSignalHandlers() {
     struct sigaction fatal_sa;
     fatal_sa.sa_handler = EntropySigHandler;
     sigemptyset(&fatal_sa.sa_mask);
-    fatal_sa.sa_flags = SA_RESETHAND; // Reset to default after first signal
+    fatal_sa.sa_flags = SA_RESETHAND;  // Reset to default after first signal
 
     sigaction(SIGABRT, &fatal_sa, nullptr);  // abort
     sigaction(SIGSEGV, &fatal_sa, nullptr);  // segmentation fault
@@ -362,7 +370,7 @@ void EntropyApplication::handlePosixSignal(int signum) {
         case SIGTERM:
         case SIGHUP:
         case SIGQUIT:
-            break; // Graceful termination signals
+            break;  // Graceful termination signals
         case SIGABRT:
         case SIGSEGV:
         case SIGBUS:
@@ -371,7 +379,7 @@ void EntropyApplication::handlePosixSignal(int signum) {
             isFatal = true;
             break;
         default:
-            return; // ignore others
+            return;  // ignore others
     }
 
     bool first = !_signalSeen.exchange(true);
@@ -380,8 +388,10 @@ void EntropyApplication::handlePosixSignal(int signum) {
         // Optionally consult delegate; if vetoed, just return on first request
         bool allow = true;
         if (_delegate && !isFatal) {
-            try { allow = _delegate->applicationShouldTerminate(); }
-            catch (...) { /* swallow in signal path */ }
+            try {
+                allow = _delegate->applicationShouldTerminate();
+            } catch (...) { /* swallow in signal path */
+            }
         }
 
         if (allow || isFatal) {
@@ -392,7 +402,7 @@ void EntropyApplication::handlePosixSignal(int signum) {
         if (!_escalationStarted.exchange(true) && !isFatal) {
             auto deadline = _cfg.shutdownDeadline;
             std::weak_ptr<EntropyApplication> weak = EntropyApplication::sharedPtr();
-            std::thread([weak, deadline]{
+            std::thread([weak, deadline] {
                 auto endAt = std::chrono::steady_clock::now() + deadline;
                 std::this_thread::sleep_until(endAt);
                 if (auto sp = weak.lock()) {
@@ -420,5 +430,5 @@ void EntropyApplication::handlePosixSignal(int signum) {
 }
 #endif
 
-
-}} // namespace EntropyEngine::Core
+}  // namespace Core
+}  // namespace EntropyEngine

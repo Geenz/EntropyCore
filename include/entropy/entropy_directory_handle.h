@@ -9,8 +9,8 @@
  * wait() on the returned FileOperationHandle to block until completion.
  */
 
-#include "entropy/entropy_vfs_types.h"
 #include "entropy/entropy_file_operation_handle.h"
+#include "entropy/entropy_vfs_types.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -32,10 +32,8 @@ extern "C" {
  * @threadsafety Thread-safe
  * @ownership Returns owned pointer - must call entropy_directory_handle_destroy()
  */
-ENTROPY_API entropy_DirectoryHandle entropy_directory_handle_clone(
-    entropy_DirectoryHandle handle,
-    EntropyStatus* status
-);
+ENTROPY_API entropy_DirectoryHandle entropy_directory_handle_clone(entropy_DirectoryHandle handle,
+                                                                   EntropyStatus* status);
 
 /**
  * @brief Destroy a directory handle
@@ -75,11 +73,9 @@ ENTROPY_API void entropy_directory_handle_destroy(entropy_DirectoryHandle handle
  * entropy_file_operation_handle_destroy(op);
  * @endcode
  */
-ENTROPY_API entropy_FileOperationHandle entropy_directory_handle_create(
-    entropy_DirectoryHandle handle,
-    EntropyBool create_parents,
-    EntropyStatus* status
-);
+ENTROPY_API entropy_FileOperationHandle entropy_directory_handle_create(entropy_DirectoryHandle handle,
+                                                                        EntropyBool create_parents,
+                                                                        EntropyStatus* status);
 
 /**
  * @brief Remove the directory at this path
@@ -95,11 +91,8 @@ ENTROPY_API entropy_FileOperationHandle entropy_directory_handle_create(
  * @threadsafety Thread-safe
  * @ownership Returns owned pointer - must call entropy_file_operation_handle_destroy()
  */
-ENTROPY_API entropy_FileOperationHandle entropy_directory_handle_remove(
-    entropy_DirectoryHandle handle,
-    EntropyBool recursive,
-    EntropyStatus* status
-);
+ENTROPY_API entropy_FileOperationHandle entropy_directory_handle_remove(entropy_DirectoryHandle handle,
+                                                                        EntropyBool recursive, EntropyStatus* status);
 
 /**
  * @brief List the contents of this directory
@@ -131,11 +124,9 @@ ENTROPY_API entropy_FileOperationHandle entropy_directory_handle_remove(
  * entropy_file_operation_handle_destroy(op);
  * @endcode
  */
-ENTROPY_API entropy_FileOperationHandle entropy_directory_handle_list(
-    entropy_DirectoryHandle handle,
-    const EntropyListDirectoryOptions* options,
-    EntropyStatus* status
-);
+ENTROPY_API entropy_FileOperationHandle entropy_directory_handle_list(entropy_DirectoryHandle handle,
+                                                                      const EntropyListDirectoryOptions* options,
+                                                                      EntropyStatus* status);
 
 /**
  * @brief Retrieve metadata for this directory
@@ -149,10 +140,8 @@ ENTROPY_API entropy_FileOperationHandle entropy_directory_handle_list(
  * @threadsafety Thread-safe
  * @ownership Returns owned pointer - must call entropy_file_operation_handle_destroy()
  */
-ENTROPY_API entropy_FileOperationHandle entropy_directory_handle_get_metadata(
-    entropy_DirectoryHandle handle,
-    EntropyStatus* status
-);
+ENTROPY_API entropy_FileOperationHandle entropy_directory_handle_get_metadata(entropy_DirectoryHandle handle,
+                                                                              EntropyStatus* status);
 
 /* ============================================================================
  * Metadata Access
@@ -170,11 +159,8 @@ ENTROPY_API entropy_FileOperationHandle entropy_directory_handle_get_metadata(
  * @threadsafety Thread-safe
  * @ownership Returns borrowed pointer - do NOT free
  */
-ENTROPY_API const char* entropy_directory_handle_normalized_key(
-    entropy_DirectoryHandle handle,
-    EntropyStatus* status
-);
+ENTROPY_API const char* entropy_directory_handle_normalized_key(entropy_DirectoryHandle handle, EntropyStatus* status);
 
 #ifdef __cplusplus
-} // extern "C"
+}  // extern "C"
 #endif

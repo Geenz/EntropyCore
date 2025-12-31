@@ -1,14 +1,16 @@
-#include <Core/EntropyApplication.h>
-#include <Concurrency/WorkService.h>
 #include <Concurrency/WorkContractGroup.h>
+#include <Concurrency/WorkService.h>
+#include <Core/EntropyApplication.h>
 #include <Logging/Logger.h>
-#include <thread>
+
 #include <chrono>
+#include <thread>
 
 using namespace EntropyEngine::Core;
 using namespace EntropyEngine::Core::Concurrency;
 
-class MyDelegate : public EntropyAppDelegate {
+class MyDelegate : public EntropyAppDelegate
+{
     std::shared_ptr<WorkService> work_;
     std::unique_ptr<WorkContractGroup> group_;
     std::atomic<int> remaining_{0};
@@ -32,8 +34,7 @@ public:
         // Create a work group and register it with the work service
         group_ = std::make_unique<WorkContractGroup>(64, "ExampleGroup");
         auto status = work_->addWorkContractGroup(group_.get());
-        if (status != WorkService::GroupOperationStatus::Added &&
-            status != WorkService::GroupOperationStatus::Exists) {
+        if (status != WorkService::GroupOperationStatus::Added && status != WorkService::GroupOperationStatus::Exists) {
             ENTROPY_LOG_ERROR("[EntropyCppAppExample] Failed to register WorkContractGroup");
             EntropyApplication::shared().terminate(1);
             return;
@@ -50,7 +51,7 @@ public:
                 // If this was the last contract to finish, request app termination
                 if (--remaining_ == 0) {
                     ENTROPY_LOG_INFO("[EntropyCppAppExample] All work completed; requesting terminate");
-                    //EntropyApplication::shared().terminate(0);
+                    // EntropyApplication::shared().terminate(0);
                 }
             });
             if (handle.valid()) {
@@ -92,7 +93,7 @@ int main() {
     auto& app = EntropyApplication::shared();
 
     EntropyApplicationConfig cfg;
-    cfg.workerThreads = 0; // auto
+    cfg.workerThreads = 0;  // auto
     cfg.shutdownDeadline = std::chrono::milliseconds(3000);
 
     app.configure(cfg);

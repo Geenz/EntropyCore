@@ -1,17 +1,19 @@
 #pragma once
-#include <filesystem>
-#include <string>
-#include <random>
 #include <chrono>
+#include <filesystem>
+#include <random>
 #include <sstream>
+#include <string>
 
 #include "EntropyCore.h"
 #include "VirtualFileSystem/VirtualFileSystem.h"
 
-namespace entropy::test_helpers {
+namespace entropy::test_helpers
+{
 
 // RAII temporary directory that gets cleaned up on destruction
-class ScopedTempDir {
+class ScopedTempDir
+{
 public:
     ScopedTempDir() {
         namespace fs = std::filesystem;
@@ -31,23 +33,28 @@ public:
     ~ScopedTempDir() {
         namespace fs = std::filesystem;
         std::error_code ec;
-        fs::remove_all(_path, ec); // best-effort cleanup
+        fs::remove_all(_path, ec);  // best-effort cleanup
     }
 
-    const std::filesystem::path& path() const noexcept { return _path; }
-    std::filesystem::path join(const std::string& name) const { return _path / name; }
+    const std::filesystem::path& path() const noexcept {
+        return _path;
+    }
+    std::filesystem::path join(const std::string& name) const {
+        return _path / name;
+    }
 
 private:
     std::filesystem::path _path;
 };
 
 // RAII environment with a running WorkService, a WorkContractGroup and a VFS instance
-class ScopedWorkEnv {
+class ScopedWorkEnv
+{
 public:
     ScopedWorkEnv()
-        : _service(EntropyEngine::Core::Concurrency::WorkService::Config{})
-        , _group(2048, "TestVFSGroup")
-        , _vfs(&_group, EntropyEngine::Core::IO::VirtualFileSystem::Config{}) {
+        : _service(EntropyEngine::Core::Concurrency::WorkService::Config{}),
+          _group(2048, "TestVFSGroup"),
+          _vfs(&_group, EntropyEngine::Core::IO::VirtualFileSystem::Config{}) {
         _service.start();
         _service.addWorkContractGroup(&_group);
     }
@@ -58,8 +65,12 @@ public:
         _service.stop();
     }
 
-    EntropyEngine::Core::IO::VirtualFileSystem& vfs() noexcept { return _vfs; }
-    EntropyEngine::Core::Concurrency::WorkContractGroup& group() noexcept { return _group; }
+    EntropyEngine::Core::IO::VirtualFileSystem& vfs() noexcept {
+        return _vfs;
+    }
+    EntropyEngine::Core::Concurrency::WorkContractGroup& group() noexcept {
+        return _group;
+    }
 
 private:
     EntropyEngine::Core::Concurrency::WorkService _service;
@@ -67,4 +78,4 @@ private:
     EntropyEngine::Core::IO::VirtualFileSystem _vfs;
 };
 
-} // namespace entropy::test_helpers
+}  // namespace entropy::test_helpers

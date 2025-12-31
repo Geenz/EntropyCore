@@ -1,17 +1,20 @@
 #pragma once
-#include "RefObject.h"
 #include <memory>
 
-namespace EntropyEngine::Core {
+#include "RefObject.h"
 
-template<typename T>
-struct EntropyDeleter {
+namespace EntropyEngine::Core
+{
+
+template <typename T>
+struct EntropyDeleter
+{
     void operator()(T* ptr) const noexcept {
         if (ptr) ptr->release();
     }
 };
 
-template<typename T>
+template <typename T>
 std::shared_ptr<T> toSharedPtr(const RefObject<T>& ref) {
     T* ptr = ref.get();
     if (ptr) {
@@ -21,7 +24,7 @@ std::shared_ptr<T> toSharedPtr(const RefObject<T>& ref) {
     return nullptr;
 }
 
-template<typename T>
+template <typename T>
 std::shared_ptr<T> wrapInSharedPtr(T* ptr) {
     if (ptr) {
         ptr->retain();
@@ -30,4 +33,4 @@ std::shared_ptr<T> wrapInSharedPtr(T* ptr) {
     return nullptr;
 }
 
-} // namespace EntropyEngine::Core
+}  // namespace EntropyEngine::Core

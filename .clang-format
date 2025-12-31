@@ -1,0 +1,33 @@
+---
+BasedOnStyle: Google
+IndentWidth: 4
+ColumnLimit: 120
+AccessModifierOffset: -4
+InsertNewlineAtEOF: true
+
+
+# Brace breaking: Stroustrup style (functions same line, control same, else cuddled)
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterCaseLabel: true
+  AfterClass: true
+  AfterControlStatement: false # "cuddled" } else {
+  AfterEnum: true
+  AfterFunction: false # Same line
+  AfterNamespace: true
+  AfterObjCDeclaration: true
+  AfterStruct: true
+  AfterUnion: true
+  AfterExternBlock: false
+  BeforeCatch: false
+  BeforeElse: false # Cuddled
+  IndentBraces: false
+  SplitEmptyFunction: true
+  SplitEmptyRecord: true
+  SplitEmptyNamespace: true
+
+AllowShortFunctionsOnASingleLine: Empty
+KeepEmptyLinesAtTheStartOfBlocks: false
+
+# Naming? Clang-format doesn't enforce naming, clang-tidy does.
+# This config handles layout.

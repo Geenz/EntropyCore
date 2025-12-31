@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
+
 #include <atomic>
+
 #include "Concurrency/WorkContractGroup.h"
 
 using namespace EntropyEngine::Core::Concurrency;

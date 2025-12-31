@@ -2,16 +2,17 @@
  * C API bridge for EntropyCore
  */
 
-#include "entropy_c_api.h"
-#include "EntropyObject.h"
-#include "EntropyClass.h"
-#include "../Logging/Logger.h"
+#include <cstring>
+#include <mutex>
 #include <new>
 #include <string>
-#include <cstring>
 #include <unordered_map>
-#include <mutex>
 #include <vector>
+
+#include "../Logging/Logger.h"
+#include "EntropyClass.h"
+#include "EntropyObject.h"
+#include "entropy_c_api.h"
 
 using namespace EntropyEngine::Core;
 
@@ -21,7 +22,7 @@ ENTROPY_API void entropy_get_version(uint32_t* major, uint32_t* minor, uint32_t*
     if (major) *major = 1;
     if (minor) *minor = 0;
     if (patch) *patch = 0;
-    if (abi)   *abi   = 0; // versioning not a concern right now
+    if (abi) *abi = 0;  // versioning not a concern right now
 }
 
 ENTROPY_API void* entropy_alloc(size_t size) {
@@ -34,15 +35,24 @@ ENTROPY_API void entropy_free(void* p) {
 
 ENTROPY_API const char* entropy_status_to_string(EntropyStatus s) {
     switch (s) {
-        case ENTROPY_OK: return "ENTROPY_OK";
-        case ENTROPY_ERR_UNKNOWN: return "ENTROPY_ERR_UNKNOWN";
-        case ENTROPY_ERR_INVALID_ARG: return "ENTROPY_ERR_INVALID_ARG";
-        case ENTROPY_ERR_NOT_FOUND: return "ENTROPY_ERR_NOT_FOUND";
-        case ENTROPY_ERR_TYPE_MISMATCH: return "ENTROPY_ERR_TYPE_MISMATCH";
-        case ENTROPY_ERR_BUFFER_TOO_SMALL: return "ENTROPY_ERR_BUFFER_TOO_SMALL";
-        case ENTROPY_ERR_NO_MEMORY: return "ENTROPY_ERR_NO_MEMORY";
-        case ENTROPY_ERR_UNAVAILABLE: return "ENTROPY_ERR_UNAVAILABLE";
-        default: return "ENTROPY_STATUS_UNKNOWN";
+        case ENTROPY_OK:
+            return "ENTROPY_OK";
+        case ENTROPY_ERR_UNKNOWN:
+            return "ENTROPY_ERR_UNKNOWN";
+        case ENTROPY_ERR_INVALID_ARG:
+            return "ENTROPY_ERR_INVALID_ARG";
+        case ENTROPY_ERR_NOT_FOUND:
+            return "ENTROPY_ERR_NOT_FOUND";
+        case ENTROPY_ERR_TYPE_MISMATCH:
+            return "ENTROPY_ERR_TYPE_MISMATCH";
+        case ENTROPY_ERR_BUFFER_TOO_SMALL:
+            return "ENTROPY_ERR_BUFFER_TOO_SMALL";
+        case ENTROPY_ERR_NO_MEMORY:
+            return "ENTROPY_ERR_NO_MEMORY";
+        case ENTROPY_ERR_UNAVAILABLE:
+            return "ENTROPY_ERR_UNAVAILABLE";
+        default:
+            return "ENTROPY_STATUS_UNKNOWN";
     }
 }
 
@@ -132,11 +142,13 @@ ENTROPY_API EntropyStatus entropy_object_description(const EntropyObjectRef* obj
 }
 
 ENTROPY_API EntropyBool entropy_handle_is_valid(EntropyHandle h) {
-    return h.owner != nullptr ? ENTROPY_TRUE : ENTROPY_FALSE; // quick check only
+    return h.owner != nullptr ? ENTROPY_TRUE : ENTROPY_FALSE;  // quick check only
 }
 
 ENTROPY_API EntropyBool entropy_handle_equals(EntropyHandle a, EntropyHandle b) {
-    return ((a.owner == b.owner) && (a.index == b.index) && (a.generation == b.generation) && (a.type_id == b.type_id)) ? ENTROPY_TRUE : ENTROPY_FALSE;
+    return ((a.owner == b.owner) && (a.index == b.index) && (a.generation == b.generation) && (a.type_id == b.type_id))
+               ? ENTROPY_TRUE
+               : ENTROPY_FALSE;
 }
 
 ENTROPY_API EntropyBool entropy_handle_type_matches(EntropyHandle h, EntropyTypeId expected) {
@@ -172,14 +184,13 @@ ENTROPY_API EntropyStatus entropy_handle_release(EntropyHandle h) {
     EntropyObjectRef* obj = entropy_resolve_handle(h);
     if (!obj) return ENTROPY_ERR_NOT_FOUND;
     // Drop the resolved ref and one more to achieve net -1
-    entropy_object_release(obj); // back to 0 net
-    entropy_object_release(obj); // net -1
+    entropy_object_release(obj);  // back to 0 net
+    entropy_object_release(obj);  // net -1
     return ENTROPY_OK;
 }
 
-ENTROPY_API EntropyStatus entropy_handle_info(EntropyHandle h,
-                                             EntropyTypeId* out_type_id,
-                                             EntropyOwnedString* out_class_name) {
+ENTROPY_API EntropyStatus entropy_handle_info(EntropyHandle h, EntropyTypeId* out_type_id,
+                                              EntropyOwnedString* out_class_name) {
     if (!h.owner) return ENTROPY_ERR_INVALID_ARG;
     EntropyObjectRef* obj = entropy_resolve_handle(h);
     if (!obj) return ENTROPY_ERR_NOT_FOUND;
@@ -193,13 +204,18 @@ ENTROPY_API EntropyStatus entropy_handle_info(EntropyHandle h,
 }
 
 // Owner vtable registry -------------------------------------------------------
-struct OwnerVTable { EntropyResolveFn resolve; EntropyValidateFn validate; };
+struct OwnerVTable
+{
+    EntropyResolveFn resolve;
+    EntropyValidateFn validate;
+};
 static std::unordered_map<const void*, OwnerVTable> g_ownerVTables;
 static std::mutex g_ownerVTablesMutex;
 
-ENTROPY_API void entropy_register_owner_vtable(const void* owner, EntropyResolveFn resolve, EntropyValidateFn validate) {
+ENTROPY_API void entropy_register_owner_vtable(const void* owner, EntropyResolveFn resolve,
+                                               EntropyValidateFn validate) {
     std::lock_guard<std::mutex> lock(g_ownerVTablesMutex);
-    g_ownerVTables[owner] = OwnerVTable{ resolve, validate };
+    g_ownerVTables[owner] = OwnerVTable{resolve, validate};
 }
 
 ENTROPY_API EntropyObjectRef* entropy_resolve_handle(EntropyHandle h) {
@@ -213,7 +229,6 @@ ENTROPY_API EntropyObjectRef* entropy_resolve_handle(EntropyHandle h) {
     return fn(h.owner, h.index, h.generation);
 }
 
-
 // (No demo functionality is provided in the C API implementation. The API is production-only.)
 
-} // extern "C"
+}  // extern "C"

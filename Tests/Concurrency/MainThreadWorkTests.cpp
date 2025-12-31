@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
+
 #include <atomic>
+
 #include "Concurrency/WorkContractGroup.h"
 #include "Concurrency/WorkGraphTypes.h"
 
@@ -12,7 +14,8 @@ TEST(MainThreadWork, ScheduleAndDrain_MainThreadTasks) {
     const int N = 7;
 
     for (int i = 0; i < N; ++i) {
-        auto h = group.createContract([&ran]() noexcept { ran.fetch_add(1, std::memory_order_relaxed); }, ExecutionType::MainThread);
+        auto h = group.createContract([&ran]() noexcept { ran.fetch_add(1, std::memory_order_relaxed); },
+                                      ExecutionType::MainThread);
         auto res = h.schedule();
         ASSERT_TRUE(res == ScheduleResult::Scheduled || res == ScheduleResult::AlreadyScheduled);
     }

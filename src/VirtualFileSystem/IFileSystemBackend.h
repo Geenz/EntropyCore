@@ -1,37 +1,44 @@
 /**
  * @file IFileSystemBackend.h
  * @brief Backend interface for VirtualFileSystem
- * 
+ *
  * Implementations provide concrete file operations (local filesystem, remote stores, etc.).
  * VFS routes operations to a backend selected by path mounting. Backends may override
  * normalizeKey() to define identity/locking keys and can ignore options they do not support.
  */
 #pragma once
-#include <string>
-#include <memory>
-#include <span>
-#include <optional>
-#include <functional>
 #include <chrono>
-#include <vector>
+#include <functional>
+#include <memory>
+#include <optional>
+#include <span>
+#include <string>
 #include <system_error>
+#include <vector>
+
 #include "FileOperationHandle.h"
 
-namespace EntropyEngine::Core::IO {
+namespace EntropyEngine::Core::IO
+{
 
 // Forward declarations
 class FileStream;
 class VirtualFileSystem;
+}  // namespace EntropyEngine::Core::IO
+
+namespace EntropyEngine::Core::Concurrency
+{
+class WorkContractGroup;
 }
 
-namespace EntropyEngine::Core::Concurrency { class WorkContractGroup; }
-
-namespace EntropyEngine::Core::IO {
+namespace EntropyEngine::Core::IO
+{
 
 // Explicit execution context passed through VFS submit paths and backend hooks
 // Backends should execute inline when ctx.group equals the owning VFS WorkContractGroup
 // to avoid same-group nested scheduling; otherwise they may schedule via the VFS group.
-struct ExecContext {
+struct ExecContext
+{
     EntropyEngine::Core::Concurrency::WorkContractGroup* group = nullptr;
 };
 
@@ -42,7 +49,8 @@ struct ExecContext {
  * @param length Optional max bytes to read (reads to EOF if not set)
  * @param binary Open in binary mode (platform newline translation off)
  */
-struct ReadOptions {
+struct ReadOptions
+{
     uint64_t offset = 0;
     std::optional<size_t> length;
     bool binary = true;
@@ -57,19 +65,20 @@ struct ReadOptions {
  * @param createParentDirs Per-op override to create parent directories
  * @param ensureFinalNewline Force presence/absence of final newline for whole-file rewrites
  */
-struct WriteOptions {
+struct WriteOptions
+{
     uint64_t offset = 0;
     bool append = false;
     bool createIfMissing = true;
     bool truncate = false;
-    std::optional<bool> createParentDirs;     // per-operation override; nullopt => use VFS default
-    std::optional<bool> ensureFinalNewline;   // for whole-file rewrites; nullopt => preserve prior
-    bool fsync = false;                       // Force data to disk (durability guarantee, Unix/POSIX only)
+    std::optional<bool> createParentDirs;    // per-operation override; nullopt => use VFS default
+    std::optional<bool> ensureFinalNewline;  // for whole-file rewrites; nullopt => preserve prior
+    bool fsync = false;                      // Force data to disk (durability guarantee, Unix/POSIX only)
 
     // Optional cross-process serialization via sibling lock file (compatible with atomic replace)
-    std::optional<bool> useLockFile;          // If true, acquire <path> + lockSuffix as exclusive lock
-    std::optional<std::chrono::milliseconds> lockTimeout; // Timeout for acquiring lock (overrides VFS default)
-    std::optional<std::string> lockSuffix;    // Suffix for lock file (default from VFS config)
+    std::optional<bool> useLockFile;                       // If true, acquire <path> + lockSuffix as exclusive lock
+    std::optional<std::chrono::milliseconds> lockTimeout;  // Timeout for acquiring lock (overrides VFS default)
+    std::optional<std::string> lockSuffix;                 // Suffix for lock file (default from VFS config)
 };
 
 /**
@@ -78,8 +87,14 @@ struct WriteOptions {
  * @param buffered If true, backend may buffer; BufferedFileStream provides explicit buffering
  * @param bufferSize Suggested buffer size when applicable
  */
-struct StreamOptions {
-    enum Mode { Read, Write, ReadWrite };
+struct StreamOptions
+{
+    enum Mode
+    {
+        Read,
+        Write,
+        ReadWrite
+    };
     Mode mode = Read;
     bool buffered = true;
     size_t bufferSize = 65536;  // 64KB default (Phase 2 optimization)
@@ -90,7 +105,8 @@ struct StreamOptions {
  * @brief Capabilities advertised by a backend
  * @note VFS may adjust behavior based on these (e.g., advisory locking, atomic writes)
  */
-struct BackendCapabilities {
+struct BackendCapabilities
+{
     bool supportsStreaming = true;
     bool supportsRandomAccess = true;
     bool supportsDirectories = true;
@@ -115,17 +131,24 @@ struct BackendCapabilities {
  * @param sortBy Sort order for results (none, name, size, modified)
  * @param maxResults Maximum number of results (for pagination; 0 = unlimited)
  */
-struct ListDirectoryOptions {
-    enum SortOrder { None, ByName, BySize, ByModifiedTime };
+struct ListDirectoryOptions
+{
+    enum SortOrder
+    {
+        None,
+        ByName,
+        BySize,
+        ByModifiedTime
+    };
 
     bool recursive = false;
     bool followSymlinks = true;
     size_t maxDepth = SIZE_MAX;
-    std::optional<std::string> globPattern;  // Simple glob matching (*.txt, file?.dat, etc)
+    std::optional<std::string> globPattern;             // Simple glob matching (*.txt, file?.dat, etc)
     std::function<bool(const DirectoryEntry&)> filter;  // Optional filter callback
-    bool includeHidden = false;  // Show hidden files/directories
-    SortOrder sortBy = None;     // Sort order for results
-    size_t maxResults = 0;       // Max results for pagination (0 = unlimited)
+    bool includeHidden = false;                         // Show hidden files/directories
+    SortOrder sortBy = None;                            // Sort order for results
+    size_t maxResults = 0;                              // Max results for pagination (0 = unlimited)
 };
 
 // Options for batch metadata queries
@@ -135,7 +158,8 @@ struct ListDirectoryOptions {
  * @param includeExtendedAttributes Include extended attributes if supported
  * @param cacheTTL Optional cache TTL (0 = no caching)
  */
-struct BatchMetadataOptions {
+struct BatchMetadataOptions
+{
     std::vector<std::string> paths;
     bool includeExtendedAttributes = false;
     std::chrono::seconds cacheTTL = std::chrono::seconds(0);  // 0 = no caching
@@ -149,10 +173,11 @@ struct BatchMetadataOptions {
  * @param useReflink Use copy-on-write cloning if available
  * @param progressCallback Optional progress callback; return false to cancel
  */
-struct CopyOptions {
+struct CopyOptions
+{
     bool overwriteExisting = false;
     bool preserveAttributes = true;
-    bool useReflink = true;  // Use copy-on-write if available (Linux, APFS)
+    bool useReflink = true;                                             // Use copy-on-write if available (Linux, APFS)
     std::function<bool(size_t copied, size_t total)> progressCallback;  // Return false to cancel
 };
 
@@ -162,16 +187,18 @@ struct CopyOptions {
  * @param chunkSize Preferred chunk size in bytes
  * @param progressCallback Optional progress callback; return false to cancel
  */
-struct ProgressOptions {
-    size_t chunkSize = 1024 * 1024;  // 1MB default
+struct ProgressOptions
+{
+    size_t chunkSize = 1024 * 1024;                                        // 1MB default
     std::function<bool(size_t processed, size_t total)> progressCallback;  // Return false to cancel
 };
 
 // Backend interface
-class IFileSystemBackend {
+class IFileSystemBackend
+{
 public:
     virtual ~IFileSystemBackend() = default;
-    
+
     // Core file operations
     /**
      * @brief Reads file contents
@@ -197,7 +224,8 @@ public:
      * @note Special files (FIFO, device, socket) are rejected with FileError::InvalidPath on Unix.
      * @note Set options.fsync=true for durability guarantee (Unix/POSIX only; forces data to disk).
      */
-    virtual FileOperationHandle writeFile(const std::string& path, std::span<const uint8_t> data, WriteOptions options = {}) = 0;
+    virtual FileOperationHandle writeFile(const std::string& path, std::span<const uint8_t> data,
+                                          WriteOptions options = {}) = 0;
     /**
      * @brief Deletes a file
      * @param path Target path
@@ -212,7 +240,7 @@ public:
      * @return Handle representing the create operation
      */
     virtual FileOperationHandle createFile(const std::string& path) = 0;
-    
+
     // Metadata operations
     /**
      * @brief Retrieves metadata for a file
@@ -230,9 +258,9 @@ public:
     // Batch metadata query (Phase 2)
     virtual FileOperationHandle getMetadataBatch(const BatchMetadataOptions& options) {
         (void)options;
-        return FileOperationHandle{}; // Default: not supported
+        return FileOperationHandle{};  // Default: not supported
     }
-    
+
     // Directory operations (optional)
     /**
      * @brief Creates a directory at the given path
@@ -251,8 +279,8 @@ public:
      * @return A FileOperationHandle; status() will be Pending for default impl
      */
     virtual FileOperationHandle createDirectory(const std::string& path) {
-        (void)path; // Suppress unused warning
-        return FileOperationHandle{}; // Default: not supported
+        (void)path;                    // Suppress unused warning
+        return FileOperationHandle{};  // Default: not supported
     }
     /**
      * @brief Removes a directory at the given path
@@ -272,8 +300,8 @@ public:
      * @return A FileOperationHandle; status() will be Pending for default impl
      */
     virtual FileOperationHandle removeDirectory(const std::string& path) {
-        (void)path; // Suppress unused warning
-        return FileOperationHandle{}; // Default: not supported
+        (void)path;                    // Suppress unused warning
+        return FileOperationHandle{};  // Default: not supported
     }
     /**
      * @brief Lists entries in the given directory
@@ -294,10 +322,11 @@ public:
      * @return A FileOperationHandle; status() will be Pending for default impl
      */
     virtual FileOperationHandle listDirectory(const std::string& path, ListDirectoryOptions options = {}) {
-        (void)path; (void)options;  // Suppress unused warnings
-        return FileOperationHandle{}; // Default: not supported
+        (void)path;
+        (void)options;                 // Suppress unused warnings
+        return FileOperationHandle{};  // Default: not supported
     }
-    
+
     // Stream support
     /**
      * @brief Opens a stream for the given path
@@ -306,7 +335,7 @@ public:
      * @return Unique pointer to FileStream, or null on failure
      */
     virtual std::unique_ptr<FileStream> openStream(const std::string& path, StreamOptions options = {}) = 0;
-    
+
     // Line operations
     /**
      * @brief Reads a single line by index (0-based)
@@ -325,16 +354,22 @@ public:
     virtual FileOperationHandle writeLine(const std::string& path, size_t lineNumber, std::string_view line) = 0;
 
     // Copy/Move operations (Phase 2)
-    virtual FileOperationHandle copyFile(const std::string& src, const std::string& dst, const CopyOptions& options = {}) {
-        (void)src; (void)dst; (void)options;
-        return FileOperationHandle{}; // Default: not supported
+    virtual FileOperationHandle copyFile(const std::string& src, const std::string& dst,
+                                         const CopyOptions& options = {}) {
+        (void)src;
+        (void)dst;
+        (void)options;
+        return FileOperationHandle{};  // Default: not supported
     }
 
-    virtual FileOperationHandle moveFile(const std::string& src, const std::string& dst, bool overwriteExisting = false) {
-        (void)src; (void)dst; (void)overwriteExisting;
-        return FileOperationHandle{}; // Default: not supported
+    virtual FileOperationHandle moveFile(const std::string& src, const std::string& dst,
+                                         bool overwriteExisting = false) {
+        (void)src;
+        (void)dst;
+        (void)overwriteExisting;
+        return FileOperationHandle{};  // Default: not supported
     }
-    
+
     // Backend info
     virtual BackendCapabilities getCapabilities() const = 0;
     virtual std::string getBackendType() const = 0;
@@ -342,7 +377,9 @@ public:
     // Backend-aware path normalization for identity/locking keys
     // Default: pass-through (no normalization).
     // Backends should override to implement their own canonicalization (e.g., case-insensitive on Windows local FS).
-    virtual std::string normalizeKey(const std::string& path) const { return path; }
+    virtual std::string normalizeKey(const std::string& path) const {
+        return path;
+    }
 
     // Backend-provided write-scope acquisition with explicit status and timeout options
     /**
@@ -357,38 +394,43 @@ public:
     // NOTE: Status::NotSupported indicates the backend lacks a native scoping primitive.
     // VFS will fall back to its in-process advisory lock. This status is slated for deprecation
     // in a future pass; backends should plan to implement acquireWriteScope.
-    struct AcquireWriteScopeResult {
-        enum class Status {
+    struct AcquireWriteScopeResult
+    {
+        enum class Status
+        {
             Acquired,
             Busy,
             TimedOut,
             NotSupported,
             Error
         } status = Status::NotSupported;
-        std::unique_ptr<void, void(*)(void*)> token{nullptr, [](void*){}}; // Opaque RAII token
-        std::error_code errorCode{};   // Provider/system error code if any
-        std::string message;           // Human-readable context
-        std::chrono::milliseconds suggestedBackoff{0}; // Hint for retry/backoff on Busy
+        std::unique_ptr<void, void (*)(void*)> token{nullptr, [](void*) {}};  // Opaque RAII token
+        std::error_code errorCode{};                                          // Provider/system error code if any
+        std::string message;                                                  // Human-readable context
+        std::chrono::milliseconds suggestedBackoff{0};                        // Hint for retry/backoff on Busy
     };
 
-    struct AcquireScopeOptions {
-        std::optional<std::chrono::milliseconds> timeout; // nullopt => backend default
-        bool nonBlocking; // true => do not wait
+    struct AcquireScopeOptions
+    {
+        std::optional<std::chrono::milliseconds> timeout;  // nullopt => backend default
+        bool nonBlocking;                                  // true => do not wait
         AcquireScopeOptions() : timeout(std::nullopt), nonBlocking(false) {}
     };
 
     // Default implementation: not supported, VFS may fall back to advisory lock
     virtual AcquireWriteScopeResult acquireWriteScope(const std::string& path, AcquireScopeOptions options = {}) {
-        (void)path; (void)options;
-        return AcquireWriteScopeResult{}; // NotSupported by default
+        (void)path;
+        (void)options;
+        return AcquireWriteScopeResult{};  // NotSupported by default
     }
 
-    
     // Set the parent VFS for callbacks
-    void setVirtualFileSystem(VirtualFileSystem* vfs) { _vfs = vfs; }
-    
+    void setVirtualFileSystem(VirtualFileSystem* vfs) {
+        _vfs = vfs;
+    }
+
 protected:
     VirtualFileSystem* _vfs = nullptr;
 };
 
-} // namespace EntropyEngine::Core::IO
+}  // namespace EntropyEngine::Core::IO

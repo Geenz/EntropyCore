@@ -7,10 +7,11 @@
  * This file is part of the Entropy Core project.
  */
 
-#include <Core/EntropyApplication.h>
-#include <Concurrency/WorkService.h>
 #include <Concurrency/WorkContractGroup.h>
+#include <Concurrency/WorkService.h>
+#include <Core/EntropyApplication.h>
 #include <Logging/Logger.h>
+
 #include <atomic>
 #include <chrono>
 
@@ -26,7 +27,8 @@ using namespace EntropyEngine::Core::Concurrency;
  * 3. Coordinating between background work and main thread work
  * 4. Proper cleanup and termination
  */
-class CustomAppDelegate : public EntropyAppDelegate {
+class CustomAppDelegate : public EntropyAppDelegate
+{
     std::shared_ptr<WorkService> workService_;
     std::unique_ptr<WorkContractGroup> backgroundGroup_;
     std::unique_ptr<WorkContractGroup> mainThreadGroup_;
@@ -88,8 +90,8 @@ public:
                 std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
                 int completed = ++backgroundTasksCompleted_;
-                ENTROPY_LOG_INFO(std::format("  [Background] Task {} completed ({}/{})",
-                    i, completed, TOTAL_BACKGROUND_TASKS));
+                ENTROPY_LOG_INFO(
+                    std::format("  [Background] Task {} completed ({}/{})", i, completed, TOTAL_BACKGROUND_TASKS));
 
                 // When background work completes, schedule a main thread task
                 scheduleMainThreadTask(i);
@@ -101,8 +103,8 @@ public:
         }
 
         allWorkScheduled_.store(true, std::memory_order_release);
-        ENTROPY_LOG_INFO(std::format("[CustomAppDelegateExample] Scheduled {} background tasks",
-            TOTAL_BACKGROUND_TASKS));
+        ENTROPY_LOG_INFO(
+            std::format("[CustomAppDelegateExample] Scheduled {} background tasks", TOTAL_BACKGROUND_TASKS));
     }
 
     void scheduleMainThreadTask(int taskId) {
@@ -111,8 +113,8 @@ public:
             [this, taskId]() noexcept {
                 // This executes on the main thread via executeMainThreadWork()
                 int completed = ++mainThreadTasksCompleted_;
-                ENTROPY_LOG_INFO(std::format("  [MainThread] Task {} completed ({}/{})",
-                    taskId, completed, TOTAL_MAIN_THREAD_TASKS));
+                ENTROPY_LOG_INFO(std::format("  [MainThread] Task {} completed ({}/{})", taskId, completed,
+                                             TOTAL_MAIN_THREAD_TASKS));
 
                 // Check if all work is done
                 checkCompletion();
@@ -144,13 +146,10 @@ public:
 
         if (std::chrono::duration_cast<std::chrono::seconds>(now - lastLog).count() >= 1) {
             if (allWorkScheduled_.load(std::memory_order_acquire)) {
-                ENTROPY_LOG_DEBUG(std::format(
-                    "[CustomAppDelegateExample] applicationMainLoop - Background: {}/{}, MainThread: {}/{}",
-                    backgroundTasksCompleted_.load(),
-                    TOTAL_BACKGROUND_TASKS,
-                    mainThreadTasksCompleted_.load(),
-                    TOTAL_BACKGROUND_TASKS
-                ));
+                ENTROPY_LOG_DEBUG(
+                    std::format("[CustomAppDelegateExample] applicationMainLoop - Background: {}/{}, MainThread: {}/{}",
+                                backgroundTasksCompleted_.load(), TOTAL_BACKGROUND_TASKS,
+                                mainThreadTasksCompleted_.load(), TOTAL_BACKGROUND_TASKS));
             }
             lastLog = now;
         }
@@ -178,11 +177,8 @@ public:
         backgroundGroup_.reset();
         workService_.reset();
 
-        ENTROPY_LOG_INFO(std::format(
-            "[CustomAppDelegateExample] Final stats - Background: {}, MainThread: {}",
-            backgroundTasksCompleted_.load(),
-            mainThreadTasksCompleted_.load()
-        ));
+        ENTROPY_LOG_INFO(std::format("[CustomAppDelegateExample] Final stats - Background: {}, MainThread: {}",
+                                     backgroundTasksCompleted_.load(), mainThreadTasksCompleted_.load()));
     }
 
     void applicationDidCatchUnhandledException(std::exception_ptr) override {

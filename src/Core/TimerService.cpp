@@ -8,19 +8,19 @@
  */
 
 #include "TimerService.h"
-#include "../Concurrency/WorkService.h"
+
 #include <chrono>
 
-namespace EntropyEngine {
-namespace Core {
+#include "../Concurrency/WorkService.h"
 
-TimerService::TimerService()
-    : TimerService(Config{}) {
-}
+namespace EntropyEngine
+{
+namespace Core
+{
 
-TimerService::TimerService(const Config& config)
-    : _config(config) {
-}
+TimerService::TimerService() : TimerService(Config{}) {}
+
+TimerService::TimerService(const Config& config) : _config(config) {}
 
 TimerService::~TimerService() {
     // Ensure clean shutdown
@@ -136,10 +136,8 @@ void TimerService::setWorkService(Concurrency::WorkService* workService) {
     }
 }
 
-Timer TimerService::scheduleTimer(std::chrono::steady_clock::duration interval,
-                                 Timer::WorkFunction work,
-                                 bool repeating,
-                                 Concurrency::ExecutionType executionType) {
+Timer TimerService::scheduleTimer(std::chrono::steady_clock::duration interval, Timer::WorkFunction work,
+                                  bool repeating, Concurrency::ExecutionType executionType) {
     if (!_workGraph) {
         throw std::runtime_error("TimerService not loaded");
     }
@@ -190,9 +188,7 @@ Timer TimerService::scheduleTimer(std::chrono::steady_clock::duration interval,
             // Not time yet - yield until fire time instead of immediate reschedule
             return Concurrency::WorkResultContext::yieldUntil(timerData->fireTime);
         },
-        "Timer",
-        nullptr,
-        executionType,
+        "Timer", nullptr, executionType,
         std::nullopt  // No max reschedules for timers
     );
 
@@ -269,20 +265,15 @@ void TimerService::restartPumpContract() {
                 return;
             }
 
-            _pumpContractHandle = _workContractGroup->createContract(
-                *pumpFunction,
-                Concurrency::ExecutionType::AnyThread
-            );
+            _pumpContractHandle =
+                _workContractGroup->createContract(*pumpFunction, Concurrency::ExecutionType::AnyThread);
             _pumpContractHandle.schedule();
         }
         // Execution mutex released here - stop() can now proceed
     };
 
     // Schedule initial execution on background thread
-    _pumpContractHandle = _workContractGroup->createContract(
-        *_pumpFunction,
-        Concurrency::ExecutionType::AnyThread
-    );
+    _pumpContractHandle = _workContractGroup->createContract(*_pumpFunction, Concurrency::ExecutionType::AnyThread);
     _pumpContractHandle.schedule();
 }
 
@@ -293,5 +284,5 @@ size_t TimerService::processReadyTimers() {
     return 0;
 }
 
-} // namespace Core
-} // namespace EntropyEngine
+}  // namespace Core
+}  // namespace EntropyEngine

@@ -1,12 +1,14 @@
 #include <gtest/gtest.h>
+
 #include <string>
-#include "VirtualFileSystem/VirtualFileSystem.h"
-#include "VirtualFileSystem/FileHandle.h"
+
 #include "VFSTestHelpers.h"
+#include "VirtualFileSystem/FileHandle.h"
+#include "VirtualFileSystem/VirtualFileSystem.h"
 
 using namespace EntropyEngine::Core::IO;
-using entropy::test_helpers::ScopedWorkEnv;
 using entropy::test_helpers::ScopedTempDir;
+using entropy::test_helpers::ScopedWorkEnv;
 
 TEST(VFSErrorMapping, ReadNonexistentFile_ReturnsFileNotFound) {
     ScopedWorkEnv env;

@@ -56,10 +56,8 @@ extern "C" {
  * }
  * @endcode
  */
-ENTROPY_API EntropyScheduleResult entropy_work_contract_schedule(
-    entropy_WorkContractHandle handle,
-    EntropyStatus* status
-);
+ENTROPY_API EntropyScheduleResult entropy_work_contract_schedule(entropy_WorkContractHandle handle,
+                                                                 EntropyStatus* status);
 
 /**
  * @brief Attempts to remove a contract from the ready set
@@ -84,10 +82,8 @@ ENTROPY_API EntropyScheduleResult entropy_work_contract_schedule(
  * }
  * @endcode
  */
-ENTROPY_API EntropyScheduleResult entropy_work_contract_unschedule(
-    entropy_WorkContractHandle handle,
-    EntropyStatus* status
-);
+ENTROPY_API EntropyScheduleResult entropy_work_contract_unschedule(entropy_WorkContractHandle handle,
+                                                                   EntropyStatus* status);
 
 /**
  * @brief Checks whether a handle still refers to a live contract
@@ -108,9 +104,7 @@ ENTROPY_API EntropyScheduleResult entropy_work_contract_unschedule(
  * }
  * @endcode
  */
-ENTROPY_API EntropyBool entropy_work_contract_is_valid(
-    entropy_WorkContractHandle handle
-);
+ENTROPY_API EntropyBool entropy_work_contract_is_valid(entropy_WorkContractHandle handle);
 
 /**
  * @brief Immediately frees a contract's slot
@@ -131,9 +125,7 @@ ENTROPY_API EntropyBool entropy_work_contract_is_valid(
  * handle = NULL; // Good practice
  * @endcode
  */
-ENTROPY_API void entropy_work_contract_release(
-    entropy_WorkContractHandle handle
-);
+ENTROPY_API void entropy_work_contract_release(entropy_WorkContractHandle handle);
 
 /**
  * @brief Destroy a work contract handle
@@ -155,9 +147,7 @@ ENTROPY_API void entropy_work_contract_release(
  * handle = NULL; // Good practice
  * @endcode
  */
-ENTROPY_API void entropy_work_contract_handle_destroy(
-    entropy_WorkContractHandle handle
-);
+ENTROPY_API void entropy_work_contract_handle_destroy(entropy_WorkContractHandle handle);
 
 /**
  * @brief Reports whether the contract is currently scheduled
@@ -175,10 +165,7 @@ ENTROPY_API void entropy_work_contract_handle_destroy(
  * }
  * @endcode
  */
-ENTROPY_API EntropyBool entropy_work_contract_is_scheduled(
-    entropy_WorkContractHandle handle,
-    EntropyStatus* status
-);
+ENTROPY_API EntropyBool entropy_work_contract_is_scheduled(entropy_WorkContractHandle handle, EntropyStatus* status);
 
 /**
  * @brief Reports whether the contract is currently executing
@@ -196,10 +183,7 @@ ENTROPY_API EntropyBool entropy_work_contract_is_scheduled(
  * }
  * @endcode
  */
-ENTROPY_API EntropyBool entropy_work_contract_is_executing(
-    entropy_WorkContractHandle handle,
-    EntropyStatus* status
-);
+ENTROPY_API EntropyBool entropy_work_contract_is_executing(entropy_WorkContractHandle handle, EntropyStatus* status);
 
 /**
  * @brief Gets the current state of a contract
@@ -221,10 +205,8 @@ ENTROPY_API EntropyBool entropy_work_contract_is_executing(
  * }
  * @endcode
  */
-ENTROPY_API EntropyContractState entropy_work_contract_get_state(
-    entropy_WorkContractHandle handle,
-    EntropyStatus* status
-);
+ENTROPY_API EntropyContractState entropy_work_contract_get_state(entropy_WorkContractHandle handle,
+                                                                 EntropyStatus* status);
 
 #ifdef __cplusplus
 }

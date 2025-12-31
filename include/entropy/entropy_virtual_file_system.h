@@ -40,10 +40,7 @@ extern "C" {
  * entropy_work_contract_group_destroy(group);
  * @endcode
  */
-ENTROPY_API entropy_VirtualFileSystem entropy_vfs_create(
-    entropy_WorkContractGroup group,
-    EntropyStatus* status
-);
+ENTROPY_API entropy_VirtualFileSystem entropy_vfs_create(entropy_WorkContractGroup group, EntropyStatus* status);
 
 /**
  * @brief Create a VirtualFileSystem with custom configuration
@@ -55,11 +52,9 @@ ENTROPY_API entropy_VirtualFileSystem entropy_vfs_create(
  * @threadsafety Thread-safe
  * @ownership Returns owned pointer - must call entropy_vfs_destroy()
  */
-ENTROPY_API entropy_VirtualFileSystem entropy_vfs_create_with_config(
-    entropy_WorkContractGroup group,
-    const EntropyVFSConfig* config,
-    EntropyStatus* status
-);
+ENTROPY_API entropy_VirtualFileSystem entropy_vfs_create_with_config(entropy_WorkContractGroup group,
+                                                                     const EntropyVFSConfig* config,
+                                                                     EntropyStatus* status);
 
 /**
  * @brief Destroy a VirtualFileSystem and release resources
@@ -94,11 +89,8 @@ ENTROPY_API void entropy_vfs_destroy(entropy_VirtualFileSystem vfs);
  * entropy_file_handle_destroy(fh);
  * @endcode
  */
-ENTROPY_API entropy_FileHandle entropy_vfs_create_file_handle(
-    entropy_VirtualFileSystem vfs,
-    const char* path,
-    EntropyStatus* status
-);
+ENTROPY_API entropy_FileHandle entropy_vfs_create_file_handle(entropy_VirtualFileSystem vfs, const char* path,
+                                                              EntropyStatus* status);
 
 /**
  * @brief Create a directory handle for the given path
@@ -112,11 +104,8 @@ ENTROPY_API entropy_FileHandle entropy_vfs_create_file_handle(
  * @threadsafety Thread-safe
  * @ownership Returns owned pointer - must call entropy_directory_handle_destroy()
  */
-ENTROPY_API entropy_DirectoryHandle entropy_vfs_create_directory_handle(
-    entropy_VirtualFileSystem vfs,
-    const char* path,
-    EntropyStatus* status
-);
+ENTROPY_API entropy_DirectoryHandle entropy_vfs_create_directory_handle(entropy_VirtualFileSystem vfs, const char* path,
+                                                                        EntropyStatus* status);
 
 /**
  * @brief Create a write batch for atomic multi-line file editing
@@ -140,12 +129,9 @@ ENTROPY_API entropy_DirectoryHandle entropy_vfs_create_directory_handle(
  * entropy_write_batch_destroy(batch);
  * @endcode
  */
-ENTROPY_API entropy_WriteBatch entropy_vfs_create_write_batch(
-    entropy_VirtualFileSystem vfs,
-    const char* path,
-    EntropyStatus* status
-);
+ENTROPY_API entropy_WriteBatch entropy_vfs_create_write_batch(entropy_VirtualFileSystem vfs, const char* path,
+                                                              EntropyStatus* status);
 
 #ifdef __cplusplus
-} // extern "C"
+}  // extern "C"
 #endif

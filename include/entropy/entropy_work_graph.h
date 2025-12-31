@@ -53,15 +53,16 @@ extern "C" {
  * These states track a node's progress from creation through completion.
  * State transitions are atomic and thread-safe.
  */
-typedef enum EntropyNodeState {
-    ENTROPY_NODE_PENDING   = 0,  ///< Waiting for dependencies - can't run yet
-    ENTROPY_NODE_READY     = 1,  ///< All dependencies satisfied, waiting for thread
+typedef enum EntropyNodeState
+{
+    ENTROPY_NODE_PENDING = 0,    ///< Waiting for dependencies - can't run yet
+    ENTROPY_NODE_READY = 1,      ///< All dependencies satisfied, waiting for thread
     ENTROPY_NODE_SCHEDULED = 2,  ///< Submitted to WorkContractGroup, in queue
     ENTROPY_NODE_EXECUTING = 3,  ///< Currently running on a worker thread
     ENTROPY_NODE_COMPLETED = 4,  ///< Finished successfully - triggered children
-    ENTROPY_NODE_FAILED    = 5,  ///< Exception thrown - children will be cancelled
+    ENTROPY_NODE_FAILED = 5,     ///< Exception thrown - children will be cancelled
     ENTROPY_NODE_CANCELLED = 6,  ///< Skipped due to parent failure - never ran
-    ENTROPY_NODE_YIELDED   = 7   ///< Suspended execution, will be rescheduled
+    ENTROPY_NODE_YIELDED = 7     ///< Suspended execution, will be rescheduled
 } EntropyNodeState;
 
 /**
@@ -70,9 +71,10 @@ typedef enum EntropyNodeState {
  * Allows work functions to control their execution flow. Complete means
  * the work is done, Yield means suspend and reschedule later.
  */
-typedef enum EntropyWorkResult {
-    ENTROPY_WORK_COMPLETE = 0,   ///< Work is done, proceed to completion
-    ENTROPY_WORK_YIELD    = 1    ///< Suspend and reschedule for later execution
+typedef enum EntropyWorkResult
+{
+    ENTROPY_WORK_COMPLETE = 0,  ///< Work is done, proceed to completion
+    ENTROPY_WORK_YIELD = 1      ///< Suspend and reschedule for later execution
 } EntropyWorkResult;
 
 // ============================================================================
@@ -137,15 +139,16 @@ typedef EntropyWorkResult (*EntropyYieldableWorkCallback)(void* user_data);
  *
  * Controls optional features and tuning parameters.
  */
-typedef struct EntropyWorkGraphConfig {
-    EntropyBool enable_events;               ///< Enable event bus for monitoring
-    EntropyBool enable_state_manager;        ///< Enable advanced state management
-    EntropyBool enable_advanced_scheduling;  ///< Enable priority queues, affinity
-    size_t expected_node_count;              ///< Expected nodes (for pre-allocation)
-    size_t max_deferred_nodes;               ///< Maximum deferred queue size (0 = unlimited)
-    size_t max_deferred_processing_iterations; ///< Max iterations when processing deferred
-    EntropyBool enable_debug_logging;        ///< Enable verbose debug output
-    EntropyBool enable_debug_registration;   ///< Make graph visible in debug tools
+typedef struct EntropyWorkGraphConfig
+{
+    EntropyBool enable_events;                  ///< Enable event bus for monitoring
+    EntropyBool enable_state_manager;           ///< Enable advanced state management
+    EntropyBool enable_advanced_scheduling;     ///< Enable priority queues, affinity
+    size_t expected_node_count;                 ///< Expected nodes (for pre-allocation)
+    size_t max_deferred_nodes;                  ///< Maximum deferred queue size (0 = unlimited)
+    size_t max_deferred_processing_iterations;  ///< Max iterations when processing deferred
+    EntropyBool enable_debug_logging;           ///< Enable verbose debug output
+    EntropyBool enable_debug_registration;      ///< Make graph visible in debug tools
 } EntropyWorkGraphConfig;
 
 /**
@@ -153,11 +156,12 @@ typedef struct EntropyWorkGraphConfig {
  *
  * Provides detailed statistics about graph execution after wait() completes.
  */
-typedef struct EntropyWaitResult {
-    EntropyBool all_completed;    ///< True only if every single node succeeded
-    uint32_t dropped_count;       ///< Nodes we couldn't schedule (queue overflow)
-    uint32_t failed_count;        ///< Nodes that threw exceptions
-    uint32_t completed_count;     ///< Nodes that ran successfully
+typedef struct EntropyWaitResult
+{
+    EntropyBool all_completed;  ///< True only if every single node succeeded
+    uint32_t dropped_count;     ///< Nodes we couldn't schedule (queue overflow)
+    uint32_t failed_count;      ///< Nodes that threw exceptions
+    uint32_t completed_count;   ///< Nodes that ran successfully
 } EntropyWaitResult;
 
 /**
@@ -165,16 +169,17 @@ typedef struct EntropyWaitResult {
  *
  * Provides a consistent view of graph execution state.
  */
-typedef struct EntropyWorkGraphStats {
-    uint32_t total_nodes;         ///< Total number of nodes in the graph
-    uint32_t completed_nodes;     ///< Successfully finished nodes
-    uint32_t failed_nodes;        ///< Nodes that threw exceptions
-    uint32_t cancelled_nodes;     ///< Nodes skipped due to parent failure
-    uint32_t pending_nodes;       ///< Waiting for dependencies
-    uint32_t ready_nodes;         ///< Ready but not yet scheduled
-    uint32_t scheduled_nodes;     ///< In the work queue
-    uint32_t executing_nodes;     ///< Currently running
-    size_t memory_usage;          ///< Approximate memory consumption in bytes
+typedef struct EntropyWorkGraphStats
+{
+    uint32_t total_nodes;      ///< Total number of nodes in the graph
+    uint32_t completed_nodes;  ///< Successfully finished nodes
+    uint32_t failed_nodes;     ///< Nodes that threw exceptions
+    uint32_t cancelled_nodes;  ///< Nodes skipped due to parent failure
+    uint32_t pending_nodes;    ///< Waiting for dependencies
+    uint32_t ready_nodes;      ///< Ready but not yet scheduled
+    uint32_t scheduled_nodes;  ///< In the work queue
+    uint32_t executing_nodes;  ///< Currently running
+    size_t memory_usage;       ///< Approximate memory consumption in bytes
 } EntropyWorkGraphStats;
 
 // ============================================================================
@@ -238,10 +243,7 @@ ENTROPY_API const char* entropy_work_result_to_string(EntropyWorkResult result);
  * }
  * @endcode
  */
-ENTROPY_API entropy_WorkGraph entropy_work_graph_create(
-    entropy_WorkContractGroup work_group,
-    EntropyStatus* status
-);
+ENTROPY_API entropy_WorkGraph entropy_work_graph_create(entropy_WorkContractGroup work_group, EntropyStatus* status);
 
 /**
  * @brief Creates a work graph with custom configuration
@@ -265,11 +267,9 @@ ENTROPY_API entropy_WorkGraph entropy_work_graph_create(
  * );
  * @endcode
  */
-ENTROPY_API entropy_WorkGraph entropy_work_graph_create_with_config(
-    entropy_WorkContractGroup work_group,
-    const EntropyWorkGraphConfig* config,
-    EntropyStatus* status
-);
+ENTROPY_API entropy_WorkGraph entropy_work_graph_create_with_config(entropy_WorkContractGroup work_group,
+                                                                    const EntropyWorkGraphConfig* config,
+                                                                    EntropyStatus* status);
 
 /**
  * @brief Destroys a work graph and frees resources
@@ -284,9 +284,7 @@ ENTROPY_API entropy_WorkGraph entropy_work_graph_create_with_config(
  * @threadsafety Thread-safe
  * @ownership Frees the graph
  */
-ENTROPY_API void entropy_work_graph_destroy(
-    entropy_WorkGraph graph
-);
+ENTROPY_API void entropy_work_graph_destroy(entropy_WorkGraph graph);
 
 // ============================================================================
 // Node Creation
@@ -322,14 +320,9 @@ ENTROPY_API void entropy_work_graph_destroy(
  * );
  * @endcode
  */
-ENTROPY_API entropy_NodeHandle entropy_work_graph_add_node(
-    entropy_WorkGraph graph,
-    EntropyWorkCallback callback,
-    void* user_data,
-    const char* name,
-    EntropyExecutionType execution_type,
-    EntropyStatus* status
-);
+ENTROPY_API entropy_NodeHandle entropy_work_graph_add_node(entropy_WorkGraph graph, EntropyWorkCallback callback,
+                                                           void* user_data, const char* name,
+                                                           EntropyExecutionType execution_type, EntropyStatus* status);
 
 /**
  * @brief Adds a yieldable task that can suspend and resume execution
@@ -364,15 +357,11 @@ ENTROPY_API entropy_NodeHandle entropy_work_graph_add_node(
  * );
  * @endcode
  */
-ENTROPY_API entropy_NodeHandle entropy_work_graph_add_yieldable_node(
-    entropy_WorkGraph graph,
-    EntropyYieldableWorkCallback callback,
-    void* user_data,
-    const char* name,
-    EntropyExecutionType execution_type,
-    uint32_t max_reschedules,
-    EntropyStatus* status
-);
+ENTROPY_API entropy_NodeHandle entropy_work_graph_add_yieldable_node(entropy_WorkGraph graph,
+                                                                     EntropyYieldableWorkCallback callback,
+                                                                     void* user_data, const char* name,
+                                                                     EntropyExecutionType execution_type,
+                                                                     uint32_t max_reschedules, EntropyStatus* status);
 
 // ============================================================================
 // Dependency Management
@@ -401,12 +390,8 @@ ENTROPY_API entropy_NodeHandle entropy_work_graph_add_yieldable_node(
  * entropy_work_graph_add_dependency(graph, B, C, &status);  // C waits for B
  * @endcode
  */
-ENTROPY_API void entropy_work_graph_add_dependency(
-    entropy_WorkGraph graph,
-    entropy_NodeHandle from,
-    entropy_NodeHandle to,
-    EntropyStatus* status
-);
+ENTROPY_API void entropy_work_graph_add_dependency(entropy_WorkGraph graph, entropy_NodeHandle from,
+                                                   entropy_NodeHandle to, EntropyStatus* status);
 
 // ============================================================================
 // Execution Control
@@ -428,10 +413,7 @@ ENTROPY_API void entropy_work_graph_add_dependency(
  * // Graph is now running in the background
  * @endcode
  */
-ENTROPY_API void entropy_work_graph_execute(
-    entropy_WorkGraph graph,
-    EntropyStatus* status
-);
+ENTROPY_API void entropy_work_graph_execute(entropy_WorkGraph graph, EntropyStatus* status);
 
 /**
  * @brief Suspend graph execution - no new nodes will be scheduled
@@ -450,10 +432,7 @@ ENTROPY_API void entropy_work_graph_execute(
  * entropy_work_graph_resume(graph, &status);
  * @endcode
  */
-ENTROPY_API void entropy_work_graph_suspend(
-    entropy_WorkGraph graph,
-    EntropyStatus* status
-);
+ENTROPY_API void entropy_work_graph_suspend(entropy_WorkGraph graph, EntropyStatus* status);
 
 /**
  * @brief Resume graph execution after suspension
@@ -466,10 +445,7 @@ ENTROPY_API void entropy_work_graph_suspend(
  *
  * @threadsafety Thread-safe
  */
-ENTROPY_API void entropy_work_graph_resume(
-    entropy_WorkGraph graph,
-    EntropyStatus* status
-);
+ENTROPY_API void entropy_work_graph_resume(entropy_WorkGraph graph, EntropyStatus* status);
 
 /**
  * @brief Check if the graph is currently suspended
@@ -479,9 +455,7 @@ ENTROPY_API void entropy_work_graph_resume(
  *
  * @threadsafety Thread-safe
  */
-ENTROPY_API EntropyBool entropy_work_graph_is_suspended(
-    entropy_WorkGraph graph
-);
+ENTROPY_API EntropyBool entropy_work_graph_is_suspended(entropy_WorkGraph graph);
 
 /**
  * @brief Wait for entire workflow to finish
@@ -505,11 +479,7 @@ ENTROPY_API EntropyBool entropy_work_graph_is_suspended(
  * }
  * @endcode
  */
-ENTROPY_API void entropy_work_graph_wait(
-    entropy_WorkGraph graph,
-    EntropyWaitResult* result,
-    EntropyStatus* status
-);
+ENTROPY_API void entropy_work_graph_wait(entropy_WorkGraph graph, EntropyWaitResult* result, EntropyStatus* status);
 
 /**
  * @brief Quick non-blocking check if workflow is done
@@ -528,9 +498,7 @@ ENTROPY_API void entropy_work_graph_wait(
  * }
  * @endcode
  */
-ENTROPY_API EntropyBool entropy_work_graph_is_complete(
-    entropy_WorkGraph graph
-);
+ENTROPY_API EntropyBool entropy_work_graph_is_complete(entropy_WorkGraph graph);
 
 // ============================================================================
 // Statistics and Monitoring
@@ -556,11 +524,8 @@ ENTROPY_API EntropyBool entropy_work_graph_is_complete(
  *        progress, stats.completed_nodes, stats.total_nodes);
  * @endcode
  */
-ENTROPY_API void entropy_work_graph_get_stats(
-    entropy_WorkGraph graph,
-    EntropyWorkGraphStats* stats,
-    EntropyStatus* status
-);
+ENTROPY_API void entropy_work_graph_get_stats(entropy_WorkGraph graph, EntropyWorkGraphStats* stats,
+                                              EntropyStatus* status);
 
 /**
  * @brief Get the number of nodes that haven't reached terminal state
@@ -570,9 +535,7 @@ ENTROPY_API void entropy_work_graph_get_stats(
  *
  * @threadsafety Thread-safe
  */
-ENTROPY_API uint32_t entropy_work_graph_get_pending_count(
-    entropy_WorkGraph graph
-);
+ENTROPY_API uint32_t entropy_work_graph_get_pending_count(entropy_WorkGraph graph);
 
 // ============================================================================
 // Node Handle Operations
@@ -587,10 +550,7 @@ ENTROPY_API uint32_t entropy_work_graph_get_pending_count(
  *
  * @threadsafety Thread-safe
  */
-ENTROPY_API EntropyBool entropy_node_handle_is_valid(
-    entropy_WorkGraph graph,
-    entropy_NodeHandle handle
-);
+ENTROPY_API EntropyBool entropy_node_handle_is_valid(entropy_WorkGraph graph, entropy_NodeHandle handle);
 
 /**
  * @brief Get the state of a node
@@ -602,11 +562,8 @@ ENTROPY_API EntropyBool entropy_node_handle_is_valid(
  *
  * @threadsafety Thread-safe
  */
-ENTROPY_API EntropyNodeState entropy_node_handle_get_state(
-    entropy_WorkGraph graph,
-    entropy_NodeHandle handle,
-    EntropyStatus* status
-);
+ENTROPY_API EntropyNodeState entropy_node_handle_get_state(entropy_WorkGraph graph, entropy_NodeHandle handle,
+                                                           EntropyStatus* status);
 
 /**
  * @brief Get the debug name of a node
@@ -619,10 +576,7 @@ ENTROPY_API EntropyNodeState entropy_node_handle_get_state(
  *
  * @threadsafety Thread-safe
  */
-ENTROPY_API const char* entropy_node_handle_get_name(
-    entropy_WorkGraph graph,
-    entropy_NodeHandle handle
-);
+ENTROPY_API const char* entropy_node_handle_get_name(entropy_WorkGraph graph, entropy_NodeHandle handle);
 
 /**
  * @brief Destroy a node handle
@@ -634,9 +588,7 @@ ENTROPY_API const char* entropy_node_handle_get_name(
  *
  * @threadsafety Thread-safe
  */
-ENTROPY_API void entropy_node_handle_destroy(
-    entropy_NodeHandle handle
-);
+ENTROPY_API void entropy_node_handle_destroy(entropy_NodeHandle handle);
 
 #ifdef __cplusplus
 }

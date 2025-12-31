@@ -3,14 +3,15 @@
  * @brief Implementation of FileHandle C API
  */
 
-#include "entropy/entropy_file_handle.h"
+#include <new>
+#include <optional>
+#include <span>
+#include <string>
+
 #include "VirtualFileSystem/FileHandle.h"
 #include "VirtualFileSystem/FileOperationHandle.h"
 #include "VirtualFileSystem/IFileSystemBackend.h"
-#include <new>
-#include <string>
-#include <span>
-#include <optional>
+#include "entropy/entropy_file_handle.h"
 
 using namespace EntropyEngine::Core::IO;
 
@@ -78,10 +79,7 @@ static WriteOptions to_cpp_write_options(const EntropyWriteOptions* opts) {
 
 extern "C" {
 
-entropy_FileHandle entropy_file_handle_clone(
-    entropy_FileHandle handle,
-    EntropyStatus* status
-) {
+entropy_FileHandle entropy_file_handle_clone(entropy_FileHandle handle, EntropyStatus* status) {
     if (!status) return nullptr;
     if (!handle) {
         *status = ENTROPY_ERR_INVALID_ARG;
@@ -90,7 +88,7 @@ entropy_FileHandle entropy_file_handle_clone(
 
     try {
         auto* cpp_handle = reinterpret_cast<FileHandle*>(handle);
-        auto* clone = new(std::nothrow) FileHandle(*cpp_handle);
+        auto* clone = new (std::nothrow) FileHandle(*cpp_handle);
         if (!clone) {
             *status = ENTROPY_ERR_NO_MEMORY;
             return nullptr;
@@ -109,10 +107,7 @@ void entropy_file_handle_destroy(entropy_FileHandle handle) {
     delete cpp_handle;
 }
 
-entropy_FileOperationHandle entropy_file_handle_read_all(
-    entropy_FileHandle handle,
-    EntropyStatus* status
-) {
+entropy_FileOperationHandle entropy_file_handle_read_all(entropy_FileHandle handle, EntropyStatus* status) {
     if (!status) return nullptr;
     if (!handle) {
         *status = ENTROPY_ERR_INVALID_ARG;
@@ -130,12 +125,8 @@ entropy_FileOperationHandle entropy_file_handle_read_all(
     }
 }
 
-entropy_FileOperationHandle entropy_file_handle_read_range(
-    entropy_FileHandle handle,
-    uint64_t offset,
-    size_t length,
-    EntropyStatus* status
-) {
+entropy_FileOperationHandle entropy_file_handle_read_range(entropy_FileHandle handle, uint64_t offset, size_t length,
+                                                           EntropyStatus* status) {
     if (!status) return nullptr;
     if (!handle) {
         *status = ENTROPY_ERR_INVALID_ARG;
@@ -153,11 +144,8 @@ entropy_FileOperationHandle entropy_file_handle_read_range(
     }
 }
 
-entropy_FileOperationHandle entropy_file_handle_read_line(
-    entropy_FileHandle handle,
-    size_t line_number,
-    EntropyStatus* status
-) {
+entropy_FileOperationHandle entropy_file_handle_read_line(entropy_FileHandle handle, size_t line_number,
+                                                          EntropyStatus* status) {
     if (!status) return nullptr;
     if (!handle) {
         *status = ENTROPY_ERR_INVALID_ARG;
@@ -175,11 +163,8 @@ entropy_FileOperationHandle entropy_file_handle_read_line(
     }
 }
 
-entropy_FileOperationHandle entropy_file_handle_write_all_text(
-    entropy_FileHandle handle,
-    const char* text,
-    EntropyStatus* status
-) {
+entropy_FileOperationHandle entropy_file_handle_write_all_text(entropy_FileHandle handle, const char* text,
+                                                               EntropyStatus* status) {
     if (!status) return nullptr;
     if (!handle || !text) {
         *status = ENTROPY_ERR_INVALID_ARG;
@@ -197,12 +182,9 @@ entropy_FileOperationHandle entropy_file_handle_write_all_text(
     }
 }
 
-entropy_FileOperationHandle entropy_file_handle_write_all_text_with_options(
-    entropy_FileHandle handle,
-    const char* text,
-    const EntropyWriteOptions* options,
-    EntropyStatus* status
-) {
+entropy_FileOperationHandle entropy_file_handle_write_all_text_with_options(entropy_FileHandle handle, const char* text,
+                                                                            const EntropyWriteOptions* options,
+                                                                            EntropyStatus* status) {
     if (!status) return nullptr;
     if (!handle || !text || !options) {
         *status = ENTROPY_ERR_INVALID_ARG;
@@ -221,12 +203,8 @@ entropy_FileOperationHandle entropy_file_handle_write_all_text_with_options(
     }
 }
 
-entropy_FileOperationHandle entropy_file_handle_write_all_bytes(
-    entropy_FileHandle handle,
-    const uint8_t* bytes,
-    size_t length,
-    EntropyStatus* status
-) {
+entropy_FileOperationHandle entropy_file_handle_write_all_bytes(entropy_FileHandle handle, const uint8_t* bytes,
+                                                                size_t length, EntropyStatus* status) {
     if (!status) return nullptr;
     if (!handle || !bytes) {
         *status = ENTROPY_ERR_INVALID_ARG;
@@ -245,13 +223,10 @@ entropy_FileOperationHandle entropy_file_handle_write_all_bytes(
     }
 }
 
-entropy_FileOperationHandle entropy_file_handle_write_all_bytes_with_options(
-    entropy_FileHandle handle,
-    const uint8_t* bytes,
-    size_t length,
-    const EntropyWriteOptions* options,
-    EntropyStatus* status
-) {
+entropy_FileOperationHandle entropy_file_handle_write_all_bytes_with_options(entropy_FileHandle handle,
+                                                                             const uint8_t* bytes, size_t length,
+                                                                             const EntropyWriteOptions* options,
+                                                                             EntropyStatus* status) {
     if (!status) return nullptr;
     if (!handle || !bytes || !options) {
         *status = ENTROPY_ERR_INVALID_ARG;
@@ -271,13 +246,9 @@ entropy_FileOperationHandle entropy_file_handle_write_all_bytes_with_options(
     }
 }
 
-entropy_FileOperationHandle entropy_file_handle_write_range(
-    entropy_FileHandle handle,
-    uint64_t offset,
-    const uint8_t* bytes,
-    size_t length,
-    EntropyStatus* status
-) {
+entropy_FileOperationHandle entropy_file_handle_write_range(entropy_FileHandle handle, uint64_t offset,
+                                                            const uint8_t* bytes, size_t length,
+                                                            EntropyStatus* status) {
     if (!status) return nullptr;
     if (!handle || !bytes) {
         *status = ENTROPY_ERR_INVALID_ARG;
@@ -296,12 +267,8 @@ entropy_FileOperationHandle entropy_file_handle_write_range(
     }
 }
 
-entropy_FileOperationHandle entropy_file_handle_write_line(
-    entropy_FileHandle handle,
-    size_t line_number,
-    const char* line,
-    EntropyStatus* status
-) {
+entropy_FileOperationHandle entropy_file_handle_write_line(entropy_FileHandle handle, size_t line_number,
+                                                           const char* line, EntropyStatus* status) {
     if (!status) return nullptr;
     if (!handle || !line) {
         *status = ENTROPY_ERR_INVALID_ARG;
@@ -319,10 +286,7 @@ entropy_FileOperationHandle entropy_file_handle_write_line(
     }
 }
 
-entropy_FileOperationHandle entropy_file_handle_create_empty(
-    entropy_FileHandle handle,
-    EntropyStatus* status
-) {
+entropy_FileOperationHandle entropy_file_handle_create_empty(entropy_FileHandle handle, EntropyStatus* status) {
     if (!status) return nullptr;
     if (!handle) {
         *status = ENTROPY_ERR_INVALID_ARG;
@@ -340,10 +304,7 @@ entropy_FileOperationHandle entropy_file_handle_create_empty(
     }
 }
 
-entropy_FileOperationHandle entropy_file_handle_remove(
-    entropy_FileHandle handle,
-    EntropyStatus* status
-) {
+entropy_FileOperationHandle entropy_file_handle_remove(entropy_FileHandle handle, EntropyStatus* status) {
     if (!status) return nullptr;
     if (!handle) {
         *status = ENTROPY_ERR_INVALID_ARG;
@@ -361,10 +322,7 @@ entropy_FileOperationHandle entropy_file_handle_remove(
     }
 }
 
-const char* entropy_file_handle_normalized_key(
-    entropy_FileHandle handle,
-    EntropyStatus* status
-) {
+const char* entropy_file_handle_normalized_key(entropy_FileHandle handle, EntropyStatus* status) {
     if (!status) return nullptr;
     if (!handle) {
         *status = ENTROPY_ERR_INVALID_ARG;
@@ -381,4 +339,4 @@ const char* entropy_file_handle_normalized_key(
     }
 }
 
-} // extern "C"
+}  // extern "C"

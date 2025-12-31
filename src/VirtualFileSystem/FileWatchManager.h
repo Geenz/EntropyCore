@@ -4,17 +4,20 @@
  */
 #pragma once
 #include <memory>
-#include <vector>
 #include <mutex>
+#include <vector>
+
 #include "FileWatch.h"
 
 // Forward declare efsw types
-namespace efsw {
-    class FileWatcher;
-    class FileWatchListener;
-}
+namespace efsw
+{
+class FileWatcher;
+class FileWatchListener;
+}  // namespace efsw
 
-namespace EntropyEngine::Core::IO {
+namespace EntropyEngine::Core::IO
+{
 
 // Forward declarations
 class VirtualFileSystem;
@@ -29,7 +32,8 @@ class VirtualFileSystem;
  *
  * Thread safety: All public methods are thread-safe via mutex.
  */
-class FileWatchManager {
+class FileWatchManager
+{
 public:
     explicit FileWatchManager(VirtualFileSystem* vfs);
     ~FileWatchManager();
@@ -47,9 +51,7 @@ public:
      * @param options Watch configuration options
      * @return FileWatch* with refcount=1 (caller owns the reference), or nullptr if failed
      */
-    FileWatch* createWatch(const std::string& path,
-                          FileWatchCallback callback,
-                          const WatchOptions& options);
+    FileWatch* createWatch(const std::string& path, FileWatchCallback callback, const WatchOptions& options);
 
     /**
      * @brief Stops a watch and releases the reference
@@ -69,23 +71,24 @@ private:
     /**
      * @brief Storage slot for a FileWatch
      */
-    struct WatchSlot {
-        FileWatch* watch = nullptr;     ///< Pointer to the watch object (or nullptr if free)
-        uint32_t generation = 0;        ///< Generation counter for validation
-        bool occupied = false;          ///< true if slot is in use
+    struct WatchSlot
+    {
+        FileWatch* watch = nullptr;  ///< Pointer to the watch object (or nullptr if free)
+        uint32_t generation = 0;     ///< Generation counter for validation
+        bool occupied = false;       ///< true if slot is in use
     };
 
-    VirtualFileSystem* _vfs;                              ///< Parent VFS (for thread dispatch)
-    std::unique_ptr<efsw::FileWatcher> _watcher;          ///< efsw file watcher instance (lazy-initialized)
-    std::unique_ptr<efsw::FileWatchListener> _listener;   ///< efsw event listener
-    std::vector<WatchSlot> _slots;                        ///< Slot-based storage
-    mutable std::mutex _slotMutex;                        ///< Protects slots and watcher
+    VirtualFileSystem* _vfs;                             ///< Parent VFS (for thread dispatch)
+    std::unique_ptr<efsw::FileWatcher> _watcher;         ///< efsw file watcher instance (lazy-initialized)
+    std::unique_ptr<efsw::FileWatchListener> _listener;  ///< efsw event listener
+    std::vector<WatchSlot> _slots;                       ///< Slot-based storage
+    mutable std::mutex _slotMutex;                       ///< Protects slots and watcher
 
     // Separate map for efsw ID to slot index lookups
     // This prevents lock-order-inversion: efsw callbacks (which hold efsw's internal mutex)
     // need to map IDs to slots, but we can't hold _slotMutex when calling efsw methods.
-    mutable std::mutex _efswIdMapMutex;                   ///< Protects _efswIdToSlot map
-    std::unordered_map<long, uint32_t> _efswIdToSlot;     ///< Maps efsw::WatchID to slot index
+    mutable std::mutex _efswIdMapMutex;                ///< Protects _efswIdToSlot map
+    std::unordered_map<long, uint32_t> _efswIdToSlot;  ///< Maps efsw::WatchID to slot index
 
     /**
      * @brief Allocates a new slot for a watch
@@ -124,8 +127,8 @@ private:
      */
     void removeEfswWatch(FileWatch* watch);
 
-    friend class FileWatchListener; // efsw listener needs access
-    friend class FileWatch;         // FileWatch needs access to removeEfswWatch
+    friend class FileWatchListener;  // efsw listener needs access
+    friend class FileWatch;          // FileWatch needs access to removeEfswWatch
 };
 
-} // namespace EntropyEngine::Core::IO
+}  // namespace EntropyEngine::Core::IO
