@@ -21,12 +21,11 @@ namespace Concurrency
 // Thread-local state definition
 thread_local size_t RoundRobinScheduler::stCurrentIndex = 0;
 
-RoundRobinScheduler::RoundRobinScheduler(const Config& config) {
+RoundRobinScheduler::RoundRobinScheduler([[maybe_unused]] const Config& config) {
     // Config mostly unused for round-robin
 }
 
-IWorkScheduler::ScheduleResult RoundRobinScheduler::selectNextGroup(const std::vector<WorkContractGroup*>& groups,
-                                                                    const SchedulingContext& context) {
+IWorkScheduler::ScheduleResult RoundRobinScheduler::selectNextGroup(const std::vector<WorkContractGroup*>& groups) {
     if (groups.empty()) {
         return {nullptr, true};
     }

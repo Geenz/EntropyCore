@@ -144,7 +144,7 @@ void BufferedFileStream::close() {
 
 void BufferedFileStream::flushWriteBuffer() {
     if (_writePos > 0) {
-        auto result = _inner->write(std::span<const uint8_t>(_writeBuffer.data(), _writePos));
+        (void)_inner->write(std::span<const uint8_t>(_writeBuffer.data(), _writePos));
         _writePos = 0;
         _dirty = false;
     }

@@ -88,11 +88,9 @@ public:
      * bad for performance, good for measuring overhead.
      *
      * @param groups Groups to scan (in order)
-     * @param context Completely ignored
      * @return First group with work, or nullptr
      */
-    ScheduleResult selectNextGroup(const std::vector<WorkContractGroup*>& groups,
-                                   const SchedulingContext& context) override {
+    ScheduleResult selectNextGroup(const std::vector<WorkContractGroup*>& groups) override {
         // Just scan and return first group with work
         for (auto* group : groups) {
             if (group && group->scheduledCount() > 0) {

@@ -379,34 +379,39 @@ private:
  * }
  * @endcode
  */
-#define ENTROPY_LOG_TRACE(fmt, ...) ::EntropyEngine::Core::Logging::Logger::global().trace(__func__, fmt, ##__VA_ARGS__)
+#define ENTROPY_LOG_TRACE(fmt, ...) \
+    ::EntropyEngine::Core::Logging::Logger::global().trace(__func__, fmt __VA_OPT__(, ) __VA_ARGS__)
 
-#define ENTROPY_LOG_DEBUG(fmt, ...) ::EntropyEngine::Core::Logging::Logger::global().debug(__func__, fmt, ##__VA_ARGS__)
+#define ENTROPY_LOG_DEBUG(fmt, ...) \
+    ::EntropyEngine::Core::Logging::Logger::global().debug(__func__, fmt __VA_OPT__(, ) __VA_ARGS__)
 
-#define ENTROPY_LOG_INFO(fmt, ...) ::EntropyEngine::Core::Logging::Logger::global().info(__func__, fmt, ##__VA_ARGS__)
+#define ENTROPY_LOG_INFO(fmt, ...) \
+    ::EntropyEngine::Core::Logging::Logger::global().info(__func__, fmt __VA_OPT__(, ) __VA_ARGS__)
 
 #define ENTROPY_LOG_WARNING(fmt, ...) \
-    ::EntropyEngine::Core::Logging::Logger::global().warning(__func__, fmt, ##__VA_ARGS__)
+    ::EntropyEngine::Core::Logging::Logger::global().warning(__func__, fmt __VA_OPT__(, ) __VA_ARGS__)
 
-#define ENTROPY_LOG_ERROR(fmt, ...) ::EntropyEngine::Core::Logging::Logger::global().error(__func__, fmt, ##__VA_ARGS__)
+#define ENTROPY_LOG_ERROR(fmt, ...) \
+    ::EntropyEngine::Core::Logging::Logger::global().error(__func__, fmt __VA_OPT__(, ) __VA_ARGS__)
 
-#define ENTROPY_LOG_FATAL(fmt, ...) ::EntropyEngine::Core::Logging::Logger::global().fatal(__func__, fmt, ##__VA_ARGS__)
+#define ENTROPY_LOG_FATAL(fmt, ...) \
+    ::EntropyEngine::Core::Logging::Logger::global().fatal(__func__, fmt __VA_OPT__(, ) __VA_ARGS__)
 
 // Category-specific macros for explicit category specification
 #define ENTROPY_LOG_TRACE_CAT(category, fmt, ...) \
-    ::EntropyEngine::Core::Logging::Logger::global().trace(category, fmt, ##__VA_ARGS__)
+    ::EntropyEngine::Core::Logging::Logger::global().trace(category, fmt __VA_OPT__(, ) __VA_ARGS__)
 
 #define ENTROPY_LOG_DEBUG_CAT(category, fmt, ...) \
-    ::EntropyEngine::Core::Logging::Logger::global().debug(category, fmt, ##__VA_ARGS__)
+    ::EntropyEngine::Core::Logging::Logger::global().debug(category, fmt __VA_OPT__(, ) __VA_ARGS__)
 
 #define ENTROPY_LOG_INFO_CAT(category, fmt, ...) \
-    ::EntropyEngine::Core::Logging::Logger::global().info(category, fmt, ##__VA_ARGS__)
+    ::EntropyEngine::Core::Logging::Logger::global().info(category, fmt __VA_OPT__(, ) __VA_ARGS__)
 
 #define ENTROPY_LOG_WARNING_CAT(category, fmt, ...) \
-    ::EntropyEngine::Core::Logging::Logger::global().warning(category, fmt, ##__VA_ARGS__)
+    ::EntropyEngine::Core::Logging::Logger::global().warning(category, fmt __VA_OPT__(, ) __VA_ARGS__)
 
 #define ENTROPY_LOG_ERROR_CAT(category, fmt, ...) \
-    ::EntropyEngine::Core::Logging::Logger::global().error(category, fmt, ##__VA_ARGS__)
+    ::EntropyEngine::Core::Logging::Logger::global().error(category, fmt __VA_OPT__(, ) __VA_ARGS__)
 
 #define ENTROPY_LOG_FATAL_CAT(category, fmt, ...) \
-    ::EntropyEngine::Core::Logging::Logger::global().fatal(category, fmt, ##__VA_ARGS__)
+    ::EntropyEngine::Core::Logging::Logger::global().fatal(category, fmt __VA_OPT__(, ) __VA_ARGS__)

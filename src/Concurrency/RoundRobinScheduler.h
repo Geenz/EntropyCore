@@ -115,13 +115,12 @@ public:
      * // 5. Return the winner (or nullptr)
      * @endcode
      */
-    ScheduleResult selectNextGroup(const std::vector<WorkContractGroup*>& groups,
-                                   const SchedulingContext& context) override;
+    ScheduleResult selectNextGroup(const std::vector<WorkContractGroup*>& groups) override;
 
     /**
      * @brief No-op - round-robin doesn't track execution history
      */
-    void notifyWorkExecuted(WorkContractGroup* group, size_t threadId) override {}
+    void notifyWorkExecuted([[maybe_unused]] WorkContractGroup* group, [[maybe_unused]] size_t threadId) override {}
 
     /**
      * @brief Resets thread-local rotation index to 0

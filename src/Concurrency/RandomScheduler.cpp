@@ -24,7 +24,7 @@ namespace Concurrency
 thread_local std::mt19937 RandomScheduler::stRng;
 thread_local bool RandomScheduler::stRngInitialized = false;
 
-RandomScheduler::RandomScheduler(const Config& config) {
+RandomScheduler::RandomScheduler([[maybe_unused]] const Config& config) {
     // Config unused for random scheduler
 }
 
@@ -38,8 +38,7 @@ void RandomScheduler::ensureRngInitialized() {
     }
 }
 
-IWorkScheduler::ScheduleResult RandomScheduler::selectNextGroup(const std::vector<WorkContractGroup*>& groups,
-                                                                const SchedulingContext& context) {
+IWorkScheduler::ScheduleResult RandomScheduler::selectNextGroup(const std::vector<WorkContractGroup*>& groups) {
     ensureRngInitialized();
 
     // First, count groups with work

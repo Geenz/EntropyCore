@@ -16,10 +16,10 @@ DirectoryHandle::DirectoryHandle(VirtualFileSystem* vfs, std::string path) : _vf
     // Backend attachment and normalized key computation are performed by VirtualFileSystem::createDirectoryHandle.
 
     // Initialize metadata
-    _meta.path = path;
+    _meta.path = std::move(path);
 
     // Extract parent directory and name
-    std::filesystem::path p(path);
+    std::filesystem::path p(_meta.path);
     if (p.has_parent_path()) {
         _meta.directory = p.parent_path().string();
     }

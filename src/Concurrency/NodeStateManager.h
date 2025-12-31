@@ -58,7 +58,7 @@ public:
      * @param to Target state
      * @return true if transition succeeded, false if current state didn't match 'from'
      */
-    bool transitionState(NodeHandle node, NodeState from, NodeState to);
+    bool transitionState(const NodeHandle& node, NodeState from, NodeState to);
 
     /**
      * @brief Force a state transition without validation
@@ -68,7 +68,7 @@ public:
      * @param node The node to transition
      * @param to Target state
      */
-    void forceState(NodeHandle node, NodeState to);
+    void forceState(const NodeHandle& node, NodeState to);
 
     /**
      * @brief Get current state of a node
@@ -76,7 +76,7 @@ public:
      * @param node The node to query
      * @return Current state, or Pending if node is invalid
      */
-    NodeState getState(NodeHandle node) const;
+    NodeState getState(const NodeHandle& node) const;
 
     /**
      * @brief Check if a state transition is valid
@@ -103,7 +103,7 @@ public:
      * @param node The node to check
      * @return true if node is in Completed, Failed, or Cancelled state
      */
-    bool isTerminal(NodeHandle node) const {
+    bool isTerminal(const NodeHandle& node) const {
         return isTerminalState(getState(node));
     }
 
@@ -146,7 +146,7 @@ public:
      * @param node The node to register
      * @param initialState Initial state (default: Pending)
      */
-    void registerNode(NodeHandle node, NodeState initialState = NodeState::Pending);
+    void registerNode(const NodeHandle& node, NodeState initialState = NodeState::Pending);
 
     /**
      * @brief Batch update for multiple nodes
@@ -198,7 +198,7 @@ private:
     /**
      * @brief Publish state change event if event bus is configured
      */
-    void publishStateChange(NodeHandle node, NodeState from, NodeState to);
+    void publishStateChange(const NodeHandle& node, NodeState from, NodeState to);
 };
 
 }  // namespace Concurrency

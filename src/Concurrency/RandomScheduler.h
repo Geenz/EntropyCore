@@ -121,13 +121,12 @@ public:
      * // This gives each group exactly 1/N probability!
      * @endcode
      */
-    ScheduleResult selectNextGroup(const std::vector<WorkContractGroup*>& groups,
-                                   const SchedulingContext& context) override;
+    ScheduleResult selectNextGroup(const std::vector<WorkContractGroup*>& groups) override;
 
     /**
      * @brief No-op - random selection doesn't learn from history
      */
-    void notifyWorkExecuted(WorkContractGroup* group, size_t threadId) override {}
+    void notifyWorkExecuted([[maybe_unused]] WorkContractGroup* group, [[maybe_unused]] size_t threadId) override {}
 
     /**
      * @brief No-op - random scheduler has no state to reset

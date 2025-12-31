@@ -118,8 +118,7 @@ public:
      * }
      * @endcode
      */
-    ScheduleResult selectNextGroup(const std::vector<WorkContractGroup*>& groups,
-                                   const SchedulingContext& context) override {
+    ScheduleResult selectNextGroup(const std::vector<WorkContractGroup*>& groups) override {
         for (auto* group : groups) {
             if (group && group->scheduledCount() > 0) {
                 return {group, false};  // Never sleep

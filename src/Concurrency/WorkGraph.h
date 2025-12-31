@@ -944,7 +944,7 @@ private:
      * @param node The ready node to submit for execution
      * @return true if scheduled, false if already scheduled/completed
      */
-    bool scheduleNode(NodeHandle node);
+    bool scheduleNode(const NodeHandle& node);
 
     /**
      * @brief Bumps up how many parents a node is waiting for

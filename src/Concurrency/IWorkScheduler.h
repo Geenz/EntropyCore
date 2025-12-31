@@ -104,23 +104,6 @@ public:
     };
 
     /**
-     * @brief Context passed to scheduler for each scheduling decision.
-     *
-     * Provides thread-local information to enable informed scheduling decisions.
-     * This context supports strategies such as maintaining thread-group affinity
-     * for cache locality, distributing work evenly across threads, or detecting
-     * and addressing thread starvation conditions.
-     *
-     * All fields are maintained by the WorkService and should be treated as read-only.
-     */
-    struct SchedulingContext
-    {
-        size_t threadId;                       ///< Unique ID for this worker thread (0 to threadCount-1)
-        size_t consecutiveFailures;            ///< How many times in a row we've found no work
-        WorkContractGroup* lastExecutedGroup;  ///< Last group this thread executed from (nullptr on first call)
-    };
-
-    /**
      * @brief Result of a scheduling decision.
      *
      * Encapsulates the scheduler's decision for the worker thread. Indicates either
@@ -142,12 +125,11 @@ public:
      * avoid allocations and complexity.
      *
      * @param groups Current snapshot of registered work groups (groups might have no work)
-     * @param context Thread-specific info to help with scheduling decisions
      * @return ScheduleResult with chosen group (or nullptr if no work found)
      *
      * @code
      * // Simplest possible implementation - just find first group with work
-     * ScheduleResult selectNextGroup(groups, context) override {
+     * ScheduleResult selectNextGroup(groups) override {
      *     for (auto* group : groups) {
      *         if (group->scheduledCount() > 0) {
      *             return {group, false};
@@ -157,8 +139,7 @@ public:
      * }
      * @endcode
      */
-    virtual ScheduleResult selectNextGroup(const std::vector<WorkContractGroup*>& groups,
-                                           const SchedulingContext& context) = 0;
+    virtual ScheduleResult selectNextGroup(const std::vector<WorkContractGroup*>& groups) = 0;
 
     /**
      * @brief Notifies scheduler that work was successfully executed
@@ -169,7 +150,7 @@ public:
      * @param group The group that work was executed from
      * @param threadId The thread that executed the work
      */
-    virtual void notifyWorkExecuted(WorkContractGroup* group, size_t threadId) {}
+    virtual void notifyWorkExecuted([[maybe_unused]] WorkContractGroup* group, [[maybe_unused]] size_t threadId) {}
 
     /**
      * @brief Notifies scheduler that the group list has changed
@@ -179,7 +160,7 @@ public:
      *
      * @param newGroups Updated list of work groups (complete replacement)
      */
-    virtual void notifyGroupsChanged(const std::vector<WorkContractGroup*>& newGroups) {}
+    virtual void notifyGroupsChanged([[maybe_unused]] const std::vector<WorkContractGroup*>& newGroups) {}
 
     /**
      * @brief Resets scheduler to initial state

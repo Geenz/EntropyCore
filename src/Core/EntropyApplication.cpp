@@ -112,7 +112,7 @@ int EntropyApplication::run() {
     // Spawn dedicated signal handler thread
     // This thread waits for OS signals and handles termination requests
     // while the main thread runs the application loop at full speed
-    std::jthread signalThread([this](std::stop_token stopToken) {
+    std::jthread signalThread([this](const std::stop_token& stopToken) {
 #if defined(_WIN32)
         // Windows: wait on console control events
         HANDLE ctrlH = static_cast<HANDLE>(_ctrlEvent);
@@ -305,7 +305,7 @@ void EntropyApplication::handleConsoleSignal(unsigned long ctrlType) {
 namespace
 {
 // Signal handler - must be async-signal-safe
-static void EntropySigHandler(int signum) {
+static void entropySigHandler(int signum) {
     EntropyEngine::Core::EntropyApplication::shared().notifyPosixSignalFromHandler(signum);
 }
 }  // namespace
@@ -315,7 +315,7 @@ void EntropyApplication::installSignalHandlers() {
 
     // Set up sigaction for graceful termination signals
     struct sigaction sa;
-    sa.sa_handler = EntropySigHandler;
+    sa.sa_handler = entropySigHandler;
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;
 
@@ -326,16 +326,16 @@ void EntropyApplication::installSignalHandlers() {
     sigaction(SIGQUIT, &sa, nullptr);  // quit signal
 
     // For fatal signals like SIGSEGV, SIGABRT - also install but allow default behavior after logging
-    struct sigaction fatal_sa;
-    fatal_sa.sa_handler = EntropySigHandler;
-    sigemptyset(&fatal_sa.sa_mask);
-    fatal_sa.sa_flags = SA_RESETHAND;  // Reset to default after first signal
+    struct sigaction fatalSa;
+    fatalSa.sa_handler = entropySigHandler;
+    sigemptyset(&fatalSa.sa_mask);
+    fatalSa.sa_flags = SA_RESETHAND;  // Reset to default after first signal
 
-    sigaction(SIGABRT, &fatal_sa, nullptr);  // abort
-    sigaction(SIGSEGV, &fatal_sa, nullptr);  // segmentation fault
-    sigaction(SIGBUS, &fatal_sa, nullptr);   // bus error
-    sigaction(SIGFPE, &fatal_sa, nullptr);   // floating point exception
-    sigaction(SIGILL, &fatal_sa, nullptr);   // illegal instruction
+    sigaction(SIGABRT, &fatalSa, nullptr);  // abort
+    sigaction(SIGSEGV, &fatalSa, nullptr);  // segmentation fault
+    sigaction(SIGBUS, &fatalSa, nullptr);   // bus error
+    sigaction(SIGFPE, &fatalSa, nullptr);   // floating point exception
+    sigaction(SIGILL, &fatalSa, nullptr);   // illegal instruction
 }
 
 void EntropyApplication::uninstallSignalHandlers() {

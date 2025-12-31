@@ -210,7 +210,7 @@ public:
      * }
      * @endcode
      */
-    bool scheduleNode(NodeHandle node);
+    bool scheduleNode(const NodeHandle& node);
 
     /**
      * @brief Explicitly defers a node without trying to schedule first
@@ -234,7 +234,7 @@ public:
      * }
      * @endcode
      */
-    bool deferNode(NodeHandle node);
+    bool deferNode(const NodeHandle& node);
 
     /**
      * @brief Drains the deferred queue into available execution slots
@@ -302,7 +302,7 @@ public:
      * // Node sits in queue consuming zero CPU until wakeTime arrives
      * @endcode
      */
-    bool deferNodeUntil(NodeHandle node, std::chrono::steady_clock::time_point wakeTime);
+    bool deferNodeUntil(const NodeHandle& node, std::chrono::steady_clock::time_point wakeTime);
 
     /**
      * @brief Quick check if we can accept more work right now
@@ -510,7 +510,7 @@ private:
      * @param node The node whose work we're wrapping
      * @return Lambda function suitable for WorkContractGroup execution
      */
-    std::function<void()> createWorkWrapper(NodeHandle node);
+    std::function<void()> createWorkWrapper(const NodeHandle& node);
 
     /**
      * @brief Thread-safe statistics update helper
@@ -530,14 +530,14 @@ private:
      *
      * @param node The node that was scheduled
      */
-    void publishScheduledEvent(NodeHandle node);
+    void publishScheduledEvent(const NodeHandle& node);
 
     /**
      * @brief Publishes a "node deferred" event to the event bus
      *
      * @param node The node that was deferred
      */
-    void publishDeferredEvent(NodeHandle node);
+    void publishDeferredEvent(const NodeHandle& node);
 };
 
 }  // namespace Concurrency

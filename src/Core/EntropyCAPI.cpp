@@ -68,38 +68,41 @@ ENTROPY_API void entropy_buffer_dispose(EntropyOwnedBuffer b) {
     if (b.ptr) entropy_free((void*)b.ptr);
 }
 
-static inline EntropyObject* to_cpp(EntropyObjectRef* o) {
-    return reinterpret_cast<EntropyObject*>(o);
-}
-static inline const EntropyObject* to_cpp_c(const EntropyObjectRef* o) {
+static inline const EntropyObject* toCppConst(const EntropyObjectRef* o) {
     return reinterpret_cast<const EntropyObject*>(o);
 }
 
 ENTROPY_API void entropy_object_retain(const EntropyObjectRef* obj) {
-    if (obj) to_cpp_c(obj)->retain();
+    if (obj) toCppConst(obj)->retain();
 }
 
 ENTROPY_API void entropy_object_release(const EntropyObjectRef* obj) {
-    if (obj) to_cpp_c(obj)->release();
+    if (obj) toCppConst(obj)->release();
 }
 
 ENTROPY_API uint32_t entropy_object_ref_count(const EntropyObjectRef* obj) {
-    return obj ? to_cpp_c(obj)->refCount() : 0;
+    return obj ? toCppConst(obj)->refCount() : 0;
 }
 
 ENTROPY_API EntropyTypeId entropy_object_type_id(const EntropyObjectRef* obj) {
-    return obj ? to_cpp_c(obj)->classHash() : 0u;
+    return obj ? toCppConst(obj)->classHash() : 0u;
 }
 
 ENTROPY_API const char* entropy_object_class_name(const EntropyObjectRef* obj) {
-    return obj ? to_cpp_c(obj)->className() : "";
+    return obj ? toCppConst(obj)->className() : "";
 }
 
-static EntropyStatus copy_string_out(const std::string& s, EntropyOwnedString* out) {
+static EntropyStatus copyStringOut(const std::string& s, EntropyOwnedString* out) {
     if (!out) return ENTROPY_ERR_INVALID_ARG;
-    char* mem = static_cast<char*>(entropy_alloc(s.size()));
-    if (!mem && s.size() != 0) return ENTROPY_ERR_NO_MEMORY;
-    if (s.size()) std::memcpy(mem, s.data(), s.size());
+    if (s.empty()) {
+        out->ptr = nullptr;
+        out->len = 0;
+        return ENTROPY_OK;
+    }
+    char* mem = static_cast<char*>(entropy_alloc(s.size() + 1));
+    if (!mem) return ENTROPY_ERR_NO_MEMORY;
+    std::memcpy(mem, s.data(), s.size());
+    mem[s.size()] = '\0';  // Null-terminate for safety
     out->ptr = mem;
     out->len = static_cast<uint32_t>(s.size());
     return ENTROPY_OK;
@@ -108,7 +111,7 @@ static EntropyStatus copy_string_out(const std::string& s, EntropyOwnedString* o
 ENTROPY_API EntropyStatus entropy_object_class_name_owned(const EntropyObjectRef* obj, EntropyOwnedString* out) {
     if (!obj) return ENTROPY_ERR_INVALID_ARG;
     try {
-        return copy_string_out(std::string(to_cpp_c(obj)->className()), out);
+        return copyStringOut(std::string(toCppConst(obj)->className()), out);
     } catch (...) {
         return ENTROPY_ERR_UNKNOWN;
     }
@@ -117,7 +120,7 @@ ENTROPY_API EntropyStatus entropy_object_class_name_owned(const EntropyObjectRef
 ENTROPY_API EntropyStatus entropy_object_to_string(const EntropyObjectRef* obj, EntropyOwnedString* out) {
     if (!obj) return ENTROPY_ERR_INVALID_ARG;
     try {
-        return copy_string_out(to_cpp_c(obj)->toString(), out);
+        return copyStringOut(toCppConst(obj)->toString(), out);
     } catch (...) {
         return ENTROPY_ERR_UNKNOWN;
     }
@@ -126,7 +129,7 @@ ENTROPY_API EntropyStatus entropy_object_to_string(const EntropyObjectRef* obj, 
 ENTROPY_API EntropyStatus entropy_object_debug_string(const EntropyObjectRef* obj, EntropyOwnedString* out) {
     if (!obj) return ENTROPY_ERR_INVALID_ARG;
     try {
-        return copy_string_out(to_cpp_c(obj)->debugString(), out);
+        return copyStringOut(toCppConst(obj)->debugString(), out);
     } catch (...) {
         return ENTROPY_ERR_UNKNOWN;
     }
@@ -135,7 +138,7 @@ ENTROPY_API EntropyStatus entropy_object_debug_string(const EntropyObjectRef* ob
 ENTROPY_API EntropyStatus entropy_object_description(const EntropyObjectRef* obj, EntropyOwnedString* out) {
     if (!obj) return ENTROPY_ERR_INVALID_ARG;
     try {
-        return copy_string_out(to_cpp_c(obj)->description(), out);
+        return copyStringOut(toCppConst(obj)->description(), out);
     } catch (...) {
         return ENTROPY_ERR_UNKNOWN;
     }
@@ -156,15 +159,15 @@ ENTROPY_API EntropyBool entropy_handle_type_matches(EntropyHandle h, EntropyType
     return ((expected != 0) && (h.type_id != 0) && (h.type_id == expected)) ? ENTROPY_TRUE : ENTROPY_FALSE;
 }
 
-ENTROPY_API EntropyStatus entropy_object_to_handle(const EntropyObjectRef* obj, EntropyHandle* out_handle) {
-    if (!obj || !out_handle) return ENTROPY_ERR_INVALID_ARG;
-    if (!to_cpp_c(obj)->hasHandle()) return ENTROPY_ERR_UNAVAILABLE;
+ENTROPY_API EntropyStatus entropy_object_to_handle(const EntropyObjectRef* obj, EntropyHandle* outHandle) {
+    if (!obj || !outHandle) return ENTROPY_ERR_INVALID_ARG;
+    if (!toCppConst(obj)->hasHandle()) return ENTROPY_ERR_UNAVAILABLE;
     EntropyHandle h{};
-    h.owner = to_cpp_c(obj)->handleOwner();
-    h.index = to_cpp_c(obj)->handleIndex();
-    h.generation = to_cpp_c(obj)->handleGeneration();
-    h.type_id = to_cpp_c(obj)->classHash();
-    *out_handle = h;
+    h.owner = toCppConst(obj)->handleOwner();
+    h.index = toCppConst(obj)->handleIndex();
+    h.generation = toCppConst(obj)->handleGeneration();
+    h.type_id = toCppConst(obj)->classHash();
+    *outHandle = h;
     return ENTROPY_OK;
 }
 
@@ -189,15 +192,15 @@ ENTROPY_API EntropyStatus entropy_handle_release(EntropyHandle h) {
     return ENTROPY_OK;
 }
 
-ENTROPY_API EntropyStatus entropy_handle_info(EntropyHandle h, EntropyTypeId* out_type_id,
-                                              EntropyOwnedString* out_class_name) {
+ENTROPY_API EntropyStatus entropy_handle_info(EntropyHandle h, EntropyTypeId* outTypeId,
+                                              EntropyOwnedString* outClassName) {
     if (!h.owner) return ENTROPY_ERR_INVALID_ARG;
     EntropyObjectRef* obj = entropy_resolve_handle(h);
     if (!obj) return ENTROPY_ERR_NOT_FOUND;
     EntropyStatus st = ENTROPY_OK;
-    if (out_type_id) *out_type_id = entropy_object_type_id(obj);
-    if (out_class_name) {
-        st = entropy_object_class_name_owned(obj, out_class_name);
+    if (outTypeId) *outTypeId = entropy_object_type_id(obj);
+    if (outClassName) {
+        st = entropy_object_class_name_owned(obj, outClassName);
     }
     entropy_object_release(obj);
     return st;
@@ -209,20 +212,20 @@ struct OwnerVTable
     EntropyResolveFn resolve;
     EntropyValidateFn validate;
 };
-static std::unordered_map<const void*, OwnerVTable> g_ownerVTables;
-static std::mutex g_ownerVTablesMutex;
+static std::unordered_map<const void*, OwnerVTable> sOwnerVTables;
+static std::mutex sOwnerVTablesMutex;
 
 ENTROPY_API void entropy_register_owner_vtable(const void* owner, EntropyResolveFn resolve,
                                                EntropyValidateFn validate) {
-    std::lock_guard<std::mutex> lock(g_ownerVTablesMutex);
-    g_ownerVTables[owner] = OwnerVTable{resolve, validate};
+    std::lock_guard<std::mutex> lock(sOwnerVTablesMutex);
+    sOwnerVTables[owner] = OwnerVTable{resolve, validate};
 }
 
 ENTROPY_API EntropyObjectRef* entropy_resolve_handle(EntropyHandle h) {
     if (!h.owner) return nullptr;
-    std::lock_guard<std::mutex> lock(g_ownerVTablesMutex);
-    auto it = g_ownerVTables.find(h.owner);
-    if (it == g_ownerVTables.end()) return nullptr;
+    std::lock_guard<std::mutex> lock(sOwnerVTablesMutex);
+    auto it = sOwnerVTables.find(h.owner);
+    if (it == sOwnerVTables.end()) return nullptr;
     auto fn = it->second.resolve;
     if (!fn) return nullptr;
     // Contract: resolve returns a RETAINED pointer if valid; otherwise NULL

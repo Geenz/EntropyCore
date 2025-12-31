@@ -28,7 +28,7 @@ namespace Core
 namespace Concurrency
 {
 
-bool NodeScheduler::scheduleNode(NodeHandle node) {
+bool NodeScheduler::scheduleNode(const NodeHandle& node) {
     if (_config.enableDebugLogging) {
         ENTROPY_LOG_DEBUG_CAT("NodeScheduler", "scheduleNode() called");
     }
@@ -89,7 +89,7 @@ bool NodeScheduler::scheduleNode(NodeHandle node) {
     return true;
 }
 
-bool NodeScheduler::deferNode(NodeHandle node) {
+bool NodeScheduler::deferNode(const NodeHandle& node) {
     std::lock_guard<std::shared_mutex> lock(_deferredMutex);  // Exclusive lock for modifying queue
 
     if (_config.enableDebugLogging) {
@@ -217,7 +217,7 @@ size_t NodeScheduler::scheduleReadyNodes(const std::vector<NodeHandle>& nodes) {
     return scheduled;
 }
 
-std::function<void()> NodeScheduler::createWorkWrapper(NodeHandle node) {
+std::function<void()> NodeScheduler::createWorkWrapper(const NodeHandle& node) {
     return [this, node]() {
         // Check if scheduler has been destroyed
         if (_destroyed.load(std::memory_order_acquire)) {
@@ -327,13 +327,13 @@ void NodeScheduler::updateStats(bool scheduled, bool deferred, bool dropped) {
     }
 }
 
-void NodeScheduler::publishScheduledEvent(NodeHandle node) {
+void NodeScheduler::publishScheduledEvent(const NodeHandle& node) {
     if (_eventBus) {
         _eventBus->publish(NodeScheduledEvent(_graph, node));
     }
 }
 
-void NodeScheduler::publishDeferredEvent(NodeHandle node) {
+void NodeScheduler::publishDeferredEvent(const NodeHandle& node) {
     if (_eventBus) {
         // Note: This is called from deferNode() which already holds an exclusive lock
         // We can safely read the queue size here without additional locking
@@ -342,7 +342,7 @@ void NodeScheduler::publishDeferredEvent(NodeHandle node) {
     }
 }
 
-bool NodeScheduler::deferNodeUntil(NodeHandle node, std::chrono::steady_clock::time_point wakeTime) {
+bool NodeScheduler::deferNodeUntil(const NodeHandle& node, std::chrono::steady_clock::time_point wakeTime) {
     std::lock_guard<std::shared_mutex> lock(_timedDeferredMutex);
 
     if (_config.enableDebugLogging) {

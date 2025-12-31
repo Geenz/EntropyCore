@@ -149,8 +149,7 @@ public:
      * @param context Current thread context
      * @return Selected group or nullptr if no work available
      */
-    ScheduleResult selectNextGroup(const std::vector<WorkContractGroup*>& groups,
-                                   const SchedulingContext& context) override;
+    ScheduleResult selectNextGroup(const std::vector<WorkContractGroup*>& groups) override;
 
     /**
      * @brief Updates execution counters for affinity tracking

@@ -88,7 +88,7 @@ WorkGraph::WorkGraph(WorkContractGroup* workContractGroup, const WorkGraphConfig
             }
         }
     };
-    callbacks.onNodeCompleted = [this](NodeHandle node) {
+    callbacks.onNodeCompleted = [this](const NodeHandle& node) {
         CallbackGuard guard(this);
         if (!_destroyed.load(std::memory_order_acquire)) {
             if (_config.enableDebugLogging) {
@@ -598,7 +598,7 @@ void WorkGraph::execute() {
     }
 }
 
-bool WorkGraph::scheduleNode(NodeHandle node) {
+bool WorkGraph::scheduleNode(const NodeHandle& node) {
     // Check if suspended
     if (_suspended.load(std::memory_order_acquire)) {
         if (_config.enableDebugLogging) {
@@ -612,7 +612,7 @@ bool WorkGraph::scheduleNode(NodeHandle node) {
         ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph::scheduleNode() called");
     }
     // Always delegate to the scheduler component
-    bool result = _scheduler->scheduleNode(std::move(node));
+    bool result = _scheduler->scheduleNode(node);
     if (_config.enableDebugLogging) {
         ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph::scheduleNode() completed");
     }

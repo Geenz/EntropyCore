@@ -19,7 +19,7 @@ namespace EntropyEngine::Core::IO
 
 // Constructor / Destructor
 VirtualFileSystem::VirtualFileSystem(EntropyEngine::Core::Concurrency::WorkContractGroup* group, Config cfg)
-    : _group(group), _cfg(cfg), _watchManager(std::make_unique<FileWatchManager>(this)) {}
+    : _group(group), _cfg(std::move(cfg)), _watchManager(std::make_unique<FileWatchManager>(this)) {}
 
 VirtualFileSystem::~VirtualFileSystem() {
     // Ensure FileWatchManager is destroyed before WorkContractGroup is potentially destroyed
@@ -231,7 +231,7 @@ void VirtualFileSystem::setDefaultBackend(std::shared_ptr<IFileSystemBackend> ba
     if (backend) {
         backend->setVirtualFileSystem(this);
     }
-    _defaultBackend = backend;
+    _defaultBackend = std::move(backend);
 }
 
 void VirtualFileSystem::mountBackend(const std::string& prefix, std::shared_ptr<IFileSystemBackend> backend) {
@@ -239,7 +239,7 @@ void VirtualFileSystem::mountBackend(const std::string& prefix, std::shared_ptr<
     if (backend) {
         backend->setVirtualFileSystem(this);
     }
-    _mountedBackends[prefix] = backend;
+    _mountedBackends[prefix] = std::move(backend);
 }
 
 std::shared_ptr<IFileSystemBackend> VirtualFileSystem::findBackend(const std::string& path) const {

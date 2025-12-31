@@ -22,7 +22,7 @@ namespace Core
 namespace Concurrency
 {
 
-bool NodeStateManager::transitionState(NodeHandle node, NodeState from, NodeState to) {
+bool NodeStateManager::transitionState(const NodeHandle& node, NodeState from, NodeState to) {
     // Validate transition
     if (!canTransition(from, to)) {
         // Log warning for invalid state transition attempts
@@ -60,7 +60,7 @@ bool NodeStateManager::transitionState(NodeHandle node, NodeState from, NodeStat
     return true;
 }
 
-void NodeStateManager::forceState(NodeHandle node, NodeState to) {
+void NodeStateManager::forceState(const NodeHandle& node, NodeState to) {
     auto* dag = node.handleOwnerAs<Graph::DirectedAcyclicGraph<WorkGraphNode>>();
     auto* nodeData = dag ? dag->getNodeData(node) : nullptr;
     if (!nodeData) {
@@ -78,7 +78,7 @@ void NodeStateManager::forceState(NodeHandle node, NodeState to) {
     publishStateChange(node, from, to);
 }
 
-NodeState NodeStateManager::getState(NodeHandle node) const {
+NodeState NodeStateManager::getState(const NodeHandle& node) const {
     auto* dag = node.handleOwnerAs<Graph::DirectedAcyclicGraph<WorkGraphNode>>();
     auto* nodeData = dag ? dag->getNodeData(node) : nullptr;
     if (!nodeData) {
@@ -88,7 +88,7 @@ NodeState NodeStateManager::getState(NodeHandle node) const {
     return nodeData->state.load(std::memory_order_acquire);
 }
 
-void NodeStateManager::registerNode(NodeHandle node, NodeState initialState) {
+void NodeStateManager::registerNode(const NodeHandle& node, NodeState initialState) {
     auto* dag = node.handleOwnerAs<Graph::DirectedAcyclicGraph<WorkGraphNode>>();
     auto* nodeData = dag ? dag->getNodeData(node) : nullptr;
     if (!nodeData) {
@@ -124,6 +124,9 @@ void NodeStateManager::registerNode(NodeHandle node, NodeState initialState) {
             break;
         case NodeState::Cancelled:
             _stats.cancelledNodes.fetch_add(1, std::memory_order_relaxed);
+            break;
+        case NodeState::Yielded:
+            // Yielded is a transitional state, no separate counter
             break;
     }
 }
@@ -185,6 +188,9 @@ void NodeStateManager::updateStats(NodeState oldState, NodeState newState) {
             if (_stats.cancelledNodes.load(std::memory_order_relaxed) > 0)
                 _stats.cancelledNodes.fetch_sub(1, std::memory_order_relaxed);
             break;
+        case NodeState::Yielded:
+            // Yielded is a transitional state, no separate counter
+            break;
     }
 
     // Atomically increment new state counter
@@ -210,10 +216,13 @@ void NodeStateManager::updateStats(NodeState oldState, NodeState newState) {
         case NodeState::Cancelled:
             _stats.cancelledNodes.fetch_add(1, std::memory_order_relaxed);
             break;
+        case NodeState::Yielded:
+            // Yielded is a transitional state, no separate counter
+            break;
     }
 }
 
-void NodeStateManager::publishStateChange(NodeHandle node, NodeState from, NodeState to) {
+void NodeStateManager::publishStateChange(const NodeHandle& node, NodeState from, NodeState to) {
     if (!_eventBus) {
         return;  // No event bus configured
     }

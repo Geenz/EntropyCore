@@ -37,19 +37,19 @@ bool EntropyServiceRegistry::registerService(std::shared_ptr<EntropyService> ser
         if (it->second.service) {
             HandleSlotOps::release(*it->second.service, it->second.generation);
         }
-        it->second.service = service;
+        it->second.service = std::move(service);
         // Stamp with new generation
-        HandleSlotOps::stamp(*service, this, it->second.slotIndex, it->second.generation);
+        HandleSlotOps::stamp(*it->second.service, this, it->second.slotIndex, it->second.generation);
         return false;  // Not a new insertion
     }
 
     // New service - create slot
     ServiceSlot slot;
-    slot.service = service;
+    slot.service = std::move(service);
     slot.slotIndex = _nextSlotIndex++;
 
     // Stamp service with handle identity
-    HandleSlotOps::stamp(*service, this, slot.slotIndex, slot.generation);
+    HandleSlotOps::stamp(*slot.service, this, slot.slotIndex, slot.generation);
 
     _slots[tid] = std::move(slot);
     return true;

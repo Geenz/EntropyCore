@@ -164,16 +164,16 @@ FileWatch* FileWatchManager::createWatch(const std::string& path, FileWatchCallb
         }
 
         // Allocate slot
-        auto slot_info = allocateSlot();
-        index = slot_info.first;
-        generation = slot_info.second;
+        auto slotInfo = allocateSlot();
+        index = slotInfo.first;
+        generation = slotInfo.second;
         if (index == UINT32_MAX) {
             ENTROPY_LOG_ERROR("Failed to allocate watch slot (out of slots)");
             return nullptr;
         }
 
         // Create FileWatch object (refcount starts at 1)
-        watch = new FileWatch(this, path, callback, options);
+        watch = new FileWatch(this, path, std::move(callback), options);
 
         // Stamp the object with handle identity using EntropyObject's built-in facility
         HandleAccess::set(*watch, this, index, generation);

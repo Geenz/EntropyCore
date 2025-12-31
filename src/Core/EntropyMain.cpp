@@ -31,7 +31,7 @@ struct CppDelegate : EntropyEngine::Core::EntropyAppDelegate
     void applicationWillTerminate() override {
         if (del.will_terminate) del.will_terminate((EntropyApp*)app, del.userdata);
     }
-    void applicationDidCatchUnhandledException(std::exception_ptr) override {
+    void applicationDidCatchUnhandledException([[maybe_unused]] std::exception_ptr ex) override {
         if (del.did_catch_unhandled_exception) del.did_catch_unhandled_exception((EntropyApp*)app, del.userdata);
     }
 };

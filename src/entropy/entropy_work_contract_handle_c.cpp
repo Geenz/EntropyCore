@@ -23,7 +23,7 @@ namespace
 {
 
 // Centralized exception translation for WorkContractHandle operations
-void translate_exception(EntropyStatus* status) {
+void translateException(EntropyStatus* status) {
     if (!status) return;
 
     try {
@@ -40,17 +40,12 @@ void translate_exception(EntropyStatus* status) {
 }
 
 // Safe cast from opaque handle to C++ object
-inline WorkContractHandle* to_cpp(entropy_WorkContractHandle handle) {
+inline WorkContractHandle* toCpp(entropy_WorkContractHandle handle) {
     return reinterpret_cast<WorkContractHandle*>(handle);
 }
 
-// Safe cast from C++ object to opaque handle
-inline entropy_WorkContractHandle to_c(WorkContractHandle* handle) {
-    return reinterpret_cast<entropy_WorkContractHandle>(handle);
-}
-
 // Convert C++ ScheduleResult to C enum
-EntropyScheduleResult to_c_schedule_result(ScheduleResult result) {
+EntropyScheduleResult toCScheduleResult(ScheduleResult result) {
     switch (result) {
         case ScheduleResult::Scheduled:
             return ENTROPY_SCHEDULE_SCHEDULED;
@@ -61,27 +56,8 @@ EntropyScheduleResult to_c_schedule_result(ScheduleResult result) {
         case ScheduleResult::Executing:
             return ENTROPY_SCHEDULE_EXECUTING;
         case ScheduleResult::Invalid:
-            return ENTROPY_SCHEDULE_INVALID;
         default:
             return ENTROPY_SCHEDULE_INVALID;
-    }
-}
-
-// Convert C++ ContractState to C enum
-EntropyContractState to_c_contract_state(ContractState state) {
-    switch (state) {
-        case ContractState::Free:
-            return ENTROPY_CONTRACT_FREE;
-        case ContractState::Allocated:
-            return ENTROPY_CONTRACT_ALLOCATED;
-        case ContractState::Scheduled:
-            return ENTROPY_CONTRACT_SCHEDULED;
-        case ContractState::Executing:
-            return ENTROPY_CONTRACT_EXECUTING;
-        case ContractState::Completed:
-            return ENTROPY_CONTRACT_COMPLETED;
-        default:
-            return ENTROPY_CONTRACT_FREE;
     }
 }
 
@@ -103,11 +79,11 @@ EntropyScheduleResult entropy_work_contract_schedule(entropy_WorkContractHandle 
     }
 
     try {
-        WorkContractHandle* cpp_handle = to_cpp(handle);
-        ScheduleResult result = cpp_handle->schedule();
-        return to_c_schedule_result(result);
+        WorkContractHandle* cppHandle = toCpp(handle);
+        ScheduleResult result = cppHandle->schedule();
+        return toCScheduleResult(result);
     } catch (...) {
-        translate_exception(status);
+        translateException(status);
         return ENTROPY_SCHEDULE_INVALID;
     }
 }
@@ -122,11 +98,11 @@ EntropyScheduleResult entropy_work_contract_unschedule(entropy_WorkContractHandl
     }
 
     try {
-        WorkContractHandle* cpp_handle = to_cpp(handle);
-        ScheduleResult result = cpp_handle->unschedule();
-        return to_c_schedule_result(result);
+        WorkContractHandle* cppHandle = toCpp(handle);
+        ScheduleResult result = cppHandle->unschedule();
+        return toCScheduleResult(result);
     } catch (...) {
-        translate_exception(status);
+        translateException(status);
         return ENTROPY_SCHEDULE_INVALID;
     }
 }
@@ -135,8 +111,8 @@ EntropyBool entropy_work_contract_is_valid(entropy_WorkContractHandle handle) {
     if (!handle) return ENTROPY_FALSE;
 
     try {
-        WorkContractHandle* cpp_handle = to_cpp(handle);
-        return cpp_handle->valid() ? ENTROPY_TRUE : ENTROPY_FALSE;
+        WorkContractHandle* cppHandle = toCpp(handle);
+        return cppHandle->valid() ? ENTROPY_TRUE : ENTROPY_FALSE;
     } catch (...) {
         return ENTROPY_FALSE;
     }
@@ -146,8 +122,8 @@ void entropy_work_contract_release(entropy_WorkContractHandle handle) {
     if (!handle) return;
 
     try {
-        WorkContractHandle* cpp_handle = to_cpp(handle);
-        cpp_handle->release();
+        WorkContractHandle* cppHandle = toCpp(handle);
+        cppHandle->release();
         // Note: We don't delete the C++ object here because it might still be
         // referenced by the user. The handle becomes invalid but the object remains.
         // This matches the C++ API semantics where handles are value types.
@@ -160,8 +136,8 @@ void entropy_work_contract_handle_destroy(entropy_WorkContractHandle handle) {
     if (!handle) return;
 
     // Delete the heap-allocated wrapper created by entropy_work_contract_group_create_contract
-    WorkContractHandle* cpp_handle = to_cpp(handle);
-    delete cpp_handle;
+    WorkContractHandle* cppHandle = toCpp(handle);
+    delete cppHandle;
 }
 
 EntropyBool entropy_work_contract_is_scheduled(entropy_WorkContractHandle handle, EntropyStatus* status) {
@@ -174,10 +150,10 @@ EntropyBool entropy_work_contract_is_scheduled(entropy_WorkContractHandle handle
     }
 
     try {
-        WorkContractHandle* cpp_handle = to_cpp(handle);
-        return cpp_handle->isScheduled() ? ENTROPY_TRUE : ENTROPY_FALSE;
+        WorkContractHandle* cppHandle = toCpp(handle);
+        return cppHandle->isScheduled() ? ENTROPY_TRUE : ENTROPY_FALSE;
     } catch (...) {
-        translate_exception(status);
+        translateException(status);
         return ENTROPY_FALSE;
     }
 }
@@ -192,10 +168,10 @@ EntropyBool entropy_work_contract_is_executing(entropy_WorkContractHandle handle
     }
 
     try {
-        WorkContractHandle* cpp_handle = to_cpp(handle);
-        return cpp_handle->isExecuting() ? ENTROPY_TRUE : ENTROPY_FALSE;
+        WorkContractHandle* cppHandle = toCpp(handle);
+        return cppHandle->isExecuting() ? ENTROPY_TRUE : ENTROPY_FALSE;
     } catch (...) {
-        translate_exception(status);
+        translateException(status);
         return ENTROPY_FALSE;
     }
 }
@@ -210,24 +186,24 @@ EntropyContractState entropy_work_contract_get_state(entropy_WorkContractHandle 
     }
 
     try {
-        WorkContractHandle* cpp_handle = to_cpp(handle);
+        WorkContractHandle* cppHandle = toCpp(handle);
 
         // Query the state through the group since WorkContractHandle
         // doesn't expose getState() directly. We need to get the owner.
         // Actually, looking at the interface, we can determine state from
         // the public methods.
 
-        if (!cpp_handle->valid()) {
+        if (!cppHandle->valid()) {
             return ENTROPY_CONTRACT_FREE;
-        } else if (cpp_handle->isExecuting()) {
+        } else if (cppHandle->isExecuting()) {
             return ENTROPY_CONTRACT_EXECUTING;
-        } else if (cpp_handle->isScheduled()) {
+        } else if (cppHandle->isScheduled()) {
             return ENTROPY_CONTRACT_SCHEDULED;
         } else {
             return ENTROPY_CONTRACT_ALLOCATED;
         }
     } catch (...) {
-        translate_exception(status);
+        translateException(status);
         return ENTROPY_CONTRACT_FREE;
     }
 }

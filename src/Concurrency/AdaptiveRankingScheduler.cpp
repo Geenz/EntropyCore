@@ -26,8 +26,8 @@ thread_local AdaptiveRankingScheduler::ThreadState AdaptiveRankingScheduler::stT
 
 AdaptiveRankingScheduler::AdaptiveRankingScheduler(const Config& config) : _config(config) {}
 
-IWorkScheduler::ScheduleResult AdaptiveRankingScheduler::selectNextGroup(const std::vector<WorkContractGroup*>& groups,
-                                                                         const SchedulingContext& context) {
+IWorkScheduler::ScheduleResult AdaptiveRankingScheduler::selectNextGroup(
+    const std::vector<WorkContractGroup*>& groups) {
     // Phase 1: Try to execute from the current sticky group for cache locality
     if (stThreadState.consecutiveExecutionCount < _config.maxConsecutiveExecutionCount) {
         WorkContractGroup* stickyGroup = getCurrentGroupIfValid();

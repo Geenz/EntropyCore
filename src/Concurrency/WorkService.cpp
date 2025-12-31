@@ -222,11 +222,8 @@ void WorkService::executeWork(const std::stop_token& token) {
             std::shared_lock<std::shared_mutex> lock(_workContractGroupsMutex);
 
             if (!_workContractGroups.empty()) {
-                // Create scheduling context
-                IWorkScheduler::SchedulingContext context{stThreadId, stSoftFailureCount, lastExecutedGroup};
-
                 // Ask scheduler for next group - reads directly from _workContractGroups
-                auto scheduleResult = _scheduler->selectNextGroup(_workContractGroups, context);
+                auto scheduleResult = _scheduler->selectNextGroup(_workContractGroups);
 
                 // Select group if valid and not stopping
                 if (scheduleResult.group && !scheduleResult.group->isStopping()) {
@@ -305,7 +302,7 @@ void WorkService::checkTimedDeferrals() {
     }
 }
 
-void WorkService::notifyWorkAvailable(WorkContractGroup* group) {
+void WorkService::notifyWorkAvailable([[maybe_unused]] WorkContractGroup* group) {
     // We don't need to track which group has work, just that work is available
     _workAvailable = true;
     _workAvailableCV.notify_one();
