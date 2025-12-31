@@ -29,10 +29,14 @@ endif()
 # Back-compat shim: mirror to existing variable used throughout the file
 set(ENTROPY_BUILD_TESTS ${ENTROPY_ENABLE_TESTS} CACHE BOOL "Build tests for EntropyCore (deprecated; use ENTROPY_ENABLE_TESTS)" FORCE)
 
-# Set C++20 standard with modules support
+# Set C++20 standard (modules not used)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
+# Disable automatic C++20 module scanning - this project doesn't use modules
+# and the auto-scanning generates Clang-specific flags that GCC doesn't support
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
 # Configure sanitizers
 # Configure sanitizers
