@@ -24,8 +24,8 @@ if ! command_exists pre-commit; then
         elif command_exists pip3; then
             pip3 install pre-commit
         else
-             echo "Error: pip/pip3 not found. Please install pre-commit manually."
-             exit 1
+            echo "Error: pip/pip3 not found. Please install pre-commit manually."
+            exit 1
         fi
     fi
 fi
