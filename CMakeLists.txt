@@ -38,6 +38,11 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # and the auto-scanning generates Clang-specific flags that GCC doesn't support
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
+# MSVC-specific: Enable conforming preprocessor for C++20 __VA_OPT__ support
+if(MSVC)
+    add_compile_options(/Zc:preprocessor)
+endif()
+
 # Configure sanitizers
 # Configure sanitizers
 # Always enable ASAN+UBSAN for Debug builds on minimal supported compilers
