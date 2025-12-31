@@ -11,38 +11,46 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <functional>
 #include <memory>
-#include <string>
 #include <mutex>
-#include <condition_variable>
+#include <string>
 #include <thread>
+
 #include "Core/EntropyServiceRegistry.h"
 
 #if defined(_WIN32)
 #endif
 
-namespace EntropyEngine { namespace Core {
+namespace EntropyEngine
+{
+namespace Core
+{
 
-
-class EntropyAppDelegate {
+class EntropyAppDelegate
+{
 public:
     virtual ~EntropyAppDelegate() = default;
     virtual void applicationWillFinishLaunching() {}
     virtual void applicationDidFinishLaunching() {}
-    virtual bool applicationShouldTerminate() { return true; }
+    virtual bool applicationShouldTerminate() {
+        return true;
+    }
     virtual void applicationWillTerminate() {}
     virtual void applicationDidCatchUnhandledException(std::exception_ptr) {}
     virtual void applicationMainLoop() {}
 };
 
-struct EntropyApplicationConfig {
-    size_t workerThreads = 0; // 0 => auto
+struct EntropyApplicationConfig
+{
+    size_t workerThreads = 0;  // 0 => auto
     std::chrono::milliseconds shutdownDeadline{3000};
 };
 
-class EntropyApplication {
+class EntropyApplication
+{
 public:
     static EntropyApplication& shared();
     static std::shared_ptr<EntropyApplication> sharedPtr();
@@ -55,10 +63,16 @@ public:
     void terminate(int code);  // thread-safe, idempotent
 
     // Services access
-    EntropyServiceRegistry& services() { return _services; }
+    EntropyServiceRegistry& services() {
+        return _services;
+    }
 
-    int exitCode() const { return _exitCode.load(); }
-    bool isRunning() const noexcept { return _running.load(); }
+    int exitCode() const {
+        return _exitCode.load();
+    }
+    bool isRunning() const noexcept {
+        return _running.load();
+    }
 
 #if defined(_WIN32)
     // Exposed for console control handler forwarder
@@ -101,15 +115,15 @@ private:
     std::atomic<bool> _signalSeen{false};
     std::atomic<bool> _escalationStarted{false};
     // Signal handling internals
-    void* _ctrlEvent{nullptr};      // HANDLE, kept as void* to avoid windows.h in header (auto-reset)
-    void* _terminateEvent{nullptr}; // HANDLE, kept as void* (manual-reset)
+    void* _ctrlEvent{nullptr};       // HANDLE, kept as void* to avoid windows.h in header (auto-reset)
+    void* _terminateEvent{nullptr};  // HANDLE, kept as void* (manual-reset)
     std::atomic<unsigned long> _lastCtrlType{0};
 #else
     std::atomic<bool> _handlersInstalled{false};
     std::atomic<bool> _signalSeen{false};
     std::atomic<bool> _escalationStarted{false};
     // Unix signal handling internals
-    int _signalPipe[2]{-1, -1};     // Pipe for signal-safe notification
+    int _signalPipe[2]{-1, -1};  // Pipe for signal-safe notification
     std::atomic<int> _lastSignal{0};
 #endif
 
@@ -118,4 +132,5 @@ private:
     std::condition_variable _loopCv;
 };
 
-}} // namespace EntropyEngine::Core
+}  // namespace Core
+}  // namespace EntropyEngine

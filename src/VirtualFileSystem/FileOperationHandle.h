@@ -1,22 +1,30 @@
 #pragma once
-#include <memory>
-#include <vector>
-#include <string>
-#include <span>
 #include <atomic>
-#include <latch>
-#include <mutex>
-#include <condition_variable>
-#include <string_view>
-#include <cstddef>
-#include <optional>
-#include <system_error>
 #include <chrono>
+#include <condition_variable>
+#include <cstddef>
 #include <functional>
+#include <latch>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
+#include <system_error>
+#include <vector>
 
-namespace EntropyEngine::Core::IO {
+namespace EntropyEngine::Core::IO
+{
 
-enum class FileOpStatus { Pending, Running, Partial, Complete, Failed };
+enum class FileOpStatus
+{
+    Pending,
+    Running,
+    Partial,
+    Complete,
+    Failed
+};
 
 /**
  * Public error taxonomy surfaced by VFS operations.
@@ -30,7 +38,8 @@ enum class FileOpStatus { Pending, Running, Partial, Complete, Failed };
  * - Timeout: bounded waits exceeded (advisory lock or backend scope)
  * - Conflict: contention detected (backend Busy without fallback)
  */
-enum class FileError {
+enum class FileError
+{
     None = 0,
     FileNotFound,
     AccessDenied,
@@ -50,7 +59,8 @@ enum class FileError {
  * Conflict, Timeout from advisory locking, or FileNotFound determined by preconditions,
  * systemError may be empty; message should remain informative.
  */
-struct FileErrorInfo {
+struct FileErrorInfo
+{
     FileError code = FileError::None;
     std::string message;
     std::optional<std::error_code> systemError;
@@ -58,7 +68,8 @@ struct FileErrorInfo {
 };
 
 // File metadata - defined here so OpState can use it
-struct FileMetadata {
+struct FileMetadata
+{
     std::string path;
     bool exists = false;
     bool isDirectory = false;
@@ -73,15 +84,17 @@ struct FileMetadata {
 };
 
 // Directory entry with metadata - defined here so OpState can use it
-struct DirectoryEntry {
-    std::string name;           // Just the filename, not full path
-    std::string fullPath;       // Complete absolute path
-    FileMetadata metadata;      // Full metadata for this entry
+struct DirectoryEntry
+{
+    std::string name;       // Just the filename, not full path
+    std::string fullPath;   // Complete absolute path
+    FileMetadata metadata;  // Full metadata for this entry
     bool isSymlink = false;
     std::optional<std::string> symlinkTarget;
 };
 
-class FileOperationHandle {
+class FileOperationHandle
+{
 public:
     FileOperationHandle() = default;
 
@@ -124,7 +137,8 @@ public:
      * return FileOperationHandle(state);
      * @endcode
      */
-    struct OpState {
+    struct OpState
+    {
         std::atomic<FileOpStatus> st{FileOpStatus::Pending};
         mutable std::mutex completionMutex;
         mutable std::condition_variable completionCV;
@@ -134,13 +148,13 @@ public:
         std::function<void()> progress;
 
         // Result data - only valid after completion
-        std::vector<uint8_t> bytes;    // for reads
-        uint64_t wrote = 0;              // for writes
-        FileErrorInfo error;             // error details if failed
-        std::string text;                // for text preview/read operations
-        std::optional<FileMetadata> metadata;  // for metadata queries
+        std::vector<uint8_t> bytes;                    // for reads
+        uint64_t wrote = 0;                            // for writes
+        FileErrorInfo error;                           // error details if failed
+        std::string text;                              // for text preview/read operations
+        std::optional<FileMetadata> metadata;          // for metadata queries
         std::vector<DirectoryEntry> directoryEntries;  // for directory listings
-        std::vector<FileMetadata> metadataBatch;  // for batch metadata queries
+        std::vector<FileMetadata> metadataBatch;       // for batch metadata queries
 
         void complete(FileOpStatus final) noexcept {
             {
@@ -151,9 +165,8 @@ public:
             completionCV.notify_all();
         }
 
-        void setError(FileError code, const std::string& msg,
-                     const std::string& path = "",
-                     std::optional<std::error_code> ec = std::nullopt) {
+        void setError(FileError code, const std::string& msg, const std::string& path = "",
+                      std::optional<std::error_code> ec = std::nullopt) {
             error.code = code;
             error.message = msg;
             error.path = path;
@@ -183,4 +196,4 @@ private:
     friend class FileWatchManager;
 };
 
-} // namespace EntropyEngine::Core::IO
+}  // namespace EntropyEngine::Core::IO

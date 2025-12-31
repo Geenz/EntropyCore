@@ -1,17 +1,20 @@
 #include "FileOperationHandle.h"
-#include "IFileSystemBackend.h"
+
 #include <chrono>
 
-namespace EntropyEngine::Core::IO {
+#include "IFileSystemBackend.h"
+
+namespace EntropyEngine::Core::IO
+{
 
 void FileOperationHandle::wait() const {
     if (!_s) return;
-    
+
     // Fast path - already complete
     if (_s->isComplete.load(std::memory_order_acquire)) {
         return;
     }
-    
+
     // Slow path - wait for completion with cooperative progress pumping
     std::unique_lock<std::mutex> lock(_s->completionMutex);
     while (!_s->isComplete.load(std::memory_order_acquire)) {
@@ -25,9 +28,8 @@ void FileOperationHandle::wait() const {
             // Swallow exceptions in progress to avoid breaking wait semantics
         }
         lock.lock();
-        _s->completionCV.wait_for(lock, std::chrono::milliseconds(1), [this]{
-            return _s->isComplete.load(std::memory_order_acquire);
-        });
+        _s->completionCV.wait_for(lock, std::chrono::milliseconds(1),
+                                  [this] { return _s->isComplete.load(std::memory_order_acquire); });
     }
 }
 
@@ -65,12 +67,12 @@ std::string FileOperationHandle::contentsText() const {
 
 uint64_t FileOperationHandle::bytesWritten() const {
     if (!_s) return 0ULL;
-    
+
     // Ensure operation is complete before accessing data
     if (!_s->isComplete.load(std::memory_order_acquire)) {
         wait();
     }
-    
+
     return _s->wrote;
 }
 
@@ -135,4 +137,4 @@ std::shared_ptr<FileOperationHandle::OpState> FileOperationHandle::makeState() {
 
 FileOperationHandle::FileOperationHandle(std::shared_ptr<OpState> s) : _s(std::move(s)) {}
 
-} // namespace EntropyEngine::Core::IO
+}  // namespace EntropyEngine::Core::IO

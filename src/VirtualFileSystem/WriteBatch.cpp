@@ -1,12 +1,14 @@
 #include "WriteBatch.h"
-#include "VirtualFileSystem.h"
-#include "FileHandle.h"
-#include <fstream>
-#include <filesystem>
-#include <sstream>
+
 #include <algorithm>
-#include <random>
+#include <filesystem>
+#include <fstream>
 #include <map>
+#include <random>
+#include <sstream>
+
+#include "FileHandle.h"
+#include "VirtualFileSystem.h"
 
 #if defined(_WIN32)
 static std::string vfs_toWinLongPath(const std::string& path) {
@@ -24,17 +26,16 @@ static std::string vfs_toWinLongPath(const std::string& path) {
 #include <windows.h>
 #endif
 #if defined(__unix__) || defined(__APPLE__)
-#include <unistd.h>     // mkstemp(), close(), fsync()
-#include <sys/stat.h>   // stat(), chmod()
-#include <sys/file.h>   // flock()
-#include <fcntl.h>      // open(), O_*
+#include <fcntl.h>     // open(), O_*
+#include <sys/file.h>  // flock()
+#include <sys/stat.h>  // stat(), chmod()
+#include <unistd.h>    // mkstemp(), close(), fsync()
 #endif
 
-namespace EntropyEngine::Core::IO {
+namespace EntropyEngine::Core::IO
+{
 
-WriteBatch::WriteBatch(VirtualFileSystem* vfs, std::string path) 
-    : _vfs(vfs), _path(std::move(path)) {
-}
+WriteBatch::WriteBatch(VirtualFileSystem* vfs, std::string path) : _vfs(vfs), _path(std::move(path)) {}
 
 WriteBatch& WriteBatch::writeLine(size_t lineNumber, std::string_view content) {
     _operations.push_back({OpType::Write, lineNumber, std::string(content)});
@@ -146,7 +147,7 @@ std::vector<std::string> WriteBatch::applyOperations(const std::vector<std::stri
 
     // Process Delete operations (highest index first to avoid shifting issues)
     std::sort(deleteOps.begin(), deleteOps.end(),
-        [](const Operation& a, const Operation& b) { return a.lineNumber > b.lineNumber; });
+              [](const Operation& a, const Operation& b) { return a.lineNumber > b.lineNumber; });
     for (const auto& op : deleteOps) {
         if (op.lineNumber < result.size()) {
             result.erase(result.begin() + op.lineNumber);
@@ -155,7 +156,7 @@ std::vector<std::string> WriteBatch::applyOperations(const std::vector<std::stri
 
     // Process Insert operations BEFORE writes (highest index first to avoid shifting issues)
     std::sort(insertOps.begin(), insertOps.end(),
-        [](const Operation& a, const Operation& b) { return a.lineNumber > b.lineNumber; });
+              [](const Operation& a, const Operation& b) { return a.lineNumber > b.lineNumber; });
     for (const auto& op : insertOps) {
         if (op.lineNumber > result.size()) {
             result.resize(op.lineNumber);
@@ -191,20 +192,24 @@ FileOperationHandle WriteBatch::commit(const WriteOptions& opts) {
         // No operations to commit - return immediate success
         return FileOperationHandle::immediate(FileOpStatus::Complete);
     }
-    
+
     auto backend = _vfs->findBackend(_path);
     auto vfsLock = _vfs->lockForPath(_path);
 
-    return _vfs->submit(_path, [this, backend, vfsLock, ops = _operations, opts](FileOperationHandle::OpState& s, const std::string& p, const ExecContext&) mutable {
+    return _vfs->submit(_path, [this, backend, vfsLock, ops = _operations, opts](
+                                   FileOperationHandle::OpState& s, const std::string& p, const ExecContext&) mutable {
         // Prefer backend-provided write scope; fall back to VFS advisory lock with policy/timeout
-        std::unique_ptr<void, void(*)(void*)> scopeToken(nullptr, [](void*){});
+        std::unique_ptr<void, void (*)(void*)> scopeToken(nullptr, [](void*) {});
         IFileSystemBackend::AcquireWriteScopeResult scopeRes;
         if (backend) {
             IFileSystemBackend::AcquireScopeOptions scopeOpts;
             scopeOpts.nonBlocking = false;
-            auto pol = _vfs ? _vfs->_cfg.advisoryFallback : VirtualFileSystem::Config::AdvisoryFallbackPolicy::FallbackWithTimeout;
-            if (pol == VirtualFileSystem::Config::AdvisoryFallbackPolicy::FallbackWithTimeout || pol == VirtualFileSystem::Config::AdvisoryFallbackPolicy::None) {
-                scopeOpts.timeout = _vfs ? std::optional<std::chrono::milliseconds>(_vfs->_cfg.advisoryAcquireTimeout) : std::nullopt;
+            auto pol = _vfs ? _vfs->_cfg.advisoryFallback
+                            : VirtualFileSystem::Config::AdvisoryFallbackPolicy::FallbackWithTimeout;
+            if (pol == VirtualFileSystem::Config::AdvisoryFallbackPolicy::FallbackWithTimeout ||
+                pol == VirtualFileSystem::Config::AdvisoryFallbackPolicy::None) {
+                scopeOpts.timeout =
+                    _vfs ? std::optional<std::chrono::milliseconds>(_vfs->_cfg.advisoryAcquireTimeout) : std::nullopt;
             }
             scopeRes = backend->acquireWriteScope(p, scopeOpts);
             if (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::Acquired) {
@@ -212,23 +217,31 @@ FileOperationHandle WriteBatch::commit(const WriteOptions& opts) {
             }
         }
         std::unique_lock<std::timed_mutex> pathLock;
-        auto fallbackPolicy = _vfs ? _vfs->_cfg.advisoryFallback : VirtualFileSystem::Config::AdvisoryFallbackPolicy::FallbackWithTimeout;
+        auto fallbackPolicy =
+            _vfs ? _vfs->_cfg.advisoryFallback : VirtualFileSystem::Config::AdvisoryFallbackPolicy::FallbackWithTimeout;
         if (!scopeToken && vfsLock) {
-            bool needFallback = (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::NotSupported) ||
-                                (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::Acquired && !scopeToken) ||
-                                (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::Busy) ||
-                                (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::TimedOut) ||
-                                (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::Error);
+            bool needFallback =
+                (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::NotSupported) ||
+                (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::Acquired && !scopeToken) ||
+                (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::Busy) ||
+                (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::TimedOut) ||
+                (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::Error);
             if (needFallback) {
                 if ((scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::Busy) ||
                     (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::TimedOut) ||
                     (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::Error)) {
                     if (fallbackPolicy == VirtualFileSystem::Config::AdvisoryFallbackPolicy::None) {
                         FileError code;
-                        if (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::TimedOut) code = FileError::Timeout;
-                        else if (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::Busy) code = FileError::Conflict;
-                        else code = FileError::IOError;
-                        s.setError(code, scopeRes.message.empty() ? std::string("Backend write scope unavailable") : scopeRes.message, p, scopeRes.errorCode);
+                        if (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::TimedOut)
+                            code = FileError::Timeout;
+                        else if (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::Busy)
+                            code = FileError::Conflict;
+                        else
+                            code = FileError::IOError;
+                        s.setError(code,
+                                   scopeRes.message.empty() ? std::string("Backend write scope unavailable")
+                                                            : scopeRes.message,
+                                   p, scopeRes.errorCode);
                         s.complete(FileOpStatus::Failed);
                         return;
                     }
@@ -237,7 +250,10 @@ FileOperationHandle WriteBatch::commit(const WriteOptions& opts) {
                 if (!vfsLock->try_lock_for(_vfs->_cfg.advisoryAcquireTimeout)) {
                     auto key = backend ? backend->normalizeKey(p) : _vfs->normalizePath(p);
                     auto ms = _vfs->_cfg.advisoryAcquireTimeout.count();
-                    s.setError(FileError::Timeout, std::string("Advisory lock acquisition timed out after ") + std::to_string(ms) + " ms (key=" + key + ")", p);
+                    s.setError(FileError::Timeout,
+                               std::string("Advisory lock acquisition timed out after ") + std::to_string(ms) +
+                                   " ms (key=" + key + ")",
+                               p);
                     s.complete(FileOpStatus::Failed);
                     return;
                 }
@@ -248,9 +264,9 @@ FileOperationHandle WriteBatch::commit(const WriteOptions& opts) {
         } else {
             // scopeToken acquired; no advisory lock
         }
-        
+
         std::error_code ec;
-        
+
         // Determine line-ending style and original final-newline presence
         std::string data;
         bool originalFinalNewline = false;
@@ -270,7 +286,8 @@ FileOperationHandle WriteBatch::commit(const WriteOptions& opts) {
             std::ifstream inBin(osPathR, std::ios::in | std::ios::binary);
             if (inBin) {
                 originalExists = true;
-                std::ostringstream ss; ss << inBin.rdbuf();
+                std::ostringstream ss;
+                ss << inBin.rdbuf();
                 data = ss.str();
                 if (!data.empty() && data.back() == '\n') {
                     originalFinalNewline = true;
@@ -278,16 +295,24 @@ FileOperationHandle WriteBatch::commit(const WriteOptions& opts) {
                 size_t crlf = 0, lf = 0;
                 for (size_t i = 0; i < data.size(); ++i) {
                     if (data[i] == '\n') {
-                        if (i > 0 && data[i-1] == '\r') ++crlf; else ++lf;
+                        if (i > 0 && data[i - 1] == '\r')
+                            ++crlf;
+                        else
+                            ++lf;
                     }
                 }
-                if (crlf > lf) eol = "\r\n"; else if (lf > crlf) eol = "\n"; else eol = platformDefaultEol;
+                if (crlf > lf)
+                    eol = "\r\n";
+                else if (lf > crlf)
+                    eol = "\n";
+                else
+                    eol = platformDefaultEol;
             } else {
                 eol = platformDefaultEol;
             }
         }
         if (eol.empty()) eol = platformDefaultEol;
-        
+
         // Parse original lines without EOLs
         std::vector<std::string> originalLines;
         if (!data.empty()) {
@@ -306,10 +331,10 @@ FileOperationHandle WriteBatch::commit(const WriteOptions& opts) {
                 originalLines.push_back(std::move(cur));
             }
         }
-        
+
         // Apply all operations to get final content
         std::vector<std::string> finalLines = applyOperations(originalLines);
-        
+
         // Generate secure temporary filename in the same directory as destination
         auto targetPath = std::filesystem::path(p);
         auto dir = targetPath.parent_path();
@@ -333,7 +358,7 @@ FileOperationHandle WriteBatch::commit(const WriteOptions& opts) {
         // Windows: use random device
         auto tempPath = dir / (base + ".tmp" + std::to_string(std::random_device{}()));
 #endif
-        
+
         // Ensure parent directory exists if configured (effective option)
         const bool createParents = opts.createParentDirs.value_or(_vfs ? _vfs->_cfg.defaultCreateParentDirs : false);
         if (createParents) {
@@ -347,19 +372,29 @@ FileOperationHandle WriteBatch::commit(const WriteOptions& opts) {
                 }
             }
         }
-        
+
         // Optional cross-process serialization via sibling lock file (POSIX)
 #if defined(__unix__) || defined(__APPLE__)
-        struct LockFileToken { int fd = -1; ~LockFileToken(){ if (fd >= 0) { ::flock(fd, LOCK_UN); ::close(fd); } } };
+        struct LockFileToken
+        {
+            int fd = -1;
+            ~LockFileToken() {
+                if (fd >= 0) {
+                    ::flock(fd, LOCK_UN);
+                    ::close(fd);
+                }
+            }
+        };
         std::unique_ptr<LockFileToken> lockToken;
         const bool useLockFile = opts.useLockFile.value_or(_vfs ? _vfs->_cfg.defaultUseLockFile : false);
         if (useLockFile) {
-            auto timeout = opts.lockTimeout.value_or(_vfs ? _vfs->_cfg.lockAcquireTimeout : std::chrono::milliseconds(5000));
+            auto timeout =
+                opts.lockTimeout.value_or(_vfs ? _vfs->_cfg.lockAcquireTimeout : std::chrono::milliseconds(5000));
             auto suffix = opts.lockSuffix.value_or(_vfs ? _vfs->_cfg.lockSuffix : std::string(".lock"));
             std::error_code lockEc;
             bool timedOut = false;
             // Ensure parent directory exists for the lock file
-            (void)createParents; // already handled above
+            (void)createParents;  // already handled above
             auto lockPath = (dir / (base + suffix)).string();
             int fd = ::open(lockPath.c_str(), O_CREAT | O_CLOEXEC | O_RDWR, 0600);
             if (fd < 0) {
@@ -383,7 +418,9 @@ FileOperationHandle WriteBatch::commit(const WriteOptions& opts) {
                     }
                     std::this_thread::sleep_for(std::chrono::milliseconds(10));
                 }
-                if (!lockToken && fd >= 0) { ::close(fd); }
+                if (!lockToken && fd >= 0) {
+                    ::close(fd);
+                }
             }
             if (!lockToken) {
                 if (timedOut) {
@@ -400,10 +437,9 @@ FileOperationHandle WriteBatch::commit(const WriteOptions& opts) {
 #endif
 
         // Decide final newline presence
-        const bool finalNewline = opts.ensureFinalNewline.has_value()
-            ? opts.ensureFinalNewline.value()
-            : (originalExists ? originalFinalNewline : true);
-        
+        const bool finalNewline = opts.ensureFinalNewline.has_value() ? opts.ensureFinalNewline.value()
+                                                                      : (originalExists ? originalFinalNewline : true);
+
         // Write to temp file in binary with consistent EOL
         {
             std::ofstream out(tempPath, std::ios::out | std::ios::trunc | std::ios::binary);
@@ -431,41 +467,38 @@ FileOperationHandle WriteBatch::commit(const WriteOptions& opts) {
                 return;
             }
         }
-        
-        // Atomic rename
-        #if defined(_WIN32)
-            // Use Windows-specific atomic rename with retry logic
-            auto wsrc = tempPath.wstring();
-            auto wdst = targetPath.wstring();
-            
-            const int maxRetries = 50;
-            const int retryDelayMs = 10;
-            
-            bool success = false;
-            for (int i = 0; i < maxRetries; ++i) {
-                if (MoveFileExW(wsrc.c_str(), wdst.c_str(), 
-                               MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0) {
-                    success = true;
-                    break;
-                }
-                
-                DWORD error = GetLastError();
-                if (error == ERROR_SHARING_VIOLATION || 
-                    error == ERROR_ACCESS_DENIED || 
-                    error == ERROR_LOCK_VIOLATION) {
-                    Sleep(retryDelayMs);
-                    continue;
-                }
+
+// Atomic rename
+#if defined(_WIN32)
+        // Use Windows-specific atomic rename with retry logic
+        auto wsrc = tempPath.wstring();
+        auto wdst = targetPath.wstring();
+
+        const int maxRetries = 50;
+        const int retryDelayMs = 10;
+
+        bool success = false;
+        for (int i = 0; i < maxRetries; ++i) {
+            if (MoveFileExW(wsrc.c_str(), wdst.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0) {
+                success = true;
                 break;
             }
-            
-            if (!success) {
-                std::filesystem::remove(tempPath, ec);
-                s.setError(FileError::IOError, "Failed to replace destination file", p);
-                s.complete(FileOpStatus::Failed);
-                return;
+
+            DWORD error = GetLastError();
+            if (error == ERROR_SHARING_VIOLATION || error == ERROR_ACCESS_DENIED || error == ERROR_LOCK_VIOLATION) {
+                Sleep(retryDelayMs);
+                continue;
             }
-        #else
+            break;
+        }
+
+        if (!success) {
+            std::filesystem::remove(tempPath, ec);
+            s.setError(FileError::IOError, "Failed to replace destination file", p);
+            s.complete(FileOpStatus::Failed);
+            return;
+        }
+#else
             // Preserve destination permissions if it exists
             {
                 struct stat st;
@@ -502,8 +535,8 @@ FileOperationHandle WriteBatch::commit(const WriteOptions& opts) {
                     return;
                 }
             }
-        #endif
-        
+#endif
+
         // Calculate total bytes written
         size_t totalBytes = 0;
         if (finalLines.empty()) {
@@ -516,41 +549,42 @@ FileOperationHandle WriteBatch::commit(const WriteOptions& opts) {
                 }
             }
         }
-        
+
         s.wrote = totalBytes;
         s.complete(FileOpStatus::Complete);
     });
 }
 
 FileOperationHandle WriteBatch::preview() const {
-    return _vfs->submit(_path, [this, ops = _operations](FileOperationHandle::OpState& s, const std::string& p, const ExecContext&) {
-        // Read the original file
-        std::vector<std::string> originalLines;
-        {
-            std::ifstream in(p, std::ios::in);
-            if (in) {
-                std::string line;
-                while (std::getline(in, line)) {
-                    originalLines.push_back(line);
+    return _vfs->submit(
+        _path, [this, ops = _operations](FileOperationHandle::OpState& s, const std::string& p, const ExecContext&) {
+            // Read the original file
+            std::vector<std::string> originalLines;
+            {
+                std::ifstream in(p, std::ios::in);
+                if (in) {
+                    std::string line;
+                    while (std::getline(in, line)) {
+                        originalLines.push_back(line);
+                    }
                 }
             }
-        }
-        
-        // Apply all operations to get final content
-        std::vector<std::string> finalLines = applyOperations(originalLines);
-        
-        // Build result string
-        std::ostringstream oss;
-        for (size_t i = 0; i < finalLines.size(); ++i) {
-            oss << finalLines[i];
-            if (i < finalLines.size() - 1) {
-                oss << "\n";
+
+            // Apply all operations to get final content
+            std::vector<std::string> finalLines = applyOperations(originalLines);
+
+            // Build result string
+            std::ostringstream oss;
+            for (size_t i = 0; i < finalLines.size(); ++i) {
+                oss << finalLines[i];
+                if (i < finalLines.size() - 1) {
+                    oss << "\n";
+                }
             }
-        }
-        
-        s.text = oss.str();
-        s.complete(FileOpStatus::Complete);
-    });
+
+            s.text = oss.str();
+            s.complete(FileOpStatus::Complete);
+        });
 }
 
-} // namespace EntropyEngine::Core::IO
+}  // namespace EntropyEngine::Core::IO

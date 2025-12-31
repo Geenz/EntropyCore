@@ -21,7 +21,8 @@ extern "C" {
 typedef struct EntropyApp EntropyApp;
 
 // Delegate callbacks (executed on main thread)
-typedef struct EntropyAppDelegateC {
+typedef struct EntropyAppDelegateC
+{
     void (*will_finish_launching)(EntropyApp* app, void* userdata);
     void (*did_finish_launching)(EntropyApp* app, void* userdata);
     bool (*should_terminate)(EntropyApp* app, void* userdata);
@@ -31,14 +32,14 @@ typedef struct EntropyAppDelegateC {
 } EntropyAppDelegateC;
 
 // Runtime configuration for bootstrap
-typedef struct EntropyMainConfig {
-    uint32_t worker_threads;          // 0 => auto
-    uint32_t shutdown_deadline_ms;    // graceful drain window
+typedef struct EntropyMainConfig
+{
+    uint32_t worker_threads;        // 0 => auto
+    uint32_t shutdown_deadline_ms;  // graceful drain window
 } EntropyMainConfig;
 
 // Bootstrap / run
-int entropy_main_run(const EntropyMainConfig* cfg,
-                     const EntropyAppDelegateC* delegate);
+int entropy_main_run(const EntropyMainConfig* cfg, const EntropyAppDelegateC* delegate);
 
 // Request termination from any thread
 void entropy_main_terminate(int code);
@@ -47,5 +48,5 @@ void entropy_main_terminate(int code);
 EntropyApp* entropy_main_app(void);
 
 #ifdef __cplusplus
-} // extern "C"
+}  // extern "C"
 #endif

@@ -18,22 +18,26 @@
 
 #pragma once
 
-#include <memory>
 #include <chrono>
+#include <memory>
 #include <mutex>
 #include <unordered_map>
+
+#include "../Concurrency/WorkContractGroup.h"
+#include "../Concurrency/WorkGraph.h"
+#include "../TypeSystem/TypeID.h"
 #include "EntropyService.h"
 #include "Timer.h"
-#include "../Concurrency/WorkGraph.h"
-#include "../Concurrency/WorkContractGroup.h"
-#include "../TypeSystem/TypeID.h"
 
-namespace EntropyEngine {
-namespace Core {
+namespace EntropyEngine
+{
+namespace Core
+{
 
 // Forward declaration
-namespace Concurrency {
-    class WorkService;
+namespace Concurrency
+{
+class WorkService;
 }
 
 /**
@@ -89,12 +93,14 @@ namespace Concurrency {
  * frameTimer.invalidate();
  * @endcode
  */
-class TimerService : public EntropyService {
+class TimerService : public EntropyService
+{
 public:
     /**
      * @brief Configuration for the timer service
      */
-    struct Config {
+    struct Config
+    {
         size_t workContractGroupSize = 1024;  ///< Size of internal work contract pool
     };
 
@@ -116,9 +122,15 @@ public:
     ~TimerService() override;
 
     // EntropyService interface
-    const char* id() const override { return "com.entropy.core.timers"; }
-    const char* name() const override { return "TimerService"; }
-    const char* version() const override { return "0.1.0"; }
+    const char* id() const override {
+        return "com.entropy.core.timers";
+    }
+    const char* name() const override {
+        return "TimerService";
+    }
+    const char* version() const override {
+        return "0.1.0";
+    }
     TypeSystem::TypeID typeId() const override {
         return TypeSystem::createTypeId<TimerService>();
     }
@@ -184,10 +196,8 @@ public:
      * );
      * @endcode
      */
-    Timer scheduleTimer(std::chrono::steady_clock::duration interval,
-                       Timer::WorkFunction work,
-                       bool repeating = false,
-                       Concurrency::ExecutionType executionType = Concurrency::ExecutionType::AnyThread);
+    Timer scheduleTimer(std::chrono::steady_clock::duration interval, Timer::WorkFunction work, bool repeating = false,
+                        Concurrency::ExecutionType executionType = Concurrency::ExecutionType::AnyThread);
 
     /**
      * @brief Gets the number of currently active timers
@@ -240,11 +250,12 @@ private:
     /**
      * @brief Internal timer data tracked per node
      */
-    struct TimerData {
-        Timer::TimePoint fireTime;      ///< When timer should fire
-        Timer::Duration interval;       ///< Interval for repeating timers
-        Timer::WorkFunction work;       ///< User's work function
-        bool repeating;                 ///< Whether timer repeats
+    struct TimerData
+    {
+        Timer::TimePoint fireTime;           ///< When timer should fire
+        Timer::Duration interval;            ///< Interval for repeating timers
+        Timer::WorkFunction work;            ///< User's work function
+        bool repeating;                      ///< Whether timer repeats
         std::atomic<bool> cancelled{false};  ///< Cancellation flag
     };
 
@@ -269,5 +280,5 @@ private:
     std::atomic<bool> _pumpShouldStop{false};
 };
 
-} // namespace Core
-} // namespace EntropyEngine
+}  // namespace Core
+}  // namespace EntropyEngine

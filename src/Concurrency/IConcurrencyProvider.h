@@ -19,9 +19,12 @@
 
 #pragma once
 
-namespace EntropyEngine {
-namespace Core {
-namespace Concurrency {
+namespace EntropyEngine
+{
+namespace Core
+{
+namespace Concurrency
+{
 
 class WorkContractGroup;
 
@@ -67,7 +70,8 @@ class WorkContractGroup;
  * };
  * @endcode
  */
-class IConcurrencyProvider {
+class IConcurrencyProvider
+{
 public:
     virtual ~IConcurrencyProvider() = default;
 
@@ -92,7 +96,7 @@ public:
      * @param group The group being destroyed
      */
     virtual void notifyGroupDestroyed(WorkContractGroup* group) = 0;
-    
+
     /**
      * @brief Notifies the provider that main thread work may be available
      *
@@ -102,7 +106,7 @@ public:
      * differently (e.g., post to UI event queue).
      *
      * @param group The group that has new main thread work available (optional)
-     * 
+     *
      * @code
      * void notifyMainThreadWorkAvailable(WorkContractGroup* group) override {
      *     // Post event to UI thread's message queue
@@ -116,7 +120,6 @@ public:
     }
 };
 
-} // Concurrency
-} // Core
-} // EntropyEngine
-
+}  // namespace Concurrency
+}  // namespace Core
+}  // namespace EntropyEngine

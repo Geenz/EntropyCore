@@ -8,34 +8,35 @@
  */
 
 #include "WorkGraph.h"
-#include "NodeStateManager.h"
-#include "NodeScheduler.h"
-#include "WorkGraphEvents.h"
+
 #include <algorithm>
-#include <thread>
 #include <chrono>
 #include <format>
+#include <thread>
 
-namespace EntropyEngine {
-namespace Core {
-namespace Concurrency {
+#include "NodeScheduler.h"
+#include "NodeStateManager.h"
+#include "WorkGraphEvents.h"
 
-WorkGraph::WorkGraph(WorkContractGroup* workContractGroup)
-    : WorkGraph(workContractGroup, WorkGraphConfig{}) {
-}
+namespace EntropyEngine
+{
+namespace Core
+{
+namespace Concurrency
+{
+
+WorkGraph::WorkGraph(WorkContractGroup* workContractGroup) : WorkGraph(workContractGroup, WorkGraphConfig{}) {}
 
 WorkGraph::WorkGraph(WorkContractGroup* workContractGroup, const WorkGraphConfig& config)
-    : Debug::Named("WorkGraph")
-    , _workContractGroup(workContractGroup)
-    , _config(config) {
+    : Debug::Named("WorkGraph"), _workContractGroup(workContractGroup), _config(config) {
     if (_config.enableDebugLogging) {
         ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph constructor called");
     }
-    
+
     if (!_workContractGroup) {
         throw std::invalid_argument("WorkGraph requires a valid WorkContractGroup");
     }
-    
+
     // Create event bus if configured
     if (_config.enableEvents) {
         if (_config.sharedEventBus) {
@@ -46,39 +47,33 @@ WorkGraph::WorkGraph(WorkContractGroup* workContractGroup, const WorkGraphConfig
             _eventBus = std::make_unique<Core::EventBus>();
         }
     }
-    
+
     // Always create state manager (it's fundamental to correct operation)
     auto* eventBusPtr = _config.enableEvents ? getEventBus() : nullptr;
     if (_config.enableDebugLogging) {
-        ENTROPY_LOG_DEBUG_CAT("Concurrency", eventBusPtr ? "WorkGraph: Creating state manager with event bus" : "WorkGraph: Creating state manager WITHOUT event bus");
+        ENTROPY_LOG_DEBUG_CAT("Concurrency", eventBusPtr ? "WorkGraph: Creating state manager with event bus"
+                                                         : "WorkGraph: Creating state manager WITHOUT event bus");
     }
-    _stateManager = std::make_unique<NodeStateManager>(
-        this, 
-        eventBusPtr
-    );
-    
+    _stateManager = std::make_unique<NodeStateManager>(this, eventBusPtr);
+
     // Always create scheduler
     NodeScheduler::Config schedulerConfig;
     schedulerConfig.maxDeferredNodes = _config.maxDeferredNodes;
     schedulerConfig.enableBatchScheduling = _config.enableAdvancedScheduling;
     schedulerConfig.enableDebugLogging = _config.enableDebugLogging;
-    _scheduler = std::make_unique<NodeScheduler>(
-        _workContractGroup,
-        this,
-        &_graphMutex,
-        _config.enableEvents ? getEventBus() : nullptr,
-        schedulerConfig
-    );
-    
+    _scheduler = std::make_unique<NodeScheduler>(_workContractGroup, this, &_graphMutex,
+                                                 _config.enableEvents ? getEventBus() : nullptr, schedulerConfig);
+
     // Set up safe scheduler callbacks with proper lifetime tracking
     NodeScheduler::Callbacks callbacks;
-    callbacks.onNodeExecuting = [this](NodeHandle node) {
+    callbacks.onNodeExecuting = [this](const NodeHandle& node) {
         CallbackGuard guard(this);
         if (!_destroyed.load(std::memory_order_acquire)) {
             if (_config.enableDebugLogging) {
                 auto* nodeData = _graph.getNodeData(node);
                 if (nodeData) {
-                    ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph: Node transitioning to Executing, current state: " + std::to_string(static_cast<int>(nodeData->state.load())));
+                    ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph: Node transitioning to Executing, current state: " +
+                                                             std::to_string(static_cast<int>(nodeData->state.load())));
                 } else {
                     ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph: Node transitioning to Executing");
                 }
@@ -93,7 +88,7 @@ WorkGraph::WorkGraph(WorkContractGroup* workContractGroup, const WorkGraphConfig
             }
         }
     };
-    callbacks.onNodeCompleted = [this](NodeHandle node) {
+    callbacks.onNodeCompleted = [this](const NodeHandle& node) {
         CallbackGuard guard(this);
         if (!_destroyed.load(std::memory_order_acquire)) {
             if (_config.enableDebugLogging) {
@@ -102,7 +97,7 @@ WorkGraph::WorkGraph(WorkContractGroup* workContractGroup, const WorkGraphConfig
             onNodeComplete(node);
         }
     };
-    callbacks.onNodeFailed = [this](NodeHandle node, std::exception_ptr /*ex*/) {
+    callbacks.onNodeFailed = [this](const NodeHandle& node, const std::exception_ptr& /*ex*/) {
         CallbackGuard guard(this);
         if (!_destroyed.load(std::memory_order_acquire)) {
             if (_config.enableDebugLogging) {
@@ -111,7 +106,7 @@ WorkGraph::WorkGraph(WorkContractGroup* workContractGroup, const WorkGraphConfig
             onNodeFailed(node);
         }
     };
-    callbacks.onNodeDropped = [this](NodeHandle node) {
+    callbacks.onNodeDropped = [this](const NodeHandle& node) {
         CallbackGuard guard(this);
         if (!_destroyed.load(std::memory_order_acquire)) {
             // Mark the node as failed (dropped is effectively a failure)
@@ -119,30 +114,29 @@ WorkGraph::WorkGraph(WorkContractGroup* workContractGroup, const WorkGraphConfig
             if (nodeData) {
                 // Prevent double-processing
                 bool expected = false;
-                if (nodeData->completionProcessed.compare_exchange_strong(expected, true, 
-                                                                          std::memory_order_acq_rel)) {
+                if (nodeData->completionProcessed.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
                     // Transition to failed state
                     _stateManager->transitionState(node, nodeData->state.load(), NodeState::Failed);
-                    
+
                     // Increment dropped count and decrement pending count
                     _droppedNodes.fetch_add(1, std::memory_order_relaxed);
                     uint32_t pending = _pendingNodes.fetch_sub(1, std::memory_order_acq_rel) - 1;
-                    
+
                     // Cancel all dependent nodes (like a failed node would)
                     cancelDependents(node);
-                    
+
                     // If all nodes are "done" (completed/failed/dropped), notify waiters
                     if (pending == 0) {
                         std::lock_guard<std::mutex> lock(_waitMutex);
                         _waitCondition.notify_all();
                     }
-                    
+
                     ENTROPY_LOG_ERROR_CAT("WorkGraph", "Node dropped due to deferred queue overflow!");
                 }
             }
         }
     };
-    callbacks.onNodeYielded = [this](NodeHandle node) {
+    callbacks.onNodeYielded = [this](const NodeHandle& node) {
         CallbackGuard guard(this);
         if (!_destroyed.load(std::memory_order_acquire)) {
             if (_config.enableDebugLogging) {
@@ -151,7 +145,7 @@ WorkGraph::WorkGraph(WorkContractGroup* workContractGroup, const WorkGraphConfig
             onNodeYielded(node);
         }
     };
-    callbacks.onNodeYieldedUntil = [this](NodeHandle node, std::chrono::steady_clock::time_point wakeTime) {
+    callbacks.onNodeYieldedUntil = [this](const NodeHandle& node, std::chrono::steady_clock::time_point wakeTime) {
         CallbackGuard guard(this);
         if (!_destroyed.load(std::memory_order_acquire)) {
             if (_config.enableDebugLogging) {
@@ -161,7 +155,7 @@ WorkGraph::WorkGraph(WorkContractGroup* workContractGroup, const WorkGraphConfig
         }
     };
     _scheduler->setCallbacks(callbacks);
-    
+
     // Register callback for when contract capacity becomes available
     // This allows us to process deferred nodes at the right time
     // We process multiple rounds to keep the pipeline full
@@ -175,25 +169,25 @@ WorkGraph::WorkGraph(WorkContractGroup* workContractGroup, const WorkGraphConfig
             // First, check timed deferrals - wake up any timers/delayed work that's ready
             size_t timedProcessed = _scheduler->processTimedDeferredNodes();
             if (timedProcessed > 0 && _config.enableDebugLogging) {
-                ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph: Processed " + std::to_string(timedProcessed) + " timed deferred nodes");
+                ENTROPY_LOG_DEBUG_CAT(
+                    "Concurrency", "WorkGraph: Processed " + std::to_string(timedProcessed) + " timed deferred nodes");
             }
 
             // Then process regular deferred nodes multiple times to fill capacity
             // This is important when we have many deferred nodes
             for (size_t i = 0; i < _config.maxDeferredProcessingIterations; i++) {
                 size_t processed = _scheduler->processDeferredNodes();
-                if (processed == 0) break; // No more capacity or no more deferred nodes
+                if (processed == 0) break;  // No more capacity or no more deferred nodes
                 if (_config.enableDebugLogging) {
-                    ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph: Capacity callback processed " + std::to_string(processed) + " deferred nodes");
+                    ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph: Capacity callback processed " +
+                                                             std::to_string(processed) + " deferred nodes");
                 }
             }
         }
     });
 
     // Set up timed deferral callback to avoid dynamic_cast in WorkService
-    _workContractGroup->setTimedDeferralCallback([this]() {
-        return checkTimedDeferrals();
-    });
+    _workContractGroup->setTimedDeferralCallback([this]() { return checkTimedDeferrals(); });
 
     // Register with debug system (can be disabled via config)
     if (_config.enableDebugRegistration) {
@@ -204,65 +198,67 @@ WorkGraph::WorkGraph(WorkContractGroup* workContractGroup, const WorkGraphConfig
 }
 
 WorkGraph::~WorkGraph() {
-    if (_config.enableDebugLogging) {
-        ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph destructor starting, pending nodes: " + std::to_string(_pendingNodes.load()));
-    }
-    
-    // Set destroyed flag to prevent new callbacks
-    _destroyed.store(true, std::memory_order_release);
-    
-    // Unregister callbacks from WorkContractGroup first
-    // This prevents new callbacks from being scheduled
-    if (_workContractGroup) {
-        _workContractGroup->removeOnCapacityAvailable(_capacityCallbackIt);
-        _workContractGroup->setTimedDeferralCallback(nullptr); // Clear timed deferral callback
-    }
-    
-    // Wait for all active callbacks to complete
-    if (_activeCallbacks.load(std::memory_order_acquire) > 0) {
+    try {
         if (_config.enableDebugLogging) {
-            ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph destructor waiting for callbacks: " + std::to_string(_activeCallbacks.load()));
+            ENTROPY_LOG_DEBUG_CAT(
+                "Concurrency", "WorkGraph destructor starting, pending nodes: " + std::to_string(_pendingNodes.load()));
         }
-        std::unique_lock<std::mutex> lock(_waitMutex);
-        _shutdownCondition.wait(lock, [this]() {
-            return _activeCallbacks.load(std::memory_order_acquire) == 0;
-        });
-    }
-    
-    // Now safe to proceed with cleanup
-    // Unregister from debug system (if registered)
-    if (_config.enableDebugRegistration) {
-        Debug::DebugRegistry::getInstance().unregisterObject(this);
-        auto msg = std::format("Destroyed WorkGraph '{}'", getName());
-        ENTROPY_LOG_DEBUG_CAT("WorkGraph", msg);
+
+        // Set destroyed flag to prevent new callbacks
+        _destroyed.store(true, std::memory_order_release);
+
+        // Unregister callbacks from WorkContractGroup first
+        // This prevents new callbacks from being scheduled
+        if (_workContractGroup) {
+            _workContractGroup->removeOnCapacityAvailable(_capacityCallbackIt);
+            _workContractGroup->setTimedDeferralCallback(nullptr);  // Clear timed deferral callback
+        }
+
+        // Wait for all active callbacks to complete
+        if (_activeCallbacks.load(std::memory_order_acquire) > 0) {
+            if (_config.enableDebugLogging) {
+                ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph destructor waiting for callbacks: " +
+                                                         std::to_string(_activeCallbacks.load()));
+            }
+            std::unique_lock<std::mutex> lock(_waitMutex);
+            _shutdownCondition.wait(lock, [this]() { return _activeCallbacks.load(std::memory_order_acquire) == 0; });
+        }
+
+        // Now safe to proceed with cleanup
+        // Unregister from debug system (if registered)
+        if (_config.enableDebugRegistration) {
+            Debug::DebugRegistry::getInstance().unregisterObject(this);
+            auto msg = std::format("Destroyed WorkGraph '{}'", getName());
+            ENTROPY_LOG_DEBUG_CAT("WorkGraph", msg);
+        }
+    } catch (...) {
+        // Suppress exceptions in destructor - cannot propagate
     }
 }
 
-WorkGraph::NodeHandle WorkGraph::addNode(std::function<void()> work, 
-                                        const std::string& name,
-                                        void* userData,
-                                        ExecutionType executionType) {
+WorkGraph::NodeHandle WorkGraph::addNode(std::function<void()> work, const std::string& name, void* userData,
+                                         ExecutionType executionType) {
     std::unique_lock<std::shared_mutex> lock(_graphMutex);
-    
+
     // Create node with the work and execution type
     WorkGraphNode node(std::move(work), name, executionType);
     node.userData = userData;
-    
+
     // Add to graph and track as pending
     auto handle = _graph.addNode(std::move(node));
     _pendingNodes.fetch_add(1, std::memory_order_relaxed);
-    
+
     // Cache the handle for access later
     _nodeHandles.push_back(handle);
-    
+
     // Register with state manager
     _stateManager->registerNode(handle, NodeState::Pending);
-    
+
     // Publish event if enabled
     if (auto* eventBus = getEventBus()) {
         eventBus->publish(NodeAddedEvent(this, handle));
     }
-    
+
     // If execution has already started, check if this node can execute immediately
     if (_executionStarted.load(std::memory_order_acquire)) {
         auto* nodeData = _graph.getNodeData(handle);
@@ -277,44 +273,40 @@ WorkGraph::NodeHandle WorkGraph::addNode(std::function<void()> work,
             }
         }
     }
-    
+
     return handle;
 }
 
-WorkGraph::NodeHandle WorkGraph::addYieldableNode(YieldableWorkFunction work,
-                                                  const std::string& name,
-                                                  void* userData,
-                                                  ExecutionType executionType,
-                                                  std::optional<uint32_t> maxReschedules) {
+WorkGraph::NodeHandle WorkGraph::addYieldableNode(YieldableWorkFunction work, const std::string& name, void* userData,
+                                                  ExecutionType executionType, std::optional<uint32_t> maxReschedules) {
     std::unique_lock<std::shared_mutex> lock(_graphMutex);
-    
+
     // Create node with yieldable work function
     WorkGraphNode node(std::move(work), name, executionType);
     node.userData = userData;
     node.maxReschedules = maxReschedules;
-    
+
     // Add to graph and track as pending
     auto handle = _graph.addNode(std::move(node));
     _pendingNodes.fetch_add(1, std::memory_order_relaxed);
-    
+
     // Cache the handle for access later
     _nodeHandles.push_back(handle);
-    
+
     // Register with state manager
     _stateManager->registerNode(handle, NodeState::Pending);
-    
+
     // Publish event if enabled
     if (auto* eventBus = getEventBus()) {
         eventBus->publish(NodeAddedEvent(this, handle));
     }
-    
+
     if (_config.enableDebugLogging) {
-        auto msg = std::format("Added yieldable node '{}' with max reschedules: {}", 
-                              name, 
-                              maxReschedules.has_value() ? std::to_string(*maxReschedules) : "unlimited");
+        auto msg = std::format("Added yieldable node '{}' with max reschedules: {}", name,
+                               maxReschedules.has_value() ? std::to_string(*maxReschedules) : "unlimited");
         ENTROPY_LOG_DEBUG_CAT("WorkGraph", msg);
     }
-    
+
     // If execution has already started, check if this node can execute immediately
     if (_executionStarted.load(std::memory_order_acquire)) {
         auto* nodeData = _graph.getNodeData(handle);
@@ -329,15 +321,15 @@ WorkGraph::NodeHandle WorkGraph::addYieldableNode(YieldableWorkFunction work,
             }
         }
     }
-    
+
     return handle;
 }
 
-void WorkGraph::addDependency(NodeHandle from, NodeHandle to) {
+void WorkGraph::addDependency(NodeHandle from, const NodeHandle& to) {
     std::unique_lock<std::shared_mutex> lock(_graphMutex);
 
     // Add edge in the DAG (this checks for cycles)
-    _graph.addEdge(from, to);
+    _graph.addEdge(std::move(from), to);
 
     // Increment dependency count for the target node
     incrementDependencies(to);
@@ -354,7 +346,7 @@ void WorkGraph::reset() {
 
     if (_config.enableDebugLogging) {
         ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph::reset() - resetting execution state for " +
-                              std::to_string(_nodeHandles.size()) + " nodes");
+                                                 std::to_string(_nodeHandles.size()) + " nodes");
     }
 
     // Reset execution flag
@@ -406,8 +398,8 @@ void WorkGraph::clear() {
     std::unique_lock<std::shared_mutex> lock(_graphMutex);
 
     if (_config.enableDebugLogging) {
-        ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph::clear() - removing all " +
-                              std::to_string(_nodeHandles.size()) + " nodes");
+        ENTROPY_LOG_DEBUG_CAT("Concurrency",
+                              "WorkGraph::clear() - removing all " + std::to_string(_nodeHandles.size()) + " nodes");
     }
 
     // Reset execution flag
@@ -433,7 +425,7 @@ void WorkGraph::clear() {
     }
 }
 
-void WorkGraph::incrementDependencies(NodeHandle node) {
+void WorkGraph::incrementDependencies(const NodeHandle& node) {
     if (auto* nodeData = _graph.getNodeData(node)) {
         nodeData->pendingDependencies.fetch_add(1, std::memory_order_acq_rel);
         if (_config.enableDebugLogging) {
@@ -450,11 +442,12 @@ size_t WorkGraph::scheduleRoots() {
 size_t WorkGraph::scheduleRootsLocked() {
     // Assumes caller already holds a lock on _graphMutex
     size_t rootCount = 0;
-    
+
     if (_config.enableDebugLogging) {
-        ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph: Checking " + std::to_string(_nodeHandles.size()) + " nodes for roots");
+        ENTROPY_LOG_DEBUG_CAT("Concurrency",
+                              "WorkGraph: Checking " + std::to_string(_nodeHandles.size()) + " nodes for roots");
     }
-    
+
     // Check all cached handles to find roots (nodes ready to execute)
     size_t nodeIndex = 0;
     for (auto& handle : _nodeHandles) {
@@ -463,7 +456,7 @@ size_t WorkGraph::scheduleRootsLocked() {
         }
         if (isHandleValid(handle)) {
             auto* nodeData = _graph.getNodeData(handle);
-            
+
             // Check if this node is ready to execute (no pending dependencies)
             if (nodeData && nodeData->pendingDependencies.load() == 0) {
                 if (_config.enableDebugLogging) {
@@ -495,17 +488,18 @@ size_t WorkGraph::scheduleRootsLocked() {
             }
         }
     }
-    
+
     if (_config.enableDebugLogging) {
-        ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph: Root node scheduling complete, scheduled " + std::to_string(rootCount) + " roots");
+        ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph: Root node scheduling complete, scheduled " +
+                                                 std::to_string(rootCount) + " roots");
     }
-    
+
     return rootCount;
 }
 
 void WorkGraph::suspend() {
     _suspended.store(true, std::memory_order_release);
-    
+
     if (_config.enableDebugLogging) {
         ENTROPY_LOG_DEBUG_CAT("WorkGraph", "Graph suspended - no new nodes will be scheduled");
     }
@@ -513,20 +507,21 @@ void WorkGraph::suspend() {
 
 void WorkGraph::resume() {
     bool wasSuspended = _suspended.exchange(false, std::memory_order_acq_rel);
-    
+
     if (wasSuspended) {
         if (_config.enableDebugLogging) {
             ENTROPY_LOG_DEBUG_CAT("WorkGraph", "Graph resumed - checking for ready nodes");
         }
-        
+
         // Process any deferred nodes that accumulated while suspended
         if (_scheduler) {
             size_t processed = _scheduler->processDeferredNodes();
             if (processed > 0 && _config.enableDebugLogging) {
-                ENTROPY_LOG_DEBUG_CAT("WorkGraph", "Processed " + std::to_string(processed) + " deferred nodes after resume");
+                ENTROPY_LOG_DEBUG_CAT("WorkGraph",
+                                      "Processed " + std::to_string(processed) + " deferred nodes after resume");
             }
         }
-        
+
         // Check if any nodes became ready while we were suspended and schedule them
         std::shared_lock<std::shared_mutex> lock(_graphMutex);
         for (const auto& handle : _nodeHandles) {
@@ -545,37 +540,39 @@ void WorkGraph::execute() {
     if (_config.enableDebugLogging) {
         ENTROPY_LOG_INFO_CAT("Concurrency", "WorkGraph::execute() starting");
     }
-    
+
     // Need exclusive lock to prevent nodes being added during execution startup
     std::unique_lock<std::shared_mutex> lock(_graphMutex);
-    
+
     bool expected = false;
     if (!_executionStarted.compare_exchange_strong(expected, true)) {
         throw std::runtime_error("WorkGraph execution already started");
     }
-    
+
     // Schedule all root nodes to start execution while holding the lock
     // This eliminates the race window between setting _executionStarted and scheduling roots
     size_t roots = scheduleRootsLocked();
-    
+
     if (_config.enableDebugLogging) {
         ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph::execute() scheduled " + std::to_string(roots) + " root nodes");
         if (_scheduler) {
             size_t deferred = _scheduler->getDeferredCount();
             if (deferred > 0) {
-                ENTROPY_LOG_WARNING_CAT("Concurrency", "WorkGraph::execute() deferred " + std::to_string(deferred) + " nodes during startup");
+                ENTROPY_LOG_WARNING_CAT("Concurrency", "WorkGraph::execute() deferred " + std::to_string(deferred) +
+                                                           " nodes during startup");
             }
         }
     }
-    
+
     // Now safe to unlock
     lock.unlock();
-    
+
     // After unlocking, process any deferred nodes
     if (_scheduler) {
         size_t deferred = _scheduler->getDeferredCount();
         if (_config.enableDebugLogging && deferred > 0) {
-            ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph::execute() has " + std::to_string(deferred) + " deferred nodes after initial scheduling");
+            ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph::execute() has " + std::to_string(deferred) +
+                                                     " deferred nodes after initial scheduling");
         }
         if (deferred > 0) {
             if (_config.enableDebugLogging) {
@@ -583,24 +580,25 @@ void WorkGraph::execute() {
             }
             size_t processed = _scheduler->processDeferredNodes();
             if (_config.enableDebugLogging) {
-                ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph::execute() processDeferredNodes returned " + std::to_string(processed));
+                ENTROPY_LOG_DEBUG_CAT(
+                    "Concurrency", "WorkGraph::execute() processDeferredNodes returned " + std::to_string(processed));
             }
         }
     }
-    
+
     if (roots == 0 && getPendingCount() > 0) {
-        auto msg = std::format("ERROR: No roots found. Pending count: {}, node count: {}", 
-                  getPendingCount(), _nodeHandles.size());
+        auto msg = std::format("ERROR: No roots found. Pending count: {}, node count: {}", getPendingCount(),
+                               _nodeHandles.size());
         ENTROPY_LOG_ERROR_CAT("WorkGraph", msg);
         throw std::runtime_error("WorkGraph has no root nodes but has pending work - possible cycle?");
     }
-    
+
     if (_config.enableDebugLogging) {
         ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph::execute() completed");
     }
 }
 
-bool WorkGraph::scheduleNode(NodeHandle node) {
+bool WorkGraph::scheduleNode(const NodeHandle& node) {
     // Check if suspended
     if (_suspended.load(std::memory_order_acquire)) {
         if (_config.enableDebugLogging) {
@@ -609,7 +607,7 @@ bool WorkGraph::scheduleNode(NodeHandle node) {
         // Don't schedule while suspended
         return false;
     }
-    
+
     if (_config.enableDebugLogging) {
         ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph::scheduleNode() called");
     }
@@ -621,51 +619,50 @@ bool WorkGraph::scheduleNode(NodeHandle node) {
     return result;
 }
 
-void WorkGraph::onNodeComplete(NodeHandle node) {
+void WorkGraph::onNodeComplete(const NodeHandle& node) {
     auto* nodeData = _graph.getNodeData(node);
     if (!nodeData) return;
-    
+
     // Prevent double-processing using atomic flag
     bool expected = false;
-    if (!nodeData->completionProcessed.compare_exchange_strong(expected, true, 
-                                                                std::memory_order_acq_rel)) {
+    if (!nodeData->completionProcessed.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
         if (_config.enableDebugLogging) {
             ENTROPY_LOG_WARNING_CAT("Concurrency", "WorkGraph: Node already processed completion");
         }
-        return; // Already processed
+        return;  // Already processed
     }
-    
+
     // Transition state through state manager
     _stateManager->transitionState(node, NodeState::Executing, NodeState::Completed);
-    
+
     // Update counters
     _completedNodes.fetch_add(1, std::memory_order_relaxed);
     uint32_t pending = _pendingNodes.fetch_sub(1, std::memory_order_acq_rel) - 1;
-    
+
     // If all nodes are complete, notify waiters
     if (pending == 0) {
         std::lock_guard<std::mutex> lock(_waitMutex);
         _waitCondition.notify_all();
     }
-    
+
     // Call completion callback if set
     if (_onNodeComplete) {
         _onNodeComplete(node);
     }
-    
+
     // Schedule children whose dependencies are now satisfied
     // First, copy the children list while holding the lock (minimize critical section)
     std::vector<NodeHandle> children;
     {
         std::shared_lock<std::shared_mutex> lock(_graphMutex);
         children = this->getChildren(node);
-    } // Release lock immediately
-    
+    }  // Release lock immediately
+
     // Process children outside the lock to minimize contention
     for (auto& child : children) {
         auto* childData = _graph.getNodeData(child);
         if (!childData) continue;
-        
+
         // Skip if child is cancelled
         if (childData->state.load(std::memory_order_acquire) == NodeState::Cancelled) {
             if (_config.enableDebugLogging) {
@@ -673,13 +670,13 @@ void WorkGraph::onNodeComplete(NodeHandle node) {
             }
             continue;
         }
-        
+
         // Decrement dependency count
         uint32_t remaining = childData->pendingDependencies.fetch_sub(1, std::memory_order_acq_rel) - 1;
         if (_config.enableDebugLogging) {
             ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph: Child node dependencies decremented");
         }
-        
+
         // If all dependencies satisfied, try to transition to ready and schedule
         if (remaining == 0 && childData->failedParentCount.load(std::memory_order_acquire) == 0) {
             if (_config.enableDebugLogging) {
@@ -701,8 +698,8 @@ void WorkGraph::onNodeComplete(NodeHandle node) {
             ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph: Child node still has dependencies");
         }
     }
-    
-    // Note: Processing of deferred nodes is now handled via the 
+
+    // Note: Processing of deferred nodes is now handled via the
     // onCapacityAvailable callback from WorkContractGroup, which
     // is called after contracts are actually freed.
 }
@@ -711,7 +708,7 @@ WorkGraph::WaitResult WorkGraph::wait() {
     if (_config.enableDebugLogging) {
         ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph::wait() called");
     }
-    
+
     // Check if already complete before waiting
     if (_pendingNodes.load(std::memory_order_acquire) == 0) {
         if (_config.enableDebugLogging) {
@@ -725,36 +722,38 @@ WorkGraph::WaitResult WorkGraph::wait() {
         result.allCompleted = (result.failedCount == 0 && result.droppedCount == 0);
         return result;
     }
-    
+
     // Use condition variable for waiting instead of busy-wait
     std::unique_lock<std::mutex> lock(_waitMutex);
     if (_config.enableDebugLogging) {
-        ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph::wait() waiting for pending nodes: " + std::to_string(_pendingNodes.load()));
+        ENTROPY_LOG_DEBUG_CAT("Concurrency",
+                              "WorkGraph::wait() waiting for pending nodes: " + std::to_string(_pendingNodes.load()));
     }
     _waitCondition.wait(lock, [this]() {
         auto pending = _pendingNodes.load(std::memory_order_acquire);
         if (_config.enableDebugLogging && pending > 0) {
-            ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph::wait() still waiting, pending: " + std::to_string(pending));
+            ENTROPY_LOG_DEBUG_CAT("Concurrency",
+                                  "WorkGraph::wait() still waiting, pending: " + std::to_string(pending));
         }
         return pending == 0;
     });
-    
+
     // Prepare result
     WaitResult result;
     result.completedCount = _completedNodes.load(std::memory_order_acquire);
     result.failedCount = _failedNodes.load(std::memory_order_acquire);
     result.droppedCount = _droppedNodes.load(std::memory_order_acquire);
     result.allCompleted = (result.failedCount == 0 && result.droppedCount == 0);
-    
+
     // Log warning if nodes were dropped
     if (result.droppedCount > 0) {
-        auto msg = std::format("WorkGraph::wait() - {} nodes were dropped due to deferred queue overflow!", result.droppedCount);
+        auto msg = std::format("WorkGraph::wait() - {} nodes were dropped due to deferred queue overflow!",
+                               result.droppedCount);
         ENTROPY_LOG_WARNING_CAT("WorkGraph", msg);
     }
-    
+
     return result;
 }
-
 
 bool WorkGraph::isComplete() const {
     auto pending = _pendingNodes.load(std::memory_order_acquire);
@@ -762,10 +761,9 @@ bool WorkGraph::isComplete() const {
         auto completed = _completedNodes.load(std::memory_order_acquire);
         auto failed = _failedNodes.load(std::memory_order_acquire);
         auto dropped = _droppedNodes.load(std::memory_order_acquire);
-        ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph::isComplete() - pending: " + std::to_string(pending) + 
-                              ", completed: " + std::to_string(completed) +
-                              ", failed: " + std::to_string(failed) + 
-                              ", dropped: " + std::to_string(dropped));
+        ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph::isComplete() - pending: " + std::to_string(pending) +
+                                                 ", completed: " + std::to_string(completed) + ", failed: " +
+                                                 std::to_string(failed) + ", dropped: " + std::to_string(dropped));
     }
     return pending == 0;
 }
@@ -786,51 +784,47 @@ size_t WorkGraph::checkTimedDeferrals() {
     return 0;
 }
 
-WorkGraph::NodeHandle WorkGraph::addContinuation(const std::vector<NodeHandle>& parents,
-                                                std::function<void()> work,
-                                                const std::string& name,
-                                                ExecutionType executionType) {
+WorkGraph::NodeHandle WorkGraph::addContinuation(const std::vector<NodeHandle>& parents, std::function<void()> work,
+                                                 const std::string& name, ExecutionType executionType) {
     // Create the continuation node with specified execution type
     auto continuation = addNode(std::move(work), name, nullptr, executionType);
-    
+
     // Add dependencies from all parents
     for (const auto& parent : parents) {
         addDependency(parent, continuation);
     }
-    
+
     return continuation;
 }
 
-void WorkGraph::onNodeFailed(NodeHandle node) {
+void WorkGraph::onNodeFailed(const NodeHandle& node) {
     auto* nodeData = _graph.getNodeData(node);
     if (!nodeData) return;
-    
+
     // Prevent double-processing
     bool expected = false;
-    if (!nodeData->completionProcessed.compare_exchange_strong(expected, true, 
-                                                                std::memory_order_acq_rel)) {
-        return; // Already processed
+    if (!nodeData->completionProcessed.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+        return;  // Already processed
     }
-    
+
     // Transition state through state manager
     _stateManager->transitionState(node, NodeState::Executing, NodeState::Failed);
-    
+
     // Update counters
     _failedNodes.fetch_add(1, std::memory_order_relaxed);
     uint32_t pending = _pendingNodes.fetch_sub(1, std::memory_order_acq_rel) - 1;
-    
+
     // If all nodes are complete, notify waiters
     if (pending == 0) {
         std::lock_guard<std::mutex> lock(_waitMutex);
         _waitCondition.notify_all();
     }
-    
+
     // Cancel all dependent nodes
     cancelDependents(node);
-    
 }
 
-void WorkGraph::onNodeYielded(NodeHandle node) {
+void WorkGraph::onNodeYielded(const NodeHandle& node) {
     auto* nodeData = _graph.getNodeData(node);
     if (!nodeData) return;
 
@@ -838,16 +832,15 @@ void WorkGraph::onNodeYielded(NodeHandle node) {
     uint32_t rescheduleCount = nodeData->rescheduleCount.fetch_add(1, std::memory_order_relaxed);
 
     if (_config.enableDebugLogging) {
-        auto msg = std::format("Node '{}' yielded (reschedule count: {})",
-                              nodeData->name, rescheduleCount + 1);
+        auto msg = std::format("Node '{}' yielded (reschedule count: {})", nodeData->name, rescheduleCount + 1);
         ENTROPY_LOG_DEBUG_CAT("WorkGraph", msg);
     }
 
     // Check reschedule limit
     if (nodeData->maxReschedules && rescheduleCount >= *nodeData->maxReschedules) {
         if (_config.enableDebugLogging) {
-            auto msg = std::format("Node '{}' reached max reschedule limit ({}), completing",
-                                  nodeData->name, *nodeData->maxReschedules);
+            auto msg = std::format("Node '{}' reached max reschedule limit ({}), completing", nodeData->name,
+                                   *nodeData->maxReschedules);
             ENTROPY_LOG_WARNING_CAT("WorkGraph", msg);
         }
 
@@ -865,7 +858,7 @@ void WorkGraph::onNodeYielded(NodeHandle node) {
     rescheduleYieldedNode(node);
 }
 
-void WorkGraph::onNodeYieldedUntil(NodeHandle node, std::chrono::steady_clock::time_point wakeTime) {
+void WorkGraph::onNodeYieldedUntil(const NodeHandle& node, std::chrono::steady_clock::time_point wakeTime) {
     auto* nodeData = _graph.getNodeData(node);
     if (!nodeData) return;
 
@@ -875,16 +868,16 @@ void WorkGraph::onNodeYieldedUntil(NodeHandle node, std::chrono::steady_clock::t
     if (_config.enableDebugLogging) {
         auto now = std::chrono::steady_clock::now();
         auto delay = std::chrono::duration_cast<std::chrono::milliseconds>(wakeTime - now);
-        auto msg = std::format("Node '{}' yielded until wake time (delay: {}ms, reschedule count: {})",
-                              nodeData->name, delay.count(), rescheduleCount + 1);
+        auto msg = std::format("Node '{}' yielded until wake time (delay: {}ms, reschedule count: {})", nodeData->name,
+                               delay.count(), rescheduleCount + 1);
         ENTROPY_LOG_DEBUG_CAT("WorkGraph", msg);
     }
 
     // Check reschedule limit
     if (nodeData->maxReschedules && rescheduleCount >= *nodeData->maxReschedules) {
         if (_config.enableDebugLogging) {
-            auto msg = std::format("Node '{}' reached max reschedule limit ({}), completing",
-                                  nodeData->name, *nodeData->maxReschedules);
+            auto msg = std::format("Node '{}' reached max reschedule limit ({}), completing", nodeData->name,
+                                   *nodeData->maxReschedules);
             ENTROPY_LOG_WARNING_CAT("WorkGraph", msg);
         }
 
@@ -904,18 +897,18 @@ void WorkGraph::onNodeYieldedUntil(NodeHandle node, std::chrono::steady_clock::t
     }
 }
 
-void WorkGraph::rescheduleYieldedNode(NodeHandle node) {
+void WorkGraph::rescheduleYieldedNode(const NodeHandle& node) {
     auto* nodeData = _graph.getNodeData(node);
     if (!nodeData) return;
-    
+
     if (_config.enableDebugLogging) {
         auto msg = std::format("Rescheduling yielded node '{}'", nodeData->name);
         ENTROPY_LOG_DEBUG_CAT("WorkGraph", msg);
     }
-    
+
     // Clear the completion processed flag so it can run again
     nodeData->completionProcessed.store(false, std::memory_order_release);
-    
+
     // Transition from Yielded to Ready
     if (_stateManager) {
         if (_stateManager->transitionState(node, NodeState::Yielded, NodeState::Ready)) {
@@ -926,7 +919,7 @@ void WorkGraph::rescheduleYieldedNode(NodeHandle node) {
                 }
                 return;
             }
-            
+
             // Transition to scheduled
             if (_stateManager->transitionState(node, NodeState::Ready, NodeState::Scheduled)) {
                 // Schedule with the scheduler
@@ -941,50 +934,49 @@ void WorkGraph::rescheduleYieldedNode(NodeHandle node) {
     }
 }
 
-void WorkGraph::onNodeCancelled(NodeHandle node) {
+void WorkGraph::onNodeCancelled(const NodeHandle& node) {
     auto* nodeData = _graph.getNodeData(node);
     if (!nodeData) return;
-    
+
     // Prevent double-processing
     bool expected = false;
-    if (!nodeData->completionProcessed.compare_exchange_strong(expected, true, 
-                                                                std::memory_order_acq_rel)) {
-        return; // Already processed
+    if (!nodeData->completionProcessed.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+        return;  // Already processed
     }
-    
+
     // Transition state through state manager (from whatever state to cancelled)
     NodeState currentState = nodeData->state.load(std::memory_order_acquire);
     _stateManager->transitionState(node, currentState, NodeState::Cancelled);
-    
+
     // CRITICAL FIX: Decrement pending count for cancelled nodes
     uint32_t pending = _pendingNodes.fetch_sub(1, std::memory_order_acq_rel) - 1;
-    
+
     // If all nodes are complete, notify waiters
     if (pending == 0) {
         std::lock_guard<std::mutex> lock(_waitMutex);
         _waitCondition.notify_all();
     }
-    
+
     // Cancel all dependent nodes
     cancelDependents(node);
 }
 
-void WorkGraph::cancelDependents(NodeHandle failedNode) {
+void WorkGraph::cancelDependents(const NodeHandle& failedNode) {
     std::vector<NodeHandle> nodesToCancel;
-    
+
     {
         std::shared_lock<std::shared_mutex> lock(_graphMutex);
-        
+
         // Get all children of the failed node
         auto children = this->getChildren(failedNode);
-        
+
         for (auto& child : children) {
             auto* childData = _graph.getNodeData(child);
             if (!childData) continue;
-            
+
             // Increment failed parent count
             childData->failedParentCount.fetch_add(1, std::memory_order_acq_rel);
-            
+
             // If not already in terminal state, add to cancellation list
             NodeState childState = childData->state.load(std::memory_order_acquire);
             if (!isTerminalState(childState)) {
@@ -992,7 +984,7 @@ void WorkGraph::cancelDependents(NodeHandle failedNode) {
             }
         }
     }
-    
+
     // Cancel nodes outside the lock
     for (auto& node : nodesToCancel) {
         if (_config.enableDebugLogging) {
@@ -1007,12 +999,12 @@ Core::EventBus* WorkGraph::getEventBus() {
     if (_config.enableEvents && !_eventBus && !_config.sharedEventBus) {
         _eventBus = std::make_unique<Core::EventBus>();
     }
-    
+
     // Return shared event bus if configured
     if (_config.sharedEventBus) {
         return _config.sharedEventBus.get();
     }
-    
+
     return _eventBus.get();
 }
 
@@ -1022,6 +1014,6 @@ WorkGraphStats::Snapshot WorkGraph::getStats() const {
     return stats.toSnapshot();
 }
 
-} // namespace Concurrency
-} // namespace Core
-} // namespace EntropyEngine
+}  // namespace Concurrency
+}  // namespace Core
+}  // namespace EntropyEngine

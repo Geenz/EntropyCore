@@ -3,12 +3,15 @@
  * @brief Implementation of FileWatchManager using EntropyObject handle stamping
  */
 #include "FileWatchManager.h"
-#include "VirtualFileSystem.h"
-#include "../Logging/Logger.h"
-#include <efsw/efsw.hpp>
-#include <algorithm>
 
-namespace EntropyEngine::Core::IO {
+#include <algorithm>
+#include <efsw/efsw.hpp>
+
+#include "../Logging/Logger.h"
+#include "VirtualFileSystem.h"
+
+namespace EntropyEngine::Core::IO
+{
 
 // Simple glob matching helper
 static bool matchGlob(const std::string& str, const std::string& pattern) {
@@ -42,17 +45,17 @@ static bool matchGlob(const std::string& str, const std::string& pattern) {
 /**
  * @brief efsw listener implementation that dispatches to FileWatchManager
  */
-class FileWatchListener : public efsw::FileWatchListener {
+class FileWatchListener : public efsw::FileWatchListener
+{
 public:
     explicit FileWatchListener(FileWatchManager* manager) : _manager(manager) {}
 
-    void handleFileAction(efsw::WatchID watchId, const std::string& dir,
-                         const std::string& filename, efsw::Action action,
-                         std::string oldFilename) override {
+    void handleFileAction(efsw::WatchID watchId, const std::string& dir, const std::string& filename,
+                          efsw::Action action, std::string oldFilename) override {
         // Find which slot this watch belongs to
         uint32_t slotIndex = _manager->findSlotByEfswId(watchId);
         if (slotIndex == UINT32_MAX) {
-            return; // Watch no longer exists
+            return;  // Watch no longer exists
         }
 
         // Convert efsw action to our event type
@@ -71,7 +74,7 @@ public:
                 event = FileWatchEvent::Renamed;
                 break;
             default:
-                return; // Unknown action
+                return;  // Unknown action
         }
 
         // Build full path
@@ -107,9 +110,7 @@ private:
 // FileWatchManager implementation
 
 FileWatchManager::FileWatchManager(VirtualFileSystem* vfs)
-    : _vfs(vfs)
-    , _listener(std::make_unique<FileWatchListener>(this)) {
-}
+    : _vfs(vfs), _listener(std::make_unique<FileWatchListener>(this)) {}
 
 FileWatchManager::~FileWatchManager() {
     // Phase 1: Stop all watches and collect them (holding _slotMutex)
@@ -134,7 +135,7 @@ FileWatchManager::~FileWatchManager() {
 
     // Phase 3: Release watch references (no locks needed, refcount is atomic)
     for (FileWatch* watch : watchesToRelease) {
-        watch->release(); // Release the manager's reference
+        watch->release();  // Release the manager's reference
     }
 
     // Phase 4: Clear the ID map
@@ -144,9 +145,8 @@ FileWatchManager::~FileWatchManager() {
     }
 }
 
-FileWatch* FileWatchManager::createWatch(const std::string& path,
-                                        FileWatchCallback callback,
-                                        const WatchOptions& options) {
+FileWatch* FileWatchManager::createWatch(const std::string& path, FileWatchCallback callback,
+                                         const WatchOptions& options) {
     uint32_t index;
     uint32_t generation;
     FileWatch* watch = nullptr;
@@ -164,16 +164,16 @@ FileWatch* FileWatchManager::createWatch(const std::string& path,
         }
 
         // Allocate slot
-        auto slot_info = allocateSlot();
-        index = slot_info.first;
-        generation = slot_info.second;
+        auto slotInfo = allocateSlot();
+        index = slotInfo.first;
+        generation = slotInfo.second;
         if (index == UINT32_MAX) {
             ENTROPY_LOG_ERROR("Failed to allocate watch slot (out of slots)");
             return nullptr;
         }
 
         // Create FileWatch object (refcount starts at 1)
-        watch = new FileWatch(this, path, callback, options);
+        watch = new FileWatch(this, path, std::move(callback), options);
 
         // Stamp the object with handle identity using EntropyObject's built-in facility
         HandleAccess::set(*watch, this, index, generation);
@@ -200,7 +200,7 @@ FileWatch* FileWatchManager::createWatch(const std::string& path,
         std::lock_guard lock(_slotMutex);
         freeSlot(index);
         HandleAccess::clear(*watch);
-        watch->release(); // Delete the watch
+        watch->release();  // Delete the watch
         return nullptr;
     }
 
@@ -213,7 +213,8 @@ FileWatch* FileWatchManager::createWatch(const std::string& path,
         _efswIdToSlot[efswId] = index;
     }
 
-    ENTROPY_LOG_INFO("Created file watch for: " + path + " (slot " + std::to_string(index) + ", efswId " + std::to_string(efswId) + ")");
+    ENTROPY_LOG_INFO("Created file watch for: " + path + " (slot " + std::to_string(index) + ", efswId " +
+                     std::to_string(efswId) + ")");
 
     // Return with refcount=1 (caller owns the reference)
     return watch;
@@ -225,7 +226,7 @@ void FileWatchManager::destroyWatch(FileWatch* watch) {
     }
 
     watch->stop();
-    watch->release(); // Decrement refcount (may delete)
+    watch->release();  // Decrement refcount (may delete)
 }
 
 bool FileWatchManager::isValid(const FileWatch* watch) const {
@@ -243,9 +244,7 @@ bool FileWatchManager::isValid(const FileWatch* watch) const {
     uint32_t index = watch->handleIndex();
     uint32_t generation = watch->handleGeneration();
 
-    return index < _slots.size() &&
-           _slots[index].occupied &&
-           _slots[index].generation == generation &&
+    return index < _slots.size() && _slots[index].occupied && _slots[index].generation == generation &&
            _slots[index].watch == watch;
 }
 
@@ -275,23 +274,23 @@ void FileWatchManager::freeSlot(uint32_t index) {
     WatchSlot& slot = _slots[index];
     slot.occupied = false;
     slot.watch = nullptr;
-    slot.generation++; // Increment generation to invalidate existing handles
+    slot.generation++;  // Increment generation to invalidate existing handles
 }
 
 void FileWatchManager::ensureWatcherInitialized() {
     if (_watcher) {
-        return; // Already initialized
+        return;  // Already initialized
     }
 
     _watcher = std::make_unique<efsw::FileWatcher>();
-    _watcher->watch(); // Start watching
+    _watcher->watch();  // Start watching
 }
 
 bool FileWatchManager::matchesFilters(const std::string& path, const WatchOptions& options) const {
     // Check exclude patterns first
     for (const auto& pattern : options.excludePatterns) {
         if (matchGlob(path, pattern)) {
-            return false; // Excluded
+            return false;  // Excluded
         }
     }
 
@@ -303,11 +302,11 @@ bool FileWatchManager::matchesFilters(const std::string& path, const WatchOption
     // Check include patterns
     for (const auto& pattern : options.includePatterns) {
         if (matchGlob(path, pattern)) {
-            return true; // Included
+            return true;  // Included
         }
     }
 
-    return false; // Not in include list
+    return false;  // Not in include list
 }
 
 void FileWatchManager::onFileEvent(uint32_t slotIndex, const FileWatchInfo& info) {
@@ -315,19 +314,19 @@ void FileWatchManager::onFileEvent(uint32_t slotIndex, const FileWatchInfo& info
     std::unique_lock lock(_slotMutex);
 
     if (slotIndex >= _slots.size() || !_slots[slotIndex].occupied) {
-        return; // Slot no longer valid
+        return;  // Slot no longer valid
     }
 
     WatchSlot& slot = _slots[slotIndex];
     FileWatch* watch = slot.watch;
 
     if (!watch || !watch->isWatching()) {
-        return; // Watch stopped
+        return;  // Watch stopped
     }
 
     // Check filters
     if (!matchesFilters(info.path, watch->options())) {
-        return; // Filtered out
+        return;  // Filtered out
     }
 
     // Copy callback (so we can release lock before invoking)
@@ -336,10 +335,11 @@ void FileWatchManager::onFileEvent(uint32_t slotIndex, const FileWatchInfo& info
 
     // Dispatch to WorkContractGroup via VFS for thread safety
     if (_vfs && callback) {
-        _vfs->submit(info.path, [callback, info](FileOperationHandle::OpState& s, const std::string&, const ExecContext&) {
-            callback(info);
-            s.complete(FileOpStatus::Complete);
-        });
+        _vfs->submit(info.path,
+                     [callback, info](FileOperationHandle::OpState& s, const std::string&, const ExecContext&) {
+                         callback(info);
+                         s.complete(FileOpStatus::Complete);
+                     });
     }
 }
 
@@ -352,7 +352,7 @@ uint32_t FileWatchManager::findSlotByEfswId(efsw::WatchID efswId) const {
         return it->second;
     }
 
-    return UINT32_MAX; // Not found
+    return UINT32_MAX;  // Not found
 }
 
 void FileWatchManager::removeEfswWatch(FileWatch* watch) {
@@ -395,4 +395,4 @@ void FileWatchManager::removeEfswWatch(FileWatch* watch) {
     }
 }
 
-} // namespace EntropyEngine::Core::IO
+}  // namespace EntropyEngine::Core::IO

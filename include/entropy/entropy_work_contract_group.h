@@ -68,11 +68,8 @@ extern "C" {
  * }
  * @endcode
  */
-ENTROPY_API entropy_WorkContractGroup entropy_work_contract_group_create(
-    size_t capacity,
-    const char* name,
-    EntropyStatus* status
-);
+ENTROPY_API entropy_WorkContractGroup entropy_work_contract_group_create(size_t capacity, const char* name,
+                                                                         EntropyStatus* status);
 
 /**
  * @brief Destroys a work contract group and frees resources
@@ -99,9 +96,7 @@ ENTROPY_API entropy_WorkContractGroup entropy_work_contract_group_create(
  * entropy_work_contract_group_destroy(group);
  * @endcode
  */
-ENTROPY_API void entropy_work_contract_group_destroy(
-    entropy_WorkContractGroup group
-);
+ENTROPY_API void entropy_work_contract_group_destroy(entropy_WorkContractGroup group);
 
 // ============================================================================
 // Contract Creation
@@ -149,13 +144,11 @@ ENTROPY_API void entropy_work_contract_group_destroy(
  * }
  * @endcode
  */
-ENTROPY_API entropy_WorkContractHandle entropy_work_contract_group_create_contract(
-    entropy_WorkContractGroup group,
-    EntropyWorkCallback callback,
-    void* user_data,
-    EntropyExecutionType execution_type,
-    EntropyStatus* status
-);
+ENTROPY_API entropy_WorkContractHandle entropy_work_contract_group_create_contract(entropy_WorkContractGroup group,
+                                                                                   EntropyWorkCallback callback,
+                                                                                   void* user_data,
+                                                                                   EntropyExecutionType execution_type,
+                                                                                   EntropyStatus* status);
 
 // ============================================================================
 // Synchronization
@@ -189,10 +182,7 @@ ENTROPY_API entropy_WorkContractHandle entropy_work_contract_group_create_contra
  * printf("All work finished!\n");
  * @endcode
  */
-ENTROPY_API void entropy_work_contract_group_wait(
-    entropy_WorkContractGroup group,
-    EntropyStatus* status
-);
+ENTROPY_API void entropy_work_contract_group_wait(entropy_WorkContractGroup group, EntropyStatus* status);
 
 /**
  * @brief Stops the group from accepting new work selections
@@ -214,10 +204,7 @@ ENTROPY_API void entropy_work_contract_group_wait(
  * entropy_work_contract_group_destroy(group);
  * @endcode
  */
-ENTROPY_API void entropy_work_contract_group_stop(
-    entropy_WorkContractGroup group,
-    EntropyStatus* status
-);
+ENTROPY_API void entropy_work_contract_group_stop(entropy_WorkContractGroup group, EntropyStatus* status);
 
 /**
  * @brief Resumes the group to allow new work selections
@@ -238,10 +225,7 @@ ENTROPY_API void entropy_work_contract_group_stop(
  * entropy_work_contract_group_resume(group, &status);
  * @endcode
  */
-ENTROPY_API void entropy_work_contract_group_resume(
-    entropy_WorkContractGroup group,
-    EntropyStatus* status
-);
+ENTROPY_API void entropy_work_contract_group_resume(entropy_WorkContractGroup group, EntropyStatus* status);
 
 /**
  * @brief Checks if the group is in the process of stopping
@@ -257,9 +241,7 @@ ENTROPY_API void entropy_work_contract_group_resume(
  * }
  * @endcode
  */
-ENTROPY_API EntropyBool entropy_work_contract_group_is_stopping(
-    entropy_WorkContractGroup group
-);
+ENTROPY_API EntropyBool entropy_work_contract_group_is_stopping(entropy_WorkContractGroup group);
 
 // ============================================================================
 // Statistics and Monitoring
@@ -273,9 +255,7 @@ ENTROPY_API EntropyBool entropy_work_contract_group_is_stopping(
  *
  * @threadsafety Thread-safe
  */
-ENTROPY_API size_t entropy_work_contract_group_capacity(
-    entropy_WorkContractGroup group
-);
+ENTROPY_API size_t entropy_work_contract_group_capacity(entropy_WorkContractGroup group);
 
 /**
  * @brief Gets the number of currently allocated contracts
@@ -294,9 +274,7 @@ ENTROPY_API size_t entropy_work_contract_group_capacity(
  *        used, capacity, (used * 100.0) / capacity);
  * @endcode
  */
-ENTROPY_API size_t entropy_work_contract_group_active_count(
-    entropy_WorkContractGroup group
-);
+ENTROPY_API size_t entropy_work_contract_group_active_count(entropy_WorkContractGroup group);
 
 /**
  * @brief Gets the number of contracts currently scheduled for execution
@@ -316,9 +294,7 @@ ENTROPY_API size_t entropy_work_contract_group_active_count(
  * }
  * @endcode
  */
-ENTROPY_API size_t entropy_work_contract_group_scheduled_count(
-    entropy_WorkContractGroup group
-);
+ENTROPY_API size_t entropy_work_contract_group_scheduled_count(entropy_WorkContractGroup group);
 
 /**
  * @brief Gets the number of contracts currently executing
@@ -330,9 +306,7 @@ ENTROPY_API size_t entropy_work_contract_group_scheduled_count(
  *
  * @threadsafety Thread-safe
  */
-ENTROPY_API size_t entropy_work_contract_group_executing_count(
-    entropy_WorkContractGroup group
-);
+ENTROPY_API size_t entropy_work_contract_group_executing_count(entropy_WorkContractGroup group);
 
 /**
  * @brief Gets the number of main thread contracts currently scheduled
@@ -342,9 +316,7 @@ ENTROPY_API size_t entropy_work_contract_group_executing_count(
  *
  * @threadsafety Thread-safe
  */
-ENTROPY_API size_t entropy_work_contract_group_main_thread_scheduled_count(
-    entropy_WorkContractGroup group
-);
+ENTROPY_API size_t entropy_work_contract_group_main_thread_scheduled_count(entropy_WorkContractGroup group);
 
 /**
  * @brief Gets the number of main thread contracts currently executing
@@ -354,9 +326,7 @@ ENTROPY_API size_t entropy_work_contract_group_main_thread_scheduled_count(
  *
  * @threadsafety Thread-safe
  */
-ENTROPY_API size_t entropy_work_contract_group_main_thread_executing_count(
-    entropy_WorkContractGroup group
-);
+ENTROPY_API size_t entropy_work_contract_group_main_thread_executing_count(entropy_WorkContractGroup group);
 
 /**
  * @brief Checks if there are any main thread contracts ready to execute
@@ -375,9 +345,7 @@ ENTROPY_API size_t entropy_work_contract_group_main_thread_executing_count(
  * }
  * @endcode
  */
-ENTROPY_API EntropyBool entropy_work_contract_group_has_main_thread_work(
-    entropy_WorkContractGroup group
-);
+ENTROPY_API EntropyBool entropy_work_contract_group_has_main_thread_work(entropy_WorkContractGroup group);
 
 // ============================================================================
 // Main Thread Execution
@@ -407,10 +375,8 @@ ENTROPY_API EntropyBool entropy_work_contract_group_has_main_thread_work(
  * }
  * @endcode
  */
-ENTROPY_API size_t entropy_work_contract_group_execute_all_main_thread_work(
-    entropy_WorkContractGroup group,
-    EntropyStatus* status
-);
+ENTROPY_API size_t entropy_work_contract_group_execute_all_main_thread_work(entropy_WorkContractGroup group,
+                                                                            EntropyStatus* status);
 
 /**
  * @brief Executes main thread targeted work contracts with a limit
@@ -436,11 +402,8 @@ ENTROPY_API size_t entropy_work_contract_group_execute_all_main_thread_work(
  * }
  * @endcode
  */
-ENTROPY_API size_t entropy_work_contract_group_execute_main_thread_work(
-    entropy_WorkContractGroup group,
-    size_t max_contracts,
-    EntropyStatus* status
-);
+ENTROPY_API size_t entropy_work_contract_group_execute_main_thread_work(entropy_WorkContractGroup group,
+                                                                        size_t max_contracts, EntropyStatus* status);
 
 // ============================================================================
 // Advanced Execution Control (for custom executors)
@@ -478,11 +441,9 @@ ENTROPY_API size_t entropy_work_contract_group_execute_main_thread_work(
  * }
  * @endcode
  */
-ENTROPY_API entropy_WorkContractHandle entropy_work_contract_group_select_for_execution(
-    entropy_WorkContractGroup group,
-    uint64_t* bias,
-    EntropyStatus* status
-);
+ENTROPY_API entropy_WorkContractHandle entropy_work_contract_group_select_for_execution(entropy_WorkContractGroup group,
+                                                                                        uint64_t* bias,
+                                                                                        EntropyStatus* status);
 
 /**
  * @brief Executes the work function of a contract
@@ -496,11 +457,8 @@ ENTROPY_API entropy_WorkContractHandle entropy_work_contract_group_select_for_ex
  *
  * @threadsafety Thread-safe, but each handle can only be executed once
  */
-ENTROPY_API void entropy_work_contract_group_execute_contract(
-    entropy_WorkContractGroup group,
-    entropy_WorkContractHandle handle,
-    EntropyStatus* status
-);
+ENTROPY_API void entropy_work_contract_group_execute_contract(entropy_WorkContractGroup group,
+                                                              entropy_WorkContractHandle handle, EntropyStatus* status);
 
 /**
  * @brief Completes execution and cleans up a contract
@@ -514,11 +472,9 @@ ENTROPY_API void entropy_work_contract_group_execute_contract(
  *
  * @threadsafety Thread-safe
  */
-ENTROPY_API void entropy_work_contract_group_complete_execution(
-    entropy_WorkContractGroup group,
-    entropy_WorkContractHandle handle,
-    EntropyStatus* status
-);
+ENTROPY_API void entropy_work_contract_group_complete_execution(entropy_WorkContractGroup group,
+                                                                entropy_WorkContractHandle handle,
+                                                                EntropyStatus* status);
 
 #ifdef __cplusplus
 }

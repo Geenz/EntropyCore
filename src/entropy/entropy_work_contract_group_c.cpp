@@ -7,12 +7,13 @@
  * This file is part of the Entropy Core project.
  */
 
+#include <limits>
+#include <new>
+#include <string>
+
 #include "../../include/entropy/entropy_work_contract_group.h"
 #include "../Concurrency/WorkContractGroup.h"
 #include "../Concurrency/WorkGraphTypes.h"
-#include <new>
-#include <limits>
-#include <string>
 
 using namespace EntropyEngine::Core::Concurrency;
 
@@ -20,14 +21,15 @@ using namespace EntropyEngine::Core::Concurrency;
 // Internal Helpers
 // ============================================================================
 
-namespace {
+namespace
+{
 
 // Centralized exception translation
 void translate_exception(EntropyStatus* status) {
     if (!status) return;
 
     try {
-        throw; // Re-throw current exception
+        throw;  // Re-throw current exception
     } catch (const std::bad_alloc&) {
         *status = ENTROPY_ERR_NO_MEMORY;
     } catch (const std::invalid_argument&) {
@@ -35,7 +37,7 @@ void translate_exception(EntropyStatus* status) {
     } catch (const std::exception&) {
         *status = ENTROPY_ERR_UNKNOWN;
     } catch (...) {
-        std::terminate(); // Unknown exception = programming bug
+        std::terminate();  // Unknown exception = programming bug
     }
 }
 
@@ -62,13 +64,16 @@ inline WorkContractHandle* to_cpp_handle(entropy_WorkContractHandle handle) {
 // Convert C ExecutionType to C++ enum
 ExecutionType to_cpp_execution_type(EntropyExecutionType type) {
     switch (type) {
-        case ENTROPY_EXEC_ANY_THREAD:  return ExecutionType::AnyThread;
-        case ENTROPY_EXEC_MAIN_THREAD: return ExecutionType::MainThread;
-        default:                       return ExecutionType::AnyThread;
+        case ENTROPY_EXEC_ANY_THREAD:
+            return ExecutionType::AnyThread;
+        case ENTROPY_EXEC_MAIN_THREAD:
+            return ExecutionType::MainThread;
+        default:
+            return ExecutionType::AnyThread;
     }
 }
 
-} // anonymous namespace
+}  // anonymous namespace
 
 // ============================================================================
 // WorkContractGroup C API Implementation
@@ -76,11 +81,7 @@ ExecutionType to_cpp_execution_type(EntropyExecutionType type) {
 
 extern "C" {
 
-entropy_WorkContractGroup entropy_work_contract_group_create(
-    size_t capacity,
-    const char* name,
-    EntropyStatus* status
-) {
+entropy_WorkContractGroup entropy_work_contract_group_create(size_t capacity, const char* name, EntropyStatus* status) {
     if (!status) return nullptr;
     *status = ENTROPY_OK;
 
@@ -91,7 +92,7 @@ entropy_WorkContractGroup entropy_work_contract_group_create(
 
     try {
         std::string group_name = name ? name : "WorkContractGroup";
-        auto* group = new(std::nothrow) WorkContractGroup(capacity, group_name);
+        auto* group = new (std::nothrow) WorkContractGroup(capacity, group_name);
         if (!group) {
             *status = ENTROPY_ERR_NO_MEMORY;
             return nullptr;
@@ -103,9 +104,7 @@ entropy_WorkContractGroup entropy_work_contract_group_create(
     }
 }
 
-void entropy_work_contract_group_destroy(
-    entropy_WorkContractGroup group
-) {
+void entropy_work_contract_group_destroy(entropy_WorkContractGroup group) {
     if (!group) return;
 
     try {
@@ -116,13 +115,10 @@ void entropy_work_contract_group_destroy(
     }
 }
 
-entropy_WorkContractHandle entropy_work_contract_group_create_contract(
-    entropy_WorkContractGroup group,
-    EntropyWorkCallback callback,
-    void* user_data,
-    EntropyExecutionType execution_type,
-    EntropyStatus* status
-) {
+entropy_WorkContractHandle entropy_work_contract_group_create_contract(entropy_WorkContractGroup group,
+                                                                       EntropyWorkCallback callback, void* user_data,
+                                                                       EntropyExecutionType execution_type,
+                                                                       EntropyStatus* status) {
     if (!status) return nullptr;
     *status = ENTROPY_OK;
 
@@ -153,7 +149,7 @@ entropy_WorkContractHandle entropy_work_contract_group_create_contract(
         }
 
         // Allocate a C++ handle on the heap to return to C code
-        auto* handle_ptr = new(std::nothrow) WorkContractHandle(cpp_handle);
+        auto* handle_ptr = new (std::nothrow) WorkContractHandle(cpp_handle);
         if (!handle_ptr) {
             // Failed to allocate handle wrapper - need to release the contract
             cpp_handle.release();
@@ -168,10 +164,7 @@ entropy_WorkContractHandle entropy_work_contract_group_create_contract(
     }
 }
 
-void entropy_work_contract_group_wait(
-    entropy_WorkContractGroup group,
-    EntropyStatus* status
-) {
+void entropy_work_contract_group_wait(entropy_WorkContractGroup group, EntropyStatus* status) {
     if (!status) return;
     *status = ENTROPY_OK;
 
@@ -188,10 +181,7 @@ void entropy_work_contract_group_wait(
     }
 }
 
-void entropy_work_contract_group_stop(
-    entropy_WorkContractGroup group,
-    EntropyStatus* status
-) {
+void entropy_work_contract_group_stop(entropy_WorkContractGroup group, EntropyStatus* status) {
     if (!status) return;
     *status = ENTROPY_OK;
 
@@ -208,10 +198,7 @@ void entropy_work_contract_group_stop(
     }
 }
 
-void entropy_work_contract_group_resume(
-    entropy_WorkContractGroup group,
-    EntropyStatus* status
-) {
+void entropy_work_contract_group_resume(entropy_WorkContractGroup group, EntropyStatus* status) {
     if (!status) return;
     *status = ENTROPY_OK;
 
@@ -228,9 +215,7 @@ void entropy_work_contract_group_resume(
     }
 }
 
-EntropyBool entropy_work_contract_group_is_stopping(
-    entropy_WorkContractGroup group
-) {
+EntropyBool entropy_work_contract_group_is_stopping(entropy_WorkContractGroup group) {
     if (!group) return ENTROPY_FALSE;
 
     try {
@@ -241,9 +226,7 @@ EntropyBool entropy_work_contract_group_is_stopping(
     }
 }
 
-size_t entropy_work_contract_group_capacity(
-    entropy_WorkContractGroup group
-) {
+size_t entropy_work_contract_group_capacity(entropy_WorkContractGroup group) {
     if (!group) return 0;
 
     try {
@@ -254,9 +237,7 @@ size_t entropy_work_contract_group_capacity(
     }
 }
 
-size_t entropy_work_contract_group_active_count(
-    entropy_WorkContractGroup group
-) {
+size_t entropy_work_contract_group_active_count(entropy_WorkContractGroup group) {
     if (!group) return 0;
 
     try {
@@ -267,9 +248,7 @@ size_t entropy_work_contract_group_active_count(
     }
 }
 
-size_t entropy_work_contract_group_scheduled_count(
-    entropy_WorkContractGroup group
-) {
+size_t entropy_work_contract_group_scheduled_count(entropy_WorkContractGroup group) {
     if (!group) return 0;
 
     try {
@@ -280,9 +259,7 @@ size_t entropy_work_contract_group_scheduled_count(
     }
 }
 
-size_t entropy_work_contract_group_executing_count(
-    entropy_WorkContractGroup group
-) {
+size_t entropy_work_contract_group_executing_count(entropy_WorkContractGroup group) {
     if (!group) return 0;
 
     try {
@@ -293,9 +270,7 @@ size_t entropy_work_contract_group_executing_count(
     }
 }
 
-size_t entropy_work_contract_group_main_thread_scheduled_count(
-    entropy_WorkContractGroup group
-) {
+size_t entropy_work_contract_group_main_thread_scheduled_count(entropy_WorkContractGroup group) {
     if (!group) return 0;
 
     try {
@@ -306,9 +281,7 @@ size_t entropy_work_contract_group_main_thread_scheduled_count(
     }
 }
 
-size_t entropy_work_contract_group_main_thread_executing_count(
-    entropy_WorkContractGroup group
-) {
+size_t entropy_work_contract_group_main_thread_executing_count(entropy_WorkContractGroup group) {
     if (!group) return 0;
 
     try {
@@ -319,9 +292,7 @@ size_t entropy_work_contract_group_main_thread_executing_count(
     }
 }
 
-EntropyBool entropy_work_contract_group_has_main_thread_work(
-    entropy_WorkContractGroup group
-) {
+EntropyBool entropy_work_contract_group_has_main_thread_work(entropy_WorkContractGroup group) {
     if (!group) return ENTROPY_FALSE;
 
     try {
@@ -332,10 +303,8 @@ EntropyBool entropy_work_contract_group_has_main_thread_work(
     }
 }
 
-size_t entropy_work_contract_group_execute_all_main_thread_work(
-    entropy_WorkContractGroup group,
-    EntropyStatus* status
-) {
+size_t entropy_work_contract_group_execute_all_main_thread_work(entropy_WorkContractGroup group,
+                                                                EntropyStatus* status) {
     if (!status) return 0;
     *status = ENTROPY_OK;
 
@@ -353,11 +322,8 @@ size_t entropy_work_contract_group_execute_all_main_thread_work(
     }
 }
 
-size_t entropy_work_contract_group_execute_main_thread_work(
-    entropy_WorkContractGroup group,
-    size_t max_contracts,
-    EntropyStatus* status
-) {
+size_t entropy_work_contract_group_execute_main_thread_work(entropy_WorkContractGroup group, size_t max_contracts,
+                                                            EntropyStatus* status) {
     if (!status) return 0;
     *status = ENTROPY_OK;
 
@@ -375,11 +341,8 @@ size_t entropy_work_contract_group_execute_main_thread_work(
     }
 }
 
-entropy_WorkContractHandle entropy_work_contract_group_select_for_execution(
-    entropy_WorkContractGroup group,
-    uint64_t* bias,
-    EntropyStatus* status
-) {
+entropy_WorkContractHandle entropy_work_contract_group_select_for_execution(entropy_WorkContractGroup group,
+                                                                            uint64_t* bias, EntropyStatus* status) {
     if (!status) return nullptr;
     *status = ENTROPY_OK;
 
@@ -403,7 +366,7 @@ entropy_WorkContractHandle entropy_work_contract_group_select_for_execution(
         }
 
         // Allocate a C++ handle on the heap
-        auto* handle_ptr = new(std::nothrow) WorkContractHandle(cpp_handle);
+        auto* handle_ptr = new (std::nothrow) WorkContractHandle(cpp_handle);
         if (!handle_ptr) {
             *status = ENTROPY_ERR_NO_MEMORY;
             return nullptr;
@@ -416,11 +379,8 @@ entropy_WorkContractHandle entropy_work_contract_group_select_for_execution(
     }
 }
 
-void entropy_work_contract_group_execute_contract(
-    entropy_WorkContractGroup group,
-    entropy_WorkContractHandle handle,
-    EntropyStatus* status
-) {
+void entropy_work_contract_group_execute_contract(entropy_WorkContractGroup group, entropy_WorkContractHandle handle,
+                                                  EntropyStatus* status) {
     if (!status) return;
     *status = ENTROPY_OK;
 
@@ -438,11 +398,8 @@ void entropy_work_contract_group_execute_contract(
     }
 }
 
-void entropy_work_contract_group_complete_execution(
-    entropy_WorkContractGroup group,
-    entropy_WorkContractHandle handle,
-    EntropyStatus* status
-) {
+void entropy_work_contract_group_complete_execution(entropy_WorkContractGroup group, entropy_WorkContractHandle handle,
+                                                    EntropyStatus* status) {
     if (!status) return;
     *status = ENTROPY_OK;
 
@@ -464,4 +421,4 @@ void entropy_work_contract_group_complete_execution(
     }
 }
 
-} // extern "C"
+}  // extern "C"

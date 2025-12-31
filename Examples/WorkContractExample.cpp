@@ -2,9 +2,9 @@
 // Created by Geenz on 8/8/25.
 //
 
-
 #define NOMINMAX
 #include <EntropyCore.h>
+
 #include <format>
 using namespace EntropyEngine;
 using namespace Core;
@@ -23,9 +23,8 @@ int main() {
 
     // Submit a bunch of contracts. Log a few handle debug strings and periodic group state.
     for (int i = 0; i < 1000; i++) {
-        auto h = group.createContract([=]() {
-            ENTROPY_LOG_INFO_CAT("WorkContractExample", std::format("Executing contract {}", i));
-        });
+        auto h = group.createContract(
+            [=]() { ENTROPY_LOG_INFO_CAT("WorkContractExample", std::format("Executing contract {}", i)); });
 
         if (i < 3) {
             ENTROPY_LOG_INFO_CAT("WorkContractExample", std::format("Created handle: {}", h.debugString()));
@@ -34,7 +33,8 @@ int main() {
         h.schedule();
 
         if ((i + 1) % 250 == 0) {
-            ENTROPY_LOG_INFO_CAT("WorkContractExample", std::format("After scheduling {}: {}", i + 1, group.debugString()));
+            ENTROPY_LOG_INFO_CAT("WorkContractExample",
+                                 std::format("After scheduling {}: {}", i + 1, group.debugString()));
         }
     }
 

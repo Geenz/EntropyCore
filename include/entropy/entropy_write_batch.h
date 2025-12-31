@@ -9,8 +9,8 @@
  * modifications without repeatedly reading and writing the entire file.
  */
 
-#include "entropy/entropy_vfs_types.h"
 #include "entropy/entropy_file_operation_handle.h"
+#include "entropy/entropy_vfs_types.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -56,12 +56,8 @@ ENTROPY_API void entropy_write_batch_destroy(entropy_WriteBatch batch);
  * entropy_write_batch_destroy(batch);
  * @endcode
  */
-ENTROPY_API void entropy_write_batch_write_line(
-    entropy_WriteBatch batch,
-    size_t line_number,
-    const char* content,
-    EntropyStatus* status
-);
+ENTROPY_API void entropy_write_batch_write_line(entropy_WriteBatch batch, size_t line_number, const char* content,
+                                                EntropyStatus* status);
 
 /**
  * @brief Insert a line at index (shifts existing lines down)
@@ -74,12 +70,8 @@ ENTROPY_API void entropy_write_batch_write_line(
  * @param status Error reporting (required)
  * @threadsafety NOT thread-safe - do not use batch concurrently
  */
-ENTROPY_API void entropy_write_batch_insert_line(
-    entropy_WriteBatch batch,
-    size_t line_number,
-    const char* content,
-    EntropyStatus* status
-);
+ENTROPY_API void entropy_write_batch_insert_line(entropy_WriteBatch batch, size_t line_number, const char* content,
+                                                 EntropyStatus* status);
 
 /**
  * @brief Delete a line at index (shifts remaining lines up)
@@ -91,11 +83,7 @@ ENTROPY_API void entropy_write_batch_insert_line(
  * @param status Error reporting (required)
  * @threadsafety NOT thread-safe - do not use batch concurrently
  */
-ENTROPY_API void entropy_write_batch_delete_line(
-    entropy_WriteBatch batch,
-    size_t line_number,
-    EntropyStatus* status
-);
+ENTROPY_API void entropy_write_batch_delete_line(entropy_WriteBatch batch, size_t line_number, EntropyStatus* status);
 
 /**
  * @brief Append a line to the end of the file
@@ -107,11 +95,7 @@ ENTROPY_API void entropy_write_batch_delete_line(
  * @param status Error reporting (required)
  * @threadsafety NOT thread-safe - do not use batch concurrently
  */
-ENTROPY_API void entropy_write_batch_append_line(
-    entropy_WriteBatch batch,
-    const char* content,
-    EntropyStatus* status
-);
+ENTROPY_API void entropy_write_batch_append_line(entropy_WriteBatch batch, const char* content, EntropyStatus* status);
 
 /**
  * @brief Replace entire file content with text
@@ -123,11 +107,7 @@ ENTROPY_API void entropy_write_batch_append_line(
  * @param status Error reporting (required)
  * @threadsafety NOT thread-safe - do not use batch concurrently
  */
-ENTROPY_API void entropy_write_batch_replace_all(
-    entropy_WriteBatch batch,
-    const char* content,
-    EntropyStatus* status
-);
+ENTROPY_API void entropy_write_batch_replace_all(entropy_WriteBatch batch, const char* content, EntropyStatus* status);
 
 /**
  * @brief Clear the file (truncate to zero length)
@@ -138,10 +118,7 @@ ENTROPY_API void entropy_write_batch_replace_all(
  * @param status Error reporting (required)
  * @threadsafety NOT thread-safe - do not use batch concurrently
  */
-ENTROPY_API void entropy_write_batch_clear(
-    entropy_WriteBatch batch,
-    EntropyStatus* status
-);
+ENTROPY_API void entropy_write_batch_clear(entropy_WriteBatch batch, EntropyStatus* status);
 
 /* ============================================================================
  * Execution
@@ -172,10 +149,7 @@ ENTROPY_API void entropy_write_batch_clear(
  * entropy_write_batch_destroy(batch);
  * @endcode
  */
-ENTROPY_API entropy_FileOperationHandle entropy_write_batch_commit(
-    entropy_WriteBatch batch,
-    EntropyStatus* status
-);
+ENTROPY_API entropy_FileOperationHandle entropy_write_batch_commit(entropy_WriteBatch batch, EntropyStatus* status);
 
 /**
  * @brief Apply all pending operations atomically with options
@@ -187,11 +161,9 @@ ENTROPY_API entropy_FileOperationHandle entropy_write_batch_commit(
  * @threadsafety NOT thread-safe - do not use batch concurrently
  * @ownership Returns owned pointer - must call entropy_file_operation_handle_destroy()
  */
-ENTROPY_API entropy_FileOperationHandle entropy_write_batch_commit_with_options(
-    entropy_WriteBatch batch,
-    const EntropyWriteOptions* options,
-    EntropyStatus* status
-);
+ENTROPY_API entropy_FileOperationHandle entropy_write_batch_commit_with_options(entropy_WriteBatch batch,
+                                                                                const EntropyWriteOptions* options,
+                                                                                EntropyStatus* status);
 
 /**
  * @brief Build the resulting content without writing it
@@ -205,10 +177,7 @@ ENTROPY_API entropy_FileOperationHandle entropy_write_batch_commit_with_options(
  * @threadsafety NOT thread-safe - do not use batch concurrently
  * @ownership Returns owned pointer - must call entropy_file_operation_handle_destroy()
  */
-ENTROPY_API entropy_FileOperationHandle entropy_write_batch_preview(
-    entropy_WriteBatch batch,
-    EntropyStatus* status
-);
+ENTROPY_API entropy_FileOperationHandle entropy_write_batch_preview(entropy_WriteBatch batch, EntropyStatus* status);
 
 /* ============================================================================
  * Query and Management
@@ -222,10 +191,7 @@ ENTROPY_API entropy_FileOperationHandle entropy_write_batch_preview(
  * @return Number of operations queued, or 0 on error
  * @threadsafety Thread-safe
  */
-ENTROPY_API size_t entropy_write_batch_pending_operations(
-    entropy_WriteBatch batch,
-    EntropyStatus* status
-);
+ENTROPY_API size_t entropy_write_batch_pending_operations(entropy_WriteBatch batch, EntropyStatus* status);
 
 /**
  * @brief Check if the batch is empty
@@ -235,10 +201,7 @@ ENTROPY_API size_t entropy_write_batch_pending_operations(
  * @return True if no operations pending, false otherwise
  * @threadsafety Thread-safe
  */
-ENTROPY_API EntropyBool entropy_write_batch_is_empty(
-    entropy_WriteBatch batch,
-    EntropyStatus* status
-);
+ENTROPY_API EntropyBool entropy_write_batch_is_empty(entropy_WriteBatch batch, EntropyStatus* status);
 
 /**
  * @brief Clear all pending operations without writing
@@ -249,10 +212,7 @@ ENTROPY_API EntropyBool entropy_write_batch_is_empty(
  * @param status Error reporting (required)
  * @threadsafety NOT thread-safe - do not use batch concurrently
  */
-ENTROPY_API void entropy_write_batch_reset(
-    entropy_WriteBatch batch,
-    EntropyStatus* status
-);
+ENTROPY_API void entropy_write_batch_reset(entropy_WriteBatch batch, EntropyStatus* status);
 
 /**
  * @brief Get the target file path for this batch
@@ -265,11 +225,8 @@ ENTROPY_API void entropy_write_batch_reset(
  * @threadsafety Thread-safe
  * @ownership Returns borrowed pointer - do NOT free
  */
-ENTROPY_API const char* entropy_write_batch_get_path(
-    entropy_WriteBatch batch,
-    EntropyStatus* status
-);
+ENTROPY_API const char* entropy_write_batch_get_path(entropy_WriteBatch batch, EntropyStatus* status);
 
 #ifdef __cplusplus
-} // extern "C"
+}  // extern "C"
 #endif

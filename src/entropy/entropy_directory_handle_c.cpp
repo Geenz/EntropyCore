@@ -3,12 +3,13 @@
  * @brief Implementation of DirectoryHandle C API
  */
 
-#include "entropy/entropy_directory_handle.h"
+#include <new>
+#include <string>
+
 #include "VirtualFileSystem/DirectoryHandle.h"
 #include "VirtualFileSystem/FileOperationHandle.h"
 #include "VirtualFileSystem/IFileSystemBackend.h"
-#include <new>
-#include <string>
+#include "entropy/entropy_directory_handle.h"
 
 using namespace EntropyEngine::Core::IO;
 
@@ -75,10 +76,7 @@ static ListDirectoryOptions to_cpp_list_options(const EntropyListDirectoryOption
 
 extern "C" {
 
-entropy_DirectoryHandle entropy_directory_handle_clone(
-    entropy_DirectoryHandle handle,
-    EntropyStatus* status
-) {
+entropy_DirectoryHandle entropy_directory_handle_clone(entropy_DirectoryHandle handle, EntropyStatus* status) {
     if (!status) return nullptr;
     if (!handle) {
         *status = ENTROPY_ERR_INVALID_ARG;
@@ -87,7 +85,7 @@ entropy_DirectoryHandle entropy_directory_handle_clone(
 
     try {
         auto* cpp_handle = reinterpret_cast<DirectoryHandle*>(handle);
-        auto* clone = new(std::nothrow) DirectoryHandle(*cpp_handle);
+        auto* clone = new (std::nothrow) DirectoryHandle(*cpp_handle);
         if (!clone) {
             *status = ENTROPY_ERR_NO_MEMORY;
             return nullptr;
@@ -106,11 +104,8 @@ void entropy_directory_handle_destroy(entropy_DirectoryHandle handle) {
     delete cpp_handle;
 }
 
-entropy_FileOperationHandle entropy_directory_handle_create(
-    entropy_DirectoryHandle handle,
-    EntropyBool create_parents,
-    EntropyStatus* status
-) {
+entropy_FileOperationHandle entropy_directory_handle_create(entropy_DirectoryHandle handle, EntropyBool create_parents,
+                                                            EntropyStatus* status) {
     if (!status) return nullptr;
     if (!handle) {
         *status = ENTROPY_ERR_INVALID_ARG;
@@ -128,11 +123,8 @@ entropy_FileOperationHandle entropy_directory_handle_create(
     }
 }
 
-entropy_FileOperationHandle entropy_directory_handle_remove(
-    entropy_DirectoryHandle handle,
-    EntropyBool recursive,
-    EntropyStatus* status
-) {
+entropy_FileOperationHandle entropy_directory_handle_remove(entropy_DirectoryHandle handle, EntropyBool recursive,
+                                                            EntropyStatus* status) {
     if (!status) return nullptr;
     if (!handle) {
         *status = ENTROPY_ERR_INVALID_ARG;
@@ -150,11 +142,9 @@ entropy_FileOperationHandle entropy_directory_handle_remove(
     }
 }
 
-entropy_FileOperationHandle entropy_directory_handle_list(
-    entropy_DirectoryHandle handle,
-    const EntropyListDirectoryOptions* options,
-    EntropyStatus* status
-) {
+entropy_FileOperationHandle entropy_directory_handle_list(entropy_DirectoryHandle handle,
+                                                          const EntropyListDirectoryOptions* options,
+                                                          EntropyStatus* status) {
     if (!status) return nullptr;
     if (!handle || !options) {
         *status = ENTROPY_ERR_INVALID_ARG;
@@ -173,10 +163,8 @@ entropy_FileOperationHandle entropy_directory_handle_list(
     }
 }
 
-entropy_FileOperationHandle entropy_directory_handle_get_metadata(
-    entropy_DirectoryHandle handle,
-    EntropyStatus* status
-) {
+entropy_FileOperationHandle entropy_directory_handle_get_metadata(entropy_DirectoryHandle handle,
+                                                                  EntropyStatus* status) {
     if (!status) return nullptr;
     if (!handle) {
         *status = ENTROPY_ERR_INVALID_ARG;
@@ -194,10 +182,7 @@ entropy_FileOperationHandle entropy_directory_handle_get_metadata(
     }
 }
 
-const char* entropy_directory_handle_normalized_key(
-    entropy_DirectoryHandle handle,
-    EntropyStatus* status
-) {
+const char* entropy_directory_handle_normalized_key(entropy_DirectoryHandle handle, EntropyStatus* status) {
     if (!status) return nullptr;
     if (!handle) {
         *status = ENTROPY_ERR_INVALID_ARG;
@@ -214,4 +199,4 @@ const char* entropy_directory_handle_normalized_key(
     }
 }
 
-} // extern "C"
+}  // extern "C"

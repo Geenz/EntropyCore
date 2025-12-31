@@ -1,26 +1,25 @@
 #include "VirtualFileSystem.h"
-#include "FileOperationHandle.h"
-#include "FileHandle.h"
+
+#include <algorithm>
+#include <cassert>
+#include <cctype>
+#include <filesystem>
+
 #include "DirectoryHandle.h"
+#include "FileHandle.h"
+#include "FileOperationHandle.h"
+#include "FileWatchManager.h"
 #include "LocalFileSystemBackend.h"
 #include "WriteBatch.h"
-#include "FileWatchManager.h"
-#include <filesystem>
-#include <algorithm>
-#include <cctype>
-#include <cassert>
 
 using EntropyEngine::Core::Concurrency::ExecutionType;
 
-namespace EntropyEngine::Core::IO {
-
+namespace EntropyEngine::Core::IO
+{
 
 // Constructor / Destructor
 VirtualFileSystem::VirtualFileSystem(EntropyEngine::Core::Concurrency::WorkContractGroup* group, Config cfg)
-    : _group(group)
-    , _cfg(cfg)
-    , _watchManager(std::make_unique<FileWatchManager>(this)) {
-}
+    : _group(group), _cfg(std::move(cfg)), _watchManager(std::make_unique<FileWatchManager>(this)) {}
 
 VirtualFileSystem::~VirtualFileSystem() {
     // Ensure FileWatchManager is destroyed before WorkContractGroup is potentially destroyed
@@ -42,15 +41,19 @@ std::shared_ptr<IFileSystemBackend> VirtualFileSystem::getDefaultBackend() const
 }
 
 // VFS submit helper
-FileOperationHandle VirtualFileSystem::submit(std::string path, std::function<void(FileOperationHandle::OpState&, const std::string&, const ExecContext&)> body) const {
+FileOperationHandle VirtualFileSystem::submit(
+    std::string path,
+    std::function<void(FileOperationHandle::OpState&, const std::string&, const ExecContext&)> body) const {
     auto st = makeState();
     // Set cooperative progress hook so wait() can pump ready work
-    st->progress = [grp=_group]() { if (grp) grp->executeAllBackgroundWork(); };
+    st->progress = [grp = _group]() {
+        if (grp) grp->executeAllBackgroundWork();
+    };
 
-    auto work = [this, st, p=std::move(path), body=std::move(body)]() mutable {
+    auto work = [this, st, p = std::move(path), body = std::move(body)]() mutable {
         st->st.store(FileOpStatus::Running, std::memory_order_release);
         try {
-            ExecContext ctx{ _group };
+            ExecContext ctx{_group};
             body(*st, p, ctx);
             // Ensure complete() was called - if not, call it with success
             // This prevents hanging if body forgets to call complete()
@@ -96,13 +99,18 @@ FileOperationHandle VirtualFileSystem::submit(std::string path, std::function<vo
  * - The op must complete inline and call s.complete(...). No scheduling nested work into the same
  *   WorkContractGroup as the caller.
  */
-FileOperationHandle VirtualFileSystem::submitSerialized(std::string path, std::function<void(FileOperationHandle::OpState&, std::shared_ptr<IFileSystemBackend>, const std::string&, const ExecContext&)> op) const {
+FileOperationHandle VirtualFileSystem::submitSerialized(
+    std::string path, std::function<void(FileOperationHandle::OpState&, std::shared_ptr<IFileSystemBackend>,
+                                         const std::string&, const ExecContext&)>
+                          op) const {
     auto backend = findBackend(path);
     auto vfsLock = lockForPath(path);
     auto advTimeout = _cfg.advisoryAcquireTimeout;
     auto policy = _cfg.advisoryFallback;
 
-    return submit(std::move(path), [backend, vfsLock, advTimeout, policy, op=std::move(op)](FileOperationHandle::OpState& s, const std::string& p, const ExecContext& ctx) mutable {
+    return submit(std::move(path), [backend, vfsLock, advTimeout, policy, op = std::move(op)](
+                                       FileOperationHandle::OpState& s, const std::string& p,
+                                       const ExecContext& ctx) mutable {
         // Fail if no backend available - don't silently skip the operation
         if (!backend) {
             s.setError(FileError::IOError, "No file system backend available for path", p);
@@ -113,7 +121,8 @@ FileOperationHandle VirtualFileSystem::submitSerialized(std::string path, std::f
         // Try backend-specific write scope first
         IFileSystemBackend::AcquireScopeOptions opts;
         opts.nonBlocking = false;
-        if (policy == Config::AdvisoryFallbackPolicy::FallbackWithTimeout || policy == Config::AdvisoryFallbackPolicy::None) {
+        if (policy == Config::AdvisoryFallbackPolicy::FallbackWithTimeout ||
+            policy == Config::AdvisoryFallbackPolicy::None) {
             opts.timeout = advTimeout;
         }
         auto scopeRes = backend->acquireWriteScope(p, opts);
@@ -133,10 +142,15 @@ FileOperationHandle VirtualFileSystem::submitSerialized(std::string path, std::f
                 scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::TimedOut ||
                 scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::Error) {
                 FileError code;
-                if (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::TimedOut) code = FileError::Timeout;
-                else if (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::Busy) code = FileError::Conflict;
-                else code = FileError::IOError;
-                s.setError(code, scopeRes.message.empty() ? std::string("Backend write scope unavailable") : scopeRes.message, p, scopeRes.errorCode);
+                if (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::TimedOut)
+                    code = FileError::Timeout;
+                else if (scopeRes.status == IFileSystemBackend::AcquireWriteScopeResult::Status::Busy)
+                    code = FileError::Conflict;
+                else
+                    code = FileError::IOError;
+                s.setError(code,
+                           scopeRes.message.empty() ? std::string("Backend write scope unavailable") : scopeRes.message,
+                           p, scopeRes.errorCode);
                 s.complete(FileOpStatus::Failed);
                 return;
             }
@@ -148,7 +162,10 @@ FileOperationHandle VirtualFileSystem::submitSerialized(std::string path, std::f
             if (!vfsLock->try_lock_for(advTimeout)) {
                 auto key = backend->normalizeKey(p);
                 auto ms = advTimeout.count();
-                s.setError(FileError::Timeout, std::string("Advisory lock acquisition timed out after ") + std::to_string(ms) + " ms (key=" + key + ")", p);
+                s.setError(FileError::Timeout,
+                           std::string("Advisory lock acquisition timed out after ") + std::to_string(ms) +
+                               " ms (key=" + key + ")",
+                           p);
                 s.complete(FileOpStatus::Failed);
                 return;
             }
@@ -214,7 +231,7 @@ void VirtualFileSystem::setDefaultBackend(std::shared_ptr<IFileSystemBackend> ba
     if (backend) {
         backend->setVirtualFileSystem(this);
     }
-    _defaultBackend = backend;
+    _defaultBackend = std::move(backend);
 }
 
 void VirtualFileSystem::mountBackend(const std::string& prefix, std::shared_ptr<IFileSystemBackend> backend) {
@@ -222,7 +239,7 @@ void VirtualFileSystem::mountBackend(const std::string& prefix, std::shared_ptr<
     if (backend) {
         backend->setVirtualFileSystem(this);
     }
-    _mountedBackends[prefix] = backend;
+    _mountedBackends[prefix] = std::move(backend);
 }
 
 std::shared_ptr<IFileSystemBackend> VirtualFileSystem::findBackend(const std::string& path) const {
@@ -234,8 +251,9 @@ std::shared_ptr<IFileSystemBackend> VirtualFileSystem::findBackend(const std::st
 
 #if defined(_WIN32)
     // Case-insensitive prefix matching on Windows
-    auto toLower = [](std::string s){
-        std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+    auto toLower = [](std::string s) {
+        std::transform(s.begin(), s.end(), s.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
         return s;
     };
     const std::string pathLower = toLower(path);
@@ -265,7 +283,7 @@ std::string VirtualFileSystem::normalizePath(const std::string& path) const {
     auto canon = std::filesystem::weakly_canonical(p, ec);
     std::string s = (ec ? p.lexically_normal().string() : canon.string());
 #if defined(_WIN32)
-    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 #endif
     return s;
 }
@@ -273,7 +291,7 @@ std::string VirtualFileSystem::normalizePath(const std::string& path) const {
 // Lock management for write serialization
 std::shared_ptr<std::timed_mutex> VirtualFileSystem::lockForPath(const std::string& path) const {
     if (!_cfg.serializeWritesPerPath) return {};
-    
+
     std::lock_guard lk(_mapMutex);
     auto now = std::chrono::steady_clock::now();
     std::string key;
@@ -282,7 +300,7 @@ std::shared_ptr<std::timed_mutex> VirtualFileSystem::lockForPath(const std::stri
     } else {
         key = normalizePath(path);
     }
-    
+
     // Check if path exists in cache
     auto it = _writeLocks.find(key);
     if (it != _writeLocks.end()) {
@@ -293,12 +311,12 @@ std::shared_ptr<std::timed_mutex> VirtualFileSystem::lockForPath(const std::stri
         it->second.lruIt = _lruList.begin();
         return it->second.mutex;
     }
-    
+
     // Evict old entries if cache is full
     if (_writeLocks.size() >= _cfg.maxWriteLocksCached) {
         evictOldLocks(now);
     }
-    
+
     // Create new lock entry
     auto m = std::make_shared<std::timed_mutex>();
     _lruList.push_front(key);
@@ -311,7 +329,7 @@ std::shared_ptr<std::timed_mutex> VirtualFileSystem::lockForPath(const std::stri
 void VirtualFileSystem::evictOldLocks(std::chrono::steady_clock::time_point now) const {
     // Remove entries that haven't been used recently
     auto cutoff = now - _cfg.writeLockTimeout;
-    
+
     // Start from the end of LRU list (least recently used)
     while (!_lruList.empty() && _writeLocks.size() >= _cfg.maxWriteLocksCached) {
         const auto& path = _lruList.back();
@@ -344,7 +362,8 @@ std::unique_ptr<FileStream> VirtualFileSystem::openStream(const std::string& pat
     return backend->openStream(path, options);
 }
 
-std::unique_ptr<BufferedFileStream> VirtualFileSystem::openBufferedStream(const std::string& path, size_t bufferSize, StreamOptions options) {
+std::unique_ptr<BufferedFileStream> VirtualFileSystem::openBufferedStream(const std::string& path, size_t bufferSize,
+                                                                          StreamOptions options) {
     // Force unbuffered inner; buffering is handled by wrapper
     options.buffered = false;
     auto inner = openStream(path, options);
@@ -357,7 +376,8 @@ std::unique_ptr<WriteBatch> VirtualFileSystem::createWriteBatch(const std::strin
 }
 
 // File watching
-FileWatch* VirtualFileSystem::watchDirectory(const std::string& path, FileWatchCallback callback, const WatchOptions& options) {
+FileWatch* VirtualFileSystem::watchDirectory(const std::string& path, FileWatchCallback callback,
+                                             const WatchOptions& options) {
     if (!_watchManager) {
         return nullptr;
     }
@@ -370,4 +390,4 @@ void VirtualFileSystem::unwatchDirectory(FileWatch* watch) {
     }
 }
 
-} // namespace EntropyEngine::Core::IO
+}  // namespace EntropyEngine::Core::IO

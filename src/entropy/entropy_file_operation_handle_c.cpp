@@ -3,13 +3,14 @@
  * @brief Implementation of FileOperationHandle C API
  */
 
-#include "entropy/entropy_file_operation_handle.h"
-#include "VirtualFileSystem/FileOperationHandle.h"
-#include <new>
-#include <vector>
-#include <string>
 #include <mutex>
+#include <new>
+#include <string>
 #include <system_error>
+#include <vector>
+
+#include "VirtualFileSystem/FileOperationHandle.h"
+#include "entropy/entropy_file_operation_handle.h"
 
 using namespace EntropyEngine::Core::IO;
 
@@ -18,8 +19,9 @@ using namespace EntropyEngine::Core::IO;
  * ============================================================================ */
 
 // Cache structure to hold C-compatible versions of results
-struct FileOpResultCache {
-    std::mutex mutex; // Protect concurrent access to cache
+struct FileOpResultCache
+{
+    std::mutex mutex;  // Protect concurrent access to cache
 
     // Cached C structures
     EntropyFileMetadata c_metadata{};
@@ -44,12 +46,12 @@ struct FileOpResultCache {
 };
 
 // Wrapper to hold C++ FileOperationHandle + C result cache
-struct FileOpHandleWrapper {
+struct FileOpHandleWrapper
+{
     FileOperationHandle cpp_handle;
     FileOpResultCache cache;
 
-    explicit FileOpHandleWrapper(FileOperationHandle&& h)
-        : cpp_handle(std::move(h)) {}
+    explicit FileOpHandleWrapper(FileOperationHandle&& h) : cpp_handle(std::move(h)) {}
 };
 
 /* ============================================================================
@@ -74,28 +76,45 @@ static void translate_exception(EntropyStatus* status) {
 
 static EntropyFileOpStatus to_c_status(FileOpStatus s) {
     switch (s) {
-        case FileOpStatus::Pending:  return ENTROPY_FILE_OP_PENDING;
-        case FileOpStatus::Running:  return ENTROPY_FILE_OP_RUNNING;
-        case FileOpStatus::Partial:  return ENTROPY_FILE_OP_PARTIAL;
-        case FileOpStatus::Complete: return ENTROPY_FILE_OP_COMPLETE;
-        case FileOpStatus::Failed:   return ENTROPY_FILE_OP_FAILED;
-        default:                     return ENTROPY_FILE_OP_FAILED;
+        case FileOpStatus::Pending:
+            return ENTROPY_FILE_OP_PENDING;
+        case FileOpStatus::Running:
+            return ENTROPY_FILE_OP_RUNNING;
+        case FileOpStatus::Partial:
+            return ENTROPY_FILE_OP_PARTIAL;
+        case FileOpStatus::Complete:
+            return ENTROPY_FILE_OP_COMPLETE;
+        case FileOpStatus::Failed:
+            return ENTROPY_FILE_OP_FAILED;
+        default:
+            return ENTROPY_FILE_OP_FAILED;
     }
 }
 
 static EntropyFileError to_c_error(FileError e) {
     switch (e) {
-        case FileError::None:         return ENTROPY_FILE_ERROR_NONE;
-        case FileError::FileNotFound: return ENTROPY_FILE_ERROR_FILE_NOT_FOUND;
-        case FileError::AccessDenied: return ENTROPY_FILE_ERROR_ACCESS_DENIED;
-        case FileError::DiskFull:     return ENTROPY_FILE_ERROR_DISK_FULL;
-        case FileError::InvalidPath:  return ENTROPY_FILE_ERROR_INVALID_PATH;
-        case FileError::IOError:      return ENTROPY_FILE_ERROR_IO_ERROR;
-        case FileError::NetworkError: return ENTROPY_FILE_ERROR_NETWORK_ERROR;
-        case FileError::Timeout:      return ENTROPY_FILE_ERROR_TIMEOUT;
-        case FileError::Conflict:     return ENTROPY_FILE_ERROR_CONFLICT;
-        case FileError::Unknown:      return ENTROPY_FILE_ERROR_UNKNOWN;
-        default:                      return ENTROPY_FILE_ERROR_UNKNOWN;
+        case FileError::None:
+            return ENTROPY_FILE_ERROR_NONE;
+        case FileError::FileNotFound:
+            return ENTROPY_FILE_ERROR_FILE_NOT_FOUND;
+        case FileError::AccessDenied:
+            return ENTROPY_FILE_ERROR_ACCESS_DENIED;
+        case FileError::DiskFull:
+            return ENTROPY_FILE_ERROR_DISK_FULL;
+        case FileError::InvalidPath:
+            return ENTROPY_FILE_ERROR_INVALID_PATH;
+        case FileError::IOError:
+            return ENTROPY_FILE_ERROR_IO_ERROR;
+        case FileError::NetworkError:
+            return ENTROPY_FILE_ERROR_NETWORK_ERROR;
+        case FileError::Timeout:
+            return ENTROPY_FILE_ERROR_TIMEOUT;
+        case FileError::Conflict:
+            return ENTROPY_FILE_ERROR_CONFLICT;
+        case FileError::Unknown:
+            return ENTROPY_FILE_ERROR_UNKNOWN;
+        default:
+            return ENTROPY_FILE_ERROR_UNKNOWN;
     }
 }
 
@@ -114,8 +133,7 @@ static void cache_metadata(FileOpResultCache& cache, const FileMetadata& meta) {
     cache.c_metadata.executable = meta.executable ? ENTROPY_TRUE : ENTROPY_FALSE;
 
     if (meta.lastModified.has_value()) {
-        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-            meta.lastModified->time_since_epoch()).count();
+        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(meta.lastModified->time_since_epoch()).count();
         cache.c_metadata.last_modified_ms = ms;
     } else {
         cache.c_metadata.last_modified_ms = -1;
@@ -163,8 +181,9 @@ static void cache_entries(FileOpResultCache& cache, const std::vector<DirectoryE
         dst.metadata.executable = src.metadata.executable ? ENTROPY_TRUE : ENTROPY_FALSE;
 
         if (src.metadata.lastModified.has_value()) {
-            auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                src.metadata.lastModified->time_since_epoch()).count();
+            auto ms =
+                std::chrono::duration_cast<std::chrono::milliseconds>(src.metadata.lastModified->time_since_epoch())
+                    .count();
             dst.metadata.last_modified_ms = ms;
         } else {
             dst.metadata.last_modified_ms = -1;
@@ -218,10 +237,8 @@ static void cache_error(FileOpResultCache& cache, const FileErrorInfo& err) {
 
 extern "C" {
 
-entropy_FileOperationHandle entropy_file_operation_handle_clone(
-    entropy_FileOperationHandle handle,
-    EntropyStatus* status
-) {
+entropy_FileOperationHandle entropy_file_operation_handle_clone(entropy_FileOperationHandle handle,
+                                                                EntropyStatus* status) {
     if (!status) return nullptr;
     if (!handle) {
         *status = ENTROPY_ERR_INVALID_ARG;
@@ -231,7 +248,7 @@ entropy_FileOperationHandle entropy_file_operation_handle_clone(
     try {
         auto* wrapper = reinterpret_cast<FileOpHandleWrapper*>(handle);
         // Copy the C++ handle (it's value-semantic with shared state)
-        auto* clone = new(std::nothrow) FileOpHandleWrapper(FileOperationHandle(wrapper->cpp_handle));
+        auto* clone = new (std::nothrow) FileOpHandleWrapper(FileOperationHandle(wrapper->cpp_handle));
         if (!clone) {
             *status = ENTROPY_ERR_NO_MEMORY;
             return nullptr;
@@ -250,10 +267,7 @@ void entropy_file_operation_handle_destroy(entropy_FileOperationHandle handle) {
     delete wrapper;
 }
 
-void entropy_file_operation_handle_wait(
-    entropy_FileOperationHandle handle,
-    EntropyStatus* status
-) {
+void entropy_file_operation_handle_wait(entropy_FileOperationHandle handle, EntropyStatus* status) {
     if (!status) return;
     if (!handle) {
         *status = ENTROPY_ERR_INVALID_ARG;
@@ -269,10 +283,7 @@ void entropy_file_operation_handle_wait(
     }
 }
 
-EntropyFileOpStatus entropy_file_operation_handle_status(
-    entropy_FileOperationHandle handle,
-    EntropyStatus* status
-) {
+EntropyFileOpStatus entropy_file_operation_handle_status(entropy_FileOperationHandle handle, EntropyStatus* status) {
     if (!status) return ENTROPY_FILE_OP_FAILED;
     if (!handle) {
         *status = ENTROPY_ERR_INVALID_ARG;
@@ -289,11 +300,8 @@ EntropyFileOpStatus entropy_file_operation_handle_status(
     }
 }
 
-const uint8_t* entropy_file_operation_handle_contents_bytes(
-    entropy_FileOperationHandle handle,
-    size_t* out_size,
-    EntropyStatus* status
-) {
+const uint8_t* entropy_file_operation_handle_contents_bytes(entropy_FileOperationHandle handle, size_t* out_size,
+                                                            EntropyStatus* status) {
     if (!status) return nullptr;
     if (!handle || !out_size) {
         *status = ENTROPY_ERR_INVALID_ARG;
@@ -318,10 +326,7 @@ const uint8_t* entropy_file_operation_handle_contents_bytes(
     }
 }
 
-const char* entropy_file_operation_handle_contents_text(
-    entropy_FileOperationHandle handle,
-    EntropyStatus* status
-) {
+const char* entropy_file_operation_handle_contents_text(entropy_FileOperationHandle handle, EntropyStatus* status) {
     if (!status) return nullptr;
     if (!handle) {
         *status = ENTROPY_ERR_INVALID_ARG;
@@ -353,10 +358,7 @@ const char* entropy_file_operation_handle_contents_text(
     }
 }
 
-uint64_t entropy_file_operation_handle_bytes_written(
-    entropy_FileOperationHandle handle,
-    EntropyStatus* status
-) {
+uint64_t entropy_file_operation_handle_bytes_written(entropy_FileOperationHandle handle, EntropyStatus* status) {
     if (!status) return 0;
     if (!handle) {
         *status = ENTROPY_ERR_INVALID_ARG;
@@ -373,10 +375,8 @@ uint64_t entropy_file_operation_handle_bytes_written(
     }
 }
 
-const EntropyFileMetadata* entropy_file_operation_handle_metadata(
-    entropy_FileOperationHandle handle,
-    EntropyStatus* status
-) {
+const EntropyFileMetadata* entropy_file_operation_handle_metadata(entropy_FileOperationHandle handle,
+                                                                  EntropyStatus* status) {
     if (!status) return nullptr;
     if (!handle) {
         *status = ENTROPY_ERR_INVALID_ARG;
@@ -404,11 +404,8 @@ const EntropyFileMetadata* entropy_file_operation_handle_metadata(
     }
 }
 
-const EntropyDirectoryEntry* entropy_file_operation_handle_directory_entries(
-    entropy_FileOperationHandle handle,
-    size_t* out_count,
-    EntropyStatus* status
-) {
+const EntropyDirectoryEntry* entropy_file_operation_handle_directory_entries(entropy_FileOperationHandle handle,
+                                                                             size_t* out_count, EntropyStatus* status) {
     if (!status) return nullptr;
     if (!handle || !out_count) {
         *status = ENTROPY_ERR_INVALID_ARG;
@@ -439,10 +436,8 @@ const EntropyDirectoryEntry* entropy_file_operation_handle_directory_entries(
     }
 }
 
-const EntropyFileErrorInfo* entropy_file_operation_handle_error_info(
-    entropy_FileOperationHandle handle,
-    EntropyStatus* status
-) {
+const EntropyFileErrorInfo* entropy_file_operation_handle_error_info(entropy_FileOperationHandle handle,
+                                                                     EntropyStatus* status) {
     if (!status) return nullptr;
     if (!handle) {
         *status = ENTROPY_ERR_INVALID_ARG;
@@ -466,12 +461,13 @@ const EntropyFileErrorInfo* entropy_file_operation_handle_error_info(
     }
 }
 
-} // extern "C"
+}  // extern "C"
 
 // Internal helper for other C API files to create FileOpHandleWrapper
-namespace EntropyEngine::Core::IO {
-    extern "C" entropy_FileOperationHandle wrap_file_operation_handle(FileOperationHandle&& handle) {
-        auto* wrapper = new(std::nothrow) FileOpHandleWrapper(std::move(handle));
-        return reinterpret_cast<entropy_FileOperationHandle>(wrapper);
-    }
+namespace EntropyEngine::Core::IO
+{
+extern "C" entropy_FileOperationHandle wrap_file_operation_handle(FileOperationHandle&& handle) {
+    auto* wrapper = new (std::nothrow) FileOpHandleWrapper(std::move(handle));
+    return reinterpret_cast<entropy_FileOperationHandle>(wrapper);
 }
+}  // namespace EntropyEngine::Core::IO

@@ -1,10 +1,11 @@
-#include "EntropyCore.h"
-#include "Concurrency/WorkService.h"
-#include "Concurrency/WorkContractGroup.h"
-#include "VirtualFileSystem/VirtualFileSystem.h"
-#include "VirtualFileSystem/FileHandle.h"
 #include <filesystem>
 #include <string>
+
+#include "Concurrency/WorkContractGroup.h"
+#include "Concurrency/WorkService.h"
+#include "EntropyCore.h"
+#include "VirtualFileSystem/FileHandle.h"
+#include "VirtualFileSystem/VirtualFileSystem.h"
 
 using namespace EntropyEngine::Core;
 using namespace EntropyEngine::Core::Concurrency;
@@ -25,8 +26,12 @@ int main() {
     auto fh = vfs.createFileHandle(makeTempFile("vfs_lines_batch"));
 
     // Seed file with two lines (no trailing newline on purpose)
-    WriteOptions wo; wo.truncate = true; wo.ensureFinalNewline = false; wo.createIfMissing = true;
-    auto w = fh.writeAll("Line one\nLine two", wo); w.wait();
+    WriteOptions wo;
+    wo.truncate = true;
+    wo.ensureFinalNewline = false;
+    wo.createIfMissing = true;
+    auto w = fh.writeAll("Line one\nLine two", wo);
+    w.wait();
     if (w.status() != FileOpStatus::Complete) {
         ENTROPY_LOG_ERROR(std::string("Initial write failed: ") + w.errorInfo().message);
         svc.stop();
@@ -34,11 +39,13 @@ int main() {
     }
 
     // Read the second line (index 1)
-    auto r2 = fh.readLine(1); r2.wait();
+    auto r2 = fh.readLine(1);
+    r2.wait();
     ENTROPY_LOG_INFO(std::string("Line 2: '") + r2.contentsText() + "'");
 
     // Replace line 1 (index 0) using writeLine
-    auto wl = fh.writeLine(0, "LINE ONE (modified)"); wl.wait();
+    auto wl = fh.writeLine(0, "LINE ONE (modified)");
+    wl.wait();
     if (wl.status() != FileOpStatus::Complete) {
         ENTROPY_LOG_ERROR(std::string("writeLine failed: ") + wl.errorInfo().message);
         svc.stop();
@@ -46,8 +53,11 @@ int main() {
     }
 
     // Ensure final newline on whole-file rewrite
-    WriteOptions wo2; wo2.truncate = true; wo2.ensureFinalNewline = true;
-    auto w2 = fh.writeAll("A single line without LF", wo2); w2.wait();
+    WriteOptions wo2;
+    wo2.truncate = true;
+    wo2.ensureFinalNewline = true;
+    auto w2 = fh.writeAll("A single line without LF", wo2);
+    w2.wait();
     if (w2.status() != FileOpStatus::Complete) {
         ENTROPY_LOG_ERROR(std::string("ensureFinalNewline write failed: ") + w2.errorInfo().message);
         svc.stop();
@@ -55,13 +65,15 @@ int main() {
     }
 
     // Verify last byte is a newline by reading all
-    auto rAll = fh.readAll(); rAll.wait();
+    auto rAll = fh.readAll();
+    rAll.wait();
     auto bytes = rAll.contentsBytes();
     bool endsWithLF = !bytes.empty() && bytes.back() == std::byte('\n');
     ENTROPY_LOG_INFO(std::string("Final newline present: ") + (endsWithLF ? "true" : "false"));
 
     // Cleanup
-    auto rm = fh.remove(); rm.wait();
+    auto rm = fh.remove();
+    rm.wait();
 
     svc.stop();
     return 0;

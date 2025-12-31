@@ -18,21 +18,25 @@
  */
 
 #pragma once
-#include <shared_mutex>
-#include <vector>
-#include <memory>
 #include <atomic>
-#include <mutex>
-#include <thread>
 #include <condition_variable>
 #include <limits>
-#include "IWorkScheduler.h"
-#include "IConcurrencyProvider.h"
-#include "Core/EntropyService.h"
+#include <memory>
+#include <mutex>
+#include <shared_mutex>
+#include <thread>
+#include <vector>
 
-namespace EntropyEngine {
-namespace Core {
-namespace Concurrency {
+#include "Core/EntropyService.h"
+#include "IConcurrencyProvider.h"
+#include "IWorkScheduler.h"
+
+namespace EntropyEngine
+{
+namespace Core
+{
+namespace Concurrency
+{
 class WorkContractGroup;
 
 /**
@@ -82,15 +86,16 @@ class WorkContractGroup;
  * service.stop();
  * @endcode
  */
-class WorkService : public IConcurrencyProvider, public ::EntropyEngine::Core::EntropyService {
+class WorkService : public IConcurrencyProvider, public ::EntropyEngine::Core::EntropyService
+{
     // Shared mutex management of work contract groups
     // HOT PATH (executeWork): shared_lock for concurrent reads
     // COLD PATH (add/remove): unique_lock for exclusive writes
     mutable std::shared_mutex _workContractGroupsMutex;
     std::vector<WorkContractGroup*> _workContractGroups;
-    size_t _workContractGroupCount = 0;                               ///< Current count of work contract groups
-    std::vector<std::jthread> _threads;                               ///< Worker threads that execute contracts
-    std::unique_ptr<IWorkScheduler> _scheduler;                       ///< Scheduler strategy for selecting work groups
+    size_t _workContractGroupCount = 0;          ///< Current count of work contract groups
+    std::vector<std::jthread> _threads;          ///< Worker threads that execute contracts
+    std::unique_ptr<IWorkScheduler> _scheduler;  ///< Scheduler strategy for selecting work groups
 
     std::atomic<bool> _running = false;
 
@@ -102,16 +107,17 @@ class WorkService : public IConcurrencyProvider, public ::EntropyEngine::Core::E
 public:
     /**
      * @brief Result structure for main thread work execution
-     * 
+     *
      * Provides detailed information about the execution results to the caller,
      * allowing them to make informed decisions about scheduling and performance.
      */
-    struct MainThreadWorkResult {
-        size_t contractsExecuted;    ///< Number of contracts actually executed
-        size_t groupsWithWork;       ///< Number of groups that had work available
-        bool moreWorkAvailable;      ///< Whether there's more work that could be executed
+    struct MainThreadWorkResult
+    {
+        size_t contractsExecuted;  ///< Number of contracts actually executed
+        size_t groupsWithWork;     ///< Number of groups that had work available
+        bool moreWorkAvailable;    ///< Whether there's more work that could be executed
     };
-    
+
     /**
      * @brief Configuration parameters for the work service.
      *
@@ -119,13 +125,15 @@ public:
      * work well for general-purpose work distribution, but you might want to adjust
      * them based on your use case.
      */
-    struct Config {
-        uint32_t threadCount = 0;                ///< Worker thread count - 0 means use all CPU cores
-        size_t maxSoftFailureCount = 5;         ///< Number of times work selection is allowed to fail before sleeping.  Yields after every failure.
-        size_t failureSleepTime = 1;             ///< Sleep duration in nanoseconds when no work found - prevents CPU spinning
+    struct Config
+    {
+        uint32_t threadCount = 0;  ///< Worker thread count - 0 means use all CPU cores
+        size_t maxSoftFailureCount =
+            5;  ///< Number of times work selection is allowed to fail before sleeping.  Yields after every failure.
+        size_t failureSleepTime = 1;  ///< Sleep duration in nanoseconds when no work found - prevents CPU spinning
 
         // Scheduler-specific configuration
-        IWorkScheduler::Config schedulerConfig;   ///< Configuration passed to scheduler
+        IWorkScheduler::Config schedulerConfig;  ///< Configuration passed to scheduler
     };
 
     /**
@@ -162,17 +170,31 @@ public:
      */
     ~WorkService();
 
-        // EntropyService identity and lifecycle
-        const char* id() const override { return "com.entropy.core.work"; }
-        const char* name() const override { return "WorkService"; }
-        const char* version() const override { return "0.1.0"; }
-        // RTTI-less static type identity and dependencies
-        TypeSystem::TypeID typeId() const override { return TypeSystem::createTypeId<WorkService>(); }
-        std::vector<TypeSystem::TypeID> dependsOnTypes() const override { return {}; }
-        std::vector<std::string> dependsOn() const override { return {}; }
+    // EntropyService identity and lifecycle
+    const char* id() const override {
+        return "com.entropy.core.work";
+    }
+    const char* name() const override {
+        return "WorkService";
+    }
+    const char* version() const override {
+        return "0.1.0";
+    }
+    // RTTI-less static type identity and dependencies
+    TypeSystem::TypeID typeId() const override {
+        return TypeSystem::createTypeId<WorkService>();
+    }
+    std::vector<TypeSystem::TypeID> dependsOnTypes() const override {
+        return {};
+    }
+    std::vector<std::string> dependsOn() const override {
+        return {};
+    }
 
-        void load() override { /* no-op: configured on construction */ }
-        void unload() override { clear(); }
+    void load() override { /* no-op: configured on construction */ }
+    void unload() override {
+        clear();
+    }
 
     /**
      * @brief Starts the worker threads and begins executing work.
@@ -240,7 +262,8 @@ public:
      */
     void clear();
 
-    enum class GroupOperationStatus {
+    enum class GroupOperationStatus
+    {
         Added = 0,
         Removed = 1,
         OutOfSpace = 2,
@@ -339,42 +362,42 @@ public:
 
     /**
      * @brief Execute main thread targeted work from all registered groups
-     * 
+     *
      * Call from your main thread to process UI, rendering, or other main-thread-only
      * work. Distributes execution fairly across groups. Use maxContracts to limit
      * work per frame and maintain responsiveness.
-     * 
+     *
      * @param maxContracts Maximum number of contracts to execute (default: unlimited)
      * @return MainThreadWorkResult with execution statistics
-     * 
+     *
      * @code
      * // Game loop with frame budget
      * void gameUpdate() {
      *     // Process up to 10 main thread tasks per frame
      *     auto result = service.executeMainThreadWork(10);
-     *     
+     *
      *     if (result.moreWorkAvailable) {
      *         // More work pending - will process next frame
      *         needsUpdate = true;
      *     }
-     *     
+     *
      *     // Continue with rendering
      *     render();
      * }
      * @endcode
      */
     MainThreadWorkResult executeMainThreadWork(size_t maxContracts = std::numeric_limits<size_t>::max());
-    
+
     /**
      * @brief Execute main thread work from a specific group
-     * 
+     *
      * Use when you need fine-grained control over which group's work executes.
      * Useful for prioritizing certain subsystems over others.
-     * 
+     *
      * @param group The group to execute work from
      * @param maxContracts Maximum number of contracts to execute
      * @return Number of contracts executed
-     * 
+     *
      * @code
      * // Prioritize UI work over other main thread tasks
      * size_t uiWork = service.executeMainThreadWork(&uiGroup, 5);
@@ -382,15 +405,15 @@ public:
      * @endcode
      */
     size_t executeMainThreadWork(WorkContractGroup* group, size_t maxContracts = std::numeric_limits<size_t>::max());
-    
+
     /**
      * @brief Check if any registered group has main thread work available
-     * 
+     *
      * Quick non-blocking check to determine if you need to pump main thread work.
      * Use this to avoid unnecessary calls to executeMainThreadWork().
-     * 
+     *
      * @return true if at least one group has main thread work scheduled
-     * 
+     *
      * @code
      * // Only pump if there's work to do
      * if (service.hasMainThreadWork()) {
@@ -455,14 +478,13 @@ private:
     /// gradual backoff from aggressive spinning to efficient sleeping.
     /// Thread-local because each thread should adapt independently to its own workload pattern.
     static thread_local size_t stSoftFailureCount;
-    
+
     /// Thread-local identifier for debugging and scheduler context
     /// Provides a stable thread ID (0 to threadCount-1) for the lifetime of each worker thread.
     /// Thread-local because each thread needs its own unique, persistent identifier.
     static thread_local size_t stThreadId;
 };
 
-} // Concurrency
-} // Core
-} // EntropyEngine
-
+}  // namespace Concurrency
+}  // namespace Core
+}  // namespace EntropyEngine

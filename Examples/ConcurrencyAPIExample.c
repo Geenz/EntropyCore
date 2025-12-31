@@ -15,11 +15,11 @@
  * and execute them using a work service (thread pool), along with the C logging API.
  */
 
+#include <Logging/CLogger.h>
 #include <entropy/entropy_concurrency_types.h>
 #include <entropy/entropy_work_contract_group.h>
 #include <entropy/entropy_work_contract_handle.h>
 #include <entropy/entropy_work_service.h>
-#include <Logging/CLogger.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -31,13 +31,15 @@
 #endif
 
 // Example work context
-typedef struct {
+typedef struct
+{
     int task_id;
     const char* message;
 } TaskContext;
 
 // Re-entrant work context (task spawns children)
-typedef struct {
+typedef struct
+{
     entropy_WorkContractGroup group;  // Need group reference to schedule from within
     int depth;                        // Recursion depth
     int max_depth;                    // Maximum depth
@@ -47,32 +49,25 @@ typedef struct {
 // Example work callback
 void example_work(void* user_data) {
     TaskContext* ctx = (TaskContext*)user_data;
-    ENTROPY_LOG_INFO_CAT_F("WorkerThread",
-        "Task %d: %s (executing on worker thread)",
-        ctx->task_id, ctx->message);
+    ENTROPY_LOG_INFO_CAT_F("WorkerThread", "Task %d: %s (executing on worker thread)", ctx->task_id, ctx->message);
 
     // Simulate some work
-    usleep(10000); // 10ms
+    usleep(10000);  // 10ms
 
-    ENTROPY_LOG_DEBUG_CAT_F("WorkerThread",
-        "Task %d completed", ctx->task_id);
+    ENTROPY_LOG_DEBUG_CAT_F("WorkerThread", "Task %d completed", ctx->task_id);
 }
 
 // Main thread work callback
 void main_thread_work(void* user_data) {
     TaskContext* ctx = (TaskContext*)user_data;
-    ENTROPY_LOG_INFO_CAT_F("MainThread",
-        "Task %d: %s (executing on MAIN THREAD)",
-        ctx->task_id, ctx->message);
+    ENTROPY_LOG_INFO_CAT_F("MainThread", "Task %d: %s (executing on MAIN THREAD)", ctx->task_id, ctx->message);
 }
 
 // Re-entrant work callback (spawns child tasks)
 void reentrant_work(void* user_data) {
     ReentrantContext* ctx = (ReentrantContext*)user_data;
 
-    ENTROPY_LOG_INFO_CAT_F("Reentrant",
-        "Task %d at depth %d (max: %d)",
-        ctx->task_id, ctx->depth, ctx->max_depth);
+    ENTROPY_LOG_INFO_CAT_F("Reentrant", "Task %d at depth %d (max: %d)", ctx->task_id, ctx->depth, ctx->max_depth);
 
     // If we haven't reached max depth, spawn two child tasks
     if (ctx->depth < ctx->max_depth) {
@@ -95,14 +90,12 @@ void reentrant_work(void* user_data) {
             right_child->max_depth = ctx->max_depth;
             right_child->task_id = ctx->task_id * 2 + 1;
 
-            ENTROPY_LOG_DEBUG_CAT_F("Reentrant",
-                "Task %d spawning children %d and %d",
-                ctx->task_id, left_child->task_id, right_child->task_id);
+            ENTROPY_LOG_DEBUG_CAT_F("Reentrant", "Task %d spawning children %d and %d", ctx->task_id,
+                                    left_child->task_id, right_child->task_id);
 
             // RE-ENTRANT SCHEDULING: Create and schedule child tasks from within this task
             entropy_WorkContractHandle left = entropy_work_contract_group_create_contract(
-                ctx->group, reentrant_work, left_child, ENTROPY_EXEC_ANY_THREAD, &status
-            );
+                ctx->group, reentrant_work, left_child, ENTROPY_EXEC_ANY_THREAD, &status);
 
             if (status == ENTROPY_OK) {
                 entropy_work_contract_schedule(left, &status);
@@ -110,8 +103,7 @@ void reentrant_work(void* user_data) {
             entropy_work_contract_handle_destroy(left);
 
             entropy_WorkContractHandle right = entropy_work_contract_group_create_contract(
-                ctx->group, reentrant_work, right_child, ENTROPY_EXEC_ANY_THREAD, &status
-            );
+                ctx->group, reentrant_work, right_child, ENTROPY_EXEC_ANY_THREAD, &status);
 
             if (status == ENTROPY_OK) {
                 entropy_work_contract_schedule(right, &status);
@@ -119,9 +111,7 @@ void reentrant_work(void* user_data) {
             entropy_work_contract_handle_destroy(right);
         }
     } else {
-        ENTROPY_LOG_DEBUG_CAT_F("Reentrant",
-            "Task %d reached max depth, completing as leaf",
-            ctx->task_id);
+        ENTROPY_LOG_DEBUG_CAT_F("Reentrant", "Task %d reached max depth, completing as leaf", ctx->task_id);
     }
 
     // Free our own context (we're done with it)
@@ -136,12 +126,9 @@ int main(void) {
 
     // 1. Create a work contract group
     ENTROPY_LOG_INFO_CAT_F("Example", "Step 1: Creating work contract group (capacity: 1024)...");
-    entropy_WorkContractGroup group = entropy_work_contract_group_create(
-        1024, "ExampleGroup", &status
-    );
+    entropy_WorkContractGroup group = entropy_work_contract_group_create(1024, "ExampleGroup", &status);
     if (status != ENTROPY_OK) {
-        ENTROPY_LOG_ERROR_CAT_F("Example",
-            "Failed to create group: %s", entropy_status_to_string(status));
+        ENTROPY_LOG_ERROR_CAT_F("Example", "Failed to create group: %s", entropy_status_to_string(status));
         return 1;
     }
     ENTROPY_LOG_INFO_CAT_F("Example", "Group created successfully");
@@ -154,20 +141,18 @@ int main(void) {
 
     entropy_WorkService service = entropy_work_service_create(&config, &status);
     if (status != ENTROPY_OK) {
-        ENTROPY_LOG_ERROR_CAT_F("Example",
-            "Failed to create service: %s", entropy_status_to_string(status));
+        ENTROPY_LOG_ERROR_CAT_F("Example", "Failed to create service: %s", entropy_status_to_string(status));
         entropy_work_contract_group_destroy(group);
         return 1;
     }
     ENTROPY_LOG_INFO_CAT_F("Example", "Service created with %zu threads",
-           entropy_work_service_get_thread_count(service));
+                           entropy_work_service_get_thread_count(service));
 
     // 3. Register the group with the service
     ENTROPY_LOG_INFO_CAT_F("Example", "Step 3: Registering group with service...");
     entropy_work_service_add_group(service, group, &status);
     if (status != ENTROPY_OK) {
-        ENTROPY_LOG_ERROR_CAT_F("Example",
-            "Failed to add group: %s", entropy_status_to_string(status));
+        ENTROPY_LOG_ERROR_CAT_F("Example", "Failed to add group: %s", entropy_status_to_string(status));
         entropy_work_service_destroy(service);
         entropy_work_contract_group_destroy(group);
         return 1;
@@ -178,8 +163,7 @@ int main(void) {
     ENTROPY_LOG_INFO_CAT_F("Example", "Step 4: Starting work service...");
     entropy_work_service_start(service, &status);
     if (status != ENTROPY_OK) {
-        ENTROPY_LOG_ERROR_CAT_F("Example",
-            "Failed to start service: %s", entropy_status_to_string(status));
+        ENTROPY_LOG_ERROR_CAT_F("Example", "Failed to start service: %s", entropy_status_to_string(status));
         entropy_work_service_destroy(service);
         entropy_work_contract_group_destroy(group);
         return 1;
@@ -195,13 +179,12 @@ int main(void) {
         contexts[i].task_id = i;
         contexts[i].message = "Processing background data";
 
-        handles[i] = entropy_work_contract_group_create_contract(
-            group, example_work, &contexts[i], ENTROPY_EXEC_ANY_THREAD, &status
-        );
+        handles[i] = entropy_work_contract_group_create_contract(group, example_work, &contexts[i],
+                                                                 ENTROPY_EXEC_ANY_THREAD, &status);
 
         if (status != ENTROPY_OK) {
-            ENTROPY_LOG_WARNING_CAT_F("Example",
-                "Failed to create contract %d: %s", i, entropy_status_to_string(status));
+            ENTROPY_LOG_WARNING_CAT_F("Example", "Failed to create contract %d: %s", i,
+                                      entropy_status_to_string(status));
             continue;
         }
 
@@ -221,10 +204,8 @@ int main(void) {
         main_contexts[i].task_id = 100 + i;
         main_contexts[i].message = "Updating UI";
 
-        main_handles[i] = entropy_work_contract_group_create_contract(
-            group, main_thread_work, &main_contexts[i],
-            ENTROPY_EXEC_MAIN_THREAD, &status
-        );
+        main_handles[i] = entropy_work_contract_group_create_contract(group, main_thread_work, &main_contexts[i],
+                                                                      ENTROPY_EXEC_MAIN_THREAD, &status);
 
         if (status == ENTROPY_OK) {
             entropy_work_contract_schedule(main_handles[i], &status);
@@ -237,9 +218,8 @@ int main(void) {
     if (entropy_work_service_has_main_thread_work(service)) {
         EntropyMainThreadWorkResult result;
         entropy_work_service_execute_main_thread_work(service, 0, &result, &status);
-        ENTROPY_LOG_INFO_CAT_F("Example",
-            "Executed %zu contracts from %zu groups",
-            result.contracts_executed, result.groups_with_work);
+        ENTROPY_LOG_INFO_CAT_F("Example", "Executed %zu contracts from %zu groups", result.contracts_executed,
+                               result.groups_with_work);
     }
 
     // Wait for initial work to complete before starting re-entrant example
@@ -258,9 +238,8 @@ int main(void) {
         root->max_depth = 3;  // Creates 2^3 - 1 = 7 tasks at depth 3, 15 total
         root->task_id = 1;    // Root is task 1
 
-        entropy_WorkContractHandle root_handle = entropy_work_contract_group_create_contract(
-            group, reentrant_work, root, ENTROPY_EXEC_ANY_THREAD, &status
-        );
+        entropy_WorkContractHandle root_handle =
+            entropy_work_contract_group_create_contract(group, reentrant_work, root, ENTROPY_EXEC_ANY_THREAD, &status);
 
         if (status == ENTROPY_OK) {
             entropy_work_contract_schedule(root_handle, &status);
@@ -278,14 +257,10 @@ int main(void) {
 
     // 9. Print statistics
     ENTROPY_LOG_INFO_CAT_F("Example", "Step 9: Final statistics:");
-    ENTROPY_LOG_INFO_CAT_F("Example", "  Capacity: %zu",
-        entropy_work_contract_group_capacity(group));
-    ENTROPY_LOG_INFO_CAT_F("Example", "  Active contracts: %zu",
-        entropy_work_contract_group_active_count(group));
-    ENTROPY_LOG_INFO_CAT_F("Example", "  Scheduled contracts: %zu",
-        entropy_work_contract_group_scheduled_count(group));
-    ENTROPY_LOG_INFO_CAT_F("Example", "  Executing contracts: %zu",
-        entropy_work_contract_group_executing_count(group));
+    ENTROPY_LOG_INFO_CAT_F("Example", "  Capacity: %zu", entropy_work_contract_group_capacity(group));
+    ENTROPY_LOG_INFO_CAT_F("Example", "  Active contracts: %zu", entropy_work_contract_group_active_count(group));
+    ENTROPY_LOG_INFO_CAT_F("Example", "  Scheduled contracts: %zu", entropy_work_contract_group_scheduled_count(group));
+    ENTROPY_LOG_INFO_CAT_F("Example", "  Executing contracts: %zu", entropy_work_contract_group_executing_count(group));
 
     // 10. Cleanup
     ENTROPY_LOG_INFO_CAT_F("Example", "Step 10: Cleaning up...");

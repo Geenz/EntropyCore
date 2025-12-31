@@ -1,22 +1,26 @@
-#include <stdio.h>
-#include <inttypes.h>
 #include <Core/entropy_c_api.h>
 #include <Logging/CLogger.h>
+#include <inttypes.h>
+#include <stdio.h>
 
 // Dummy owner and vtable callbacks for demonstration
 static int dummy_validate(const void* owner, uint32_t index, uint32_t generation) {
     // No backing store; nothing is valid in this minimal example
-    (void)owner; (void)index; (void)generation;
+    (void)owner;
+    (void)index;
+    (void)generation;
     return 0;
 }
 static EntropyObjectRef* dummy_resolve(const void* owner, uint32_t index, uint32_t generation) {
     // No backing store; cannot resolve
-    (void)owner; (void)index; (void)generation;
+    (void)owner;
+    (void)index;
+    (void)generation;
     return NULL;
 }
 
 int main(void) {
-    uint32_t maj=0, min=0, pat=0, abi=0;
+    uint32_t maj = 0, min = 0, pat = 0, abi = 0;
     entropy_get_version(&maj, &min, &pat, &abi);
     ENTROPY_LOG_INFO_F("EntropyCore C API version: %u.%u.%u (ABI %u)", maj, min, pat, abi);
 
@@ -25,7 +29,7 @@ int main(void) {
     entropy_register_owner_vtable(dummy_owner, dummy_resolve, dummy_validate);
 
     // Construct a handle value (no real object behind it in this example)
-    EntropyHandle h = { dummy_owner, 42u, 7u, 0u };
+    EntropyHandle h = {dummy_owner, 42u, 7u, 0u};
 
     // Basic handle operations
     ENTROPY_LOG_INFO_F("Handle valid? %d", (int)entropy_handle_is_valid(h));
@@ -44,7 +48,7 @@ int main(void) {
     // Allocation helpers
     char* buf = (char*)entropy_alloc(32);
     if (buf) {
-        for (int i=0;i<31;i++) buf[i] = (i%10)+'0';
+        for (int i = 0; i < 31; i++) buf[i] = (i % 10) + '0';
         buf[31] = '\0';
         ENTROPY_LOG_INFO_F("Allocated buffer: %s", buf);
         entropy_free(buf);

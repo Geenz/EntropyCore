@@ -6,6 +6,7 @@
 #define ENTROPYCORE_ENTROPYCLASS_H
 
 #include <cstdint>
+
 #include "TypeSystem/TypeID.h"
 
 /**
@@ -24,18 +25,16 @@
  * };
  * @endcode
  */
-#define ENTROPY_CLASS_BODY(ClassName) \
-    public: \
-        /* Virtual instance overrides (no toString/description) */ \
-        const char* className() const noexcept override \
-        { \
-            return #ClassName; \
-        } \
-        uint64_t classHash() const noexcept override \
-        { \
-            static const uint64_t hash = static_cast<uint64_t>(::EntropyEngine::Core::TypeSystem::createTypeId<ClassName>().id); \
-            return hash; \
-        }
+#define ENTROPY_CLASS_BODY(ClassName)                                                               \
+public:                                                                                             \
+    /* Virtual instance overrides (no toString/description) */                                      \
+    const char* className() const noexcept override {                                               \
+        return #ClassName;                                                                          \
+    }                                                                                               \
+    uint64_t classHash() const noexcept override {                                                  \
+        static const uint64_t hash =                                                                \
+            static_cast<uint64_t>(::EntropyEngine::Core::TypeSystem::createTypeId<ClassName>().id); \
+        return hash;                                                                                \
+    }
 
-
-#endif //ENTROPYCORE_ENTROPYCLASS_H
+#endif  // ENTROPYCORE_ENTROPYCLASS_H

@@ -1,10 +1,11 @@
-#include "EntropyCore.h"
-#include "Concurrency/WorkService.h"
-#include "Concurrency/WorkContractGroup.h"
-#include "VirtualFileSystem/VirtualFileSystem.h"
-#include "VirtualFileSystem/FileHandle.h"
 #include <filesystem>
 #include <vector>
+
+#include "Concurrency/WorkContractGroup.h"
+#include "Concurrency/WorkService.h"
+#include "EntropyCore.h"
+#include "VirtualFileSystem/FileHandle.h"
+#include "VirtualFileSystem/VirtualFileSystem.h"
 
 using namespace EntropyEngine::Core;
 using namespace EntropyEngine::Core::Concurrency;
@@ -30,7 +31,10 @@ int main() {
 
     // Write text to a file via FileHandle
     const std::string text = "Hello, VirtualFileSystem!";
-    WriteOptions wo; wo.truncate = true; wo.createIfMissing = true; wo.createParentDirs = true;
+    WriteOptions wo;
+    wo.truncate = true;
+    wo.createIfMissing = true;
+    wo.createParentDirs = true;
     auto w = fh.writeAll(text, wo);
     w.wait();
     if (w.status() != FileOpStatus::Complete) {

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.28)
 
-project(EntropyCore 
+project(EntropyCore
     VERSION 1.0.0
     DESCRIPTION "Core utilities and concurrency primitives for Entropy Engine"
     LANGUAGES C CXX
@@ -29,13 +29,24 @@ endif()
 # Back-compat shim: mirror to existing variable used throughout the file
 set(ENTROPY_BUILD_TESTS ${ENTROPY_ENABLE_TESTS} CACHE BOOL "Build tests for EntropyCore (deprecated; use ENTROPY_ENABLE_TESTS)" FORCE)
 
-# Set C++20 standard with modules support
+# Set C++20 standard (modules not used)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Disable automatic C++20 module scanning - this project doesn't use modules
+# and the auto-scanning generates Clang-specific flags that GCC doesn't support
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
+
+# MSVC-specific: Enable conforming preprocessor for C++20 __VA_OPT__ support
+if(MSVC)
+    add_compile_options(/Zc:preprocessor)
+endif()
+
 # Configure sanitizers
-if(ENABLE_SANITIZERS)
+# Configure sanitizers
+# Always enable ASAN+UBSAN for Debug builds on minimal supported compilers
+if(ENABLE_SANITIZERS OR (CMAKE_BUILD_TYPE MATCHES "Debug" AND CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU"))
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
         # ThreadSanitizer is mutually exclusive with AddressSanitizer
         # To use TSAN instead: cmake -DENABLE_TSAN=ON
@@ -375,7 +386,7 @@ set_target_properties(EntropyCore PROPERTIES
 # Testing
 if(ENTROPY_BUILD_TESTS)
     enable_testing()
-    
+
     # Test executable
     # Test helper sources
     set(TEST_HELPERS
@@ -453,6 +464,14 @@ if(ENTROPY_BUILD_TESTS)
         GTest::gtest
         GTest::gtest_main
     )
+
+    # =============================================================================
+    # Linting
+    # =============================================================================
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/EntropyLinting.cmake")
+        include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/EntropyLinting.cmake")
+        entropy_enable_linting(EntropyCore)
+    endif()
 
     target_compile_features(EntropyCoreTests PRIVATE cxx_std_20)
 

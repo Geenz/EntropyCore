@@ -16,13 +16,13 @@
 #include <string.h>
 
 /* EntropyCore C API headers */
+#include "Logging/CLogger.h"
+#include "entropy/entropy_directory_handle.h"
+#include "entropy/entropy_file_handle.h"
+#include "entropy/entropy_virtual_file_system.h"
 #include "entropy/entropy_work_contract_group.h"
 #include "entropy/entropy_work_service.h"
-#include "entropy/entropy_virtual_file_system.h"
-#include "entropy/entropy_file_handle.h"
-#include "entropy/entropy_directory_handle.h"
 #include "entropy/entropy_write_batch.h"
-#include "Logging/CLogger.h"
 
 /* ============================================================================
  * Helper Functions
@@ -78,8 +78,7 @@ static void example_basic_file_ops(entropy_VirtualFileSystem vfs) {
 
     EntropyFileOpStatus write_status = entropy_file_operation_handle_status(write_op, &status);
     if (write_status != ENTROPY_FILE_OP_COMPLETE) {
-        const EntropyFileErrorInfo* err =
-            entropy_file_operation_handle_error_info(write_op, &status);
+        const EntropyFileErrorInfo* err = entropy_file_operation_handle_error_info(write_op, &status);
         ENTROPY_LOG_ERROR_F("Write failed:");
         print_file_error(err);
     } else {
@@ -102,8 +101,7 @@ static void example_basic_file_ops(entropy_VirtualFileSystem vfs) {
         const char* content = entropy_file_operation_handle_contents_text(read_op, &status);
         ENTROPY_LOG_INFO_CAT_F("Example", "Read content:\n%s", content);
     } else {
-        const EntropyFileErrorInfo* err =
-            entropy_file_operation_handle_error_info(read_op, &status);
+        const EntropyFileErrorInfo* err = entropy_file_operation_handle_error_info(read_op, &status);
         ENTROPY_LOG_ERROR_F("Read failed:");
         print_file_error(err);
     }
@@ -141,8 +139,7 @@ static void example_directory_ops(entropy_VirtualFileSystem vfs) {
 
     /* Create directory */
     ENTROPY_LOG_INFO_CAT_F("Example", "Creating directory: %s", test_dir);
-    entropy_FileOperationHandle create_op =
-        entropy_directory_handle_create(dh, ENTROPY_TRUE, &status);
+    entropy_FileOperationHandle create_op = entropy_directory_handle_create(dh, ENTROPY_TRUE, &status);
     check_status(status, "create directory");
 
     entropy_file_operation_handle_wait(create_op, &status);
@@ -185,8 +182,7 @@ static void example_directory_ops(entropy_VirtualFileSystem vfs) {
     list_opts.include_hidden = ENTROPY_FALSE;
     list_opts.sort_by = ENTROPY_SORT_BY_NAME;
 
-    entropy_FileOperationHandle list_op =
-        entropy_directory_handle_list(dh, &list_opts, &status);
+    entropy_FileOperationHandle list_op = entropy_directory_handle_list(dh, &list_opts, &status);
     check_status(status, "list directory");
 
     entropy_file_operation_handle_wait(list_op, &status);
@@ -199,10 +195,7 @@ static void example_directory_ops(entropy_VirtualFileSystem vfs) {
 
         ENTROPY_LOG_INFO_CAT_F("Example", "Found %zu entries:", count);
         for (size_t i = 0; i < count; i++) {
-            printf("  [%zu] %s (%llu bytes)\n",
-                   i,
-                   entries[i].name,
-                   (unsigned long long)entries[i].metadata.size);
+            printf("  [%zu] %s (%llu bytes)\n", i, entries[i].name, (unsigned long long)entries[i].metadata.size);
         }
     }
 
@@ -210,8 +203,7 @@ static void example_directory_ops(entropy_VirtualFileSystem vfs) {
 
     /* Remove directory recursively */
     ENTROPY_LOG_INFO_CAT_F("Example", "Removing directory recursively...");
-    entropy_FileOperationHandle remove_op =
-        entropy_directory_handle_remove(dh, ENTROPY_TRUE, &status);
+    entropy_FileOperationHandle remove_op = entropy_directory_handle_remove(dh, ENTROPY_TRUE, &status);
     check_status(status, "remove directory");
 
     entropy_file_operation_handle_wait(remove_op, &status);
@@ -246,8 +238,7 @@ static void example_write_batch(entropy_VirtualFileSystem vfs) {
     opts.create_if_missing = ENTROPY_TRUE;
     opts.truncate = ENTROPY_TRUE;
 
-    entropy_FileOperationHandle write_op =
-        entropy_file_handle_write_all_text_with_options(fh, initial, &opts, &status);
+    entropy_FileOperationHandle write_op = entropy_file_handle_write_all_text_with_options(fh, initial, &opts, &status);
     entropy_file_operation_handle_wait(write_op, &status);
     entropy_file_operation_handle_destroy(write_op);
 
@@ -294,8 +285,7 @@ static void example_write_batch(entropy_VirtualFileSystem vfs) {
     if (entropy_file_operation_handle_status(commit_op, &status) == ENTROPY_FILE_OP_COMPLETE) {
         ENTROPY_LOG_INFO_CAT_F("Example", "Batch committed successfully");
     } else {
-        const EntropyFileErrorInfo* err =
-            entropy_file_operation_handle_error_info(commit_op, &status);
+        const EntropyFileErrorInfo* err = entropy_file_operation_handle_error_info(commit_op, &status);
         ENTROPY_LOG_ERROR_F("Batch commit failed:");
         print_file_error(err);
     }
@@ -331,8 +321,7 @@ int main(void) {
 
     /* Create work contract group */
     ENTROPY_LOG_INFO_F("Creating WorkContractGroup...");
-    entropy_WorkContractGroup group =
-        entropy_work_contract_group_create(2048, "VFS_Example", &status);
+    entropy_WorkContractGroup group = entropy_work_contract_group_create(2048, "VFS_Example", &status);
     check_status(status, "create work contract group");
 
     /* Create work service */

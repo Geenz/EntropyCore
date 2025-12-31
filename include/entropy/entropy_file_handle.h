@@ -9,8 +9,8 @@
  * the returned FileOperationHandle to block until completion.
  */
 
-#include "entropy/entropy_vfs_types.h"
 #include "entropy/entropy_file_operation_handle.h"
+#include "entropy/entropy_vfs_types.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -32,10 +32,7 @@ extern "C" {
  * @threadsafety Thread-safe
  * @ownership Returns owned pointer - must call entropy_file_handle_destroy()
  */
-ENTROPY_API entropy_FileHandle entropy_file_handle_clone(
-    entropy_FileHandle handle,
-    EntropyStatus* status
-);
+ENTROPY_API entropy_FileHandle entropy_file_handle_clone(entropy_FileHandle handle, EntropyStatus* status);
 
 /**
  * @brief Destroy a file handle
@@ -73,10 +70,7 @@ ENTROPY_API void entropy_file_handle_destroy(entropy_FileHandle handle);
  * entropy_file_operation_handle_destroy(op);
  * @endcode
  */
-ENTROPY_API entropy_FileOperationHandle entropy_file_handle_read_all(
-    entropy_FileHandle handle,
-    EntropyStatus* status
-);
+ENTROPY_API entropy_FileOperationHandle entropy_file_handle_read_all(entropy_FileHandle handle, EntropyStatus* status);
 
 /**
  * @brief Read a byte range from the file
@@ -89,12 +83,8 @@ ENTROPY_API entropy_FileOperationHandle entropy_file_handle_read_all(
  * @threadsafety Thread-safe
  * @ownership Returns owned pointer - must call entropy_file_operation_handle_destroy()
  */
-ENTROPY_API entropy_FileOperationHandle entropy_file_handle_read_range(
-    entropy_FileHandle handle,
-    uint64_t offset,
-    size_t length,
-    EntropyStatus* status
-);
+ENTROPY_API entropy_FileOperationHandle entropy_file_handle_read_range(entropy_FileHandle handle, uint64_t offset,
+                                                                       size_t length, EntropyStatus* status);
 
 /**
  * @brief Read a line by index (0-based)
@@ -109,11 +99,8 @@ ENTROPY_API entropy_FileOperationHandle entropy_file_handle_read_range(
  * @threadsafety Thread-safe
  * @ownership Returns owned pointer - must call entropy_file_operation_handle_destroy()
  */
-ENTROPY_API entropy_FileOperationHandle entropy_file_handle_read_line(
-    entropy_FileHandle handle,
-    size_t line_number,
-    EntropyStatus* status
-);
+ENTROPY_API entropy_FileOperationHandle entropy_file_handle_read_line(entropy_FileHandle handle, size_t line_number,
+                                                                      EntropyStatus* status);
 
 /* ============================================================================
  * Write Operations
@@ -131,11 +118,8 @@ ENTROPY_API entropy_FileOperationHandle entropy_file_handle_read_line(
  * @threadsafety Thread-safe
  * @ownership Returns owned pointer - must call entropy_file_operation_handle_destroy()
  */
-ENTROPY_API entropy_FileOperationHandle entropy_file_handle_write_all_text(
-    entropy_FileHandle handle,
-    const char* text,
-    EntropyStatus* status
-);
+ENTROPY_API entropy_FileOperationHandle entropy_file_handle_write_all_text(entropy_FileHandle handle, const char* text,
+                                                                           EntropyStatus* status);
 
 /**
  * @brief Write full text to the file with options
@@ -149,11 +133,7 @@ ENTROPY_API entropy_FileOperationHandle entropy_file_handle_write_all_text(
  * @ownership Returns owned pointer - must call entropy_file_operation_handle_destroy()
  */
 ENTROPY_API entropy_FileOperationHandle entropy_file_handle_write_all_text_with_options(
-    entropy_FileHandle handle,
-    const char* text,
-    const EntropyWriteOptions* options,
-    EntropyStatus* status
-);
+    entropy_FileHandle handle, const char* text, const EntropyWriteOptions* options, EntropyStatus* status);
 
 /**
  * @brief Write raw bytes to the file
@@ -168,12 +148,9 @@ ENTROPY_API entropy_FileOperationHandle entropy_file_handle_write_all_text_with_
  * @threadsafety Thread-safe
  * @ownership Returns owned pointer - must call entropy_file_operation_handle_destroy()
  */
-ENTROPY_API entropy_FileOperationHandle entropy_file_handle_write_all_bytes(
-    entropy_FileHandle handle,
-    const uint8_t* bytes,
-    size_t length,
-    EntropyStatus* status
-);
+ENTROPY_API entropy_FileOperationHandle entropy_file_handle_write_all_bytes(entropy_FileHandle handle,
+                                                                            const uint8_t* bytes, size_t length,
+                                                                            EntropyStatus* status);
 
 /**
  * @brief Write raw bytes to the file with options
@@ -187,13 +164,9 @@ ENTROPY_API entropy_FileOperationHandle entropy_file_handle_write_all_bytes(
  * @threadsafety Thread-safe
  * @ownership Returns owned pointer - must call entropy_file_operation_handle_destroy()
  */
-ENTROPY_API entropy_FileOperationHandle entropy_file_handle_write_all_bytes_with_options(
-    entropy_FileHandle handle,
-    const uint8_t* bytes,
-    size_t length,
-    const EntropyWriteOptions* options,
-    EntropyStatus* status
-);
+ENTROPY_API entropy_FileOperationHandle
+entropy_file_handle_write_all_bytes_with_options(entropy_FileHandle handle, const uint8_t* bytes, size_t length,
+                                                 const EntropyWriteOptions* options, EntropyStatus* status);
 
 /**
  * @brief Write bytes starting at a specific offset
@@ -207,13 +180,9 @@ ENTROPY_API entropy_FileOperationHandle entropy_file_handle_write_all_bytes_with
  * @threadsafety Thread-safe
  * @ownership Returns owned pointer - must call entropy_file_operation_handle_destroy()
  */
-ENTROPY_API entropy_FileOperationHandle entropy_file_handle_write_range(
-    entropy_FileHandle handle,
-    uint64_t offset,
-    const uint8_t* bytes,
-    size_t length,
-    EntropyStatus* status
-);
+ENTROPY_API entropy_FileOperationHandle entropy_file_handle_write_range(entropy_FileHandle handle, uint64_t offset,
+                                                                        const uint8_t* bytes, size_t length,
+                                                                        EntropyStatus* status);
 
 /**
  * @brief Replace a single line by index (0-based)
@@ -229,12 +198,8 @@ ENTROPY_API entropy_FileOperationHandle entropy_file_handle_write_range(
  * @threadsafety Thread-safe
  * @ownership Returns owned pointer - must call entropy_file_operation_handle_destroy()
  */
-ENTROPY_API entropy_FileOperationHandle entropy_file_handle_write_line(
-    entropy_FileHandle handle,
-    size_t line_number,
-    const char* line,
-    EntropyStatus* status
-);
+ENTROPY_API entropy_FileOperationHandle entropy_file_handle_write_line(entropy_FileHandle handle, size_t line_number,
+                                                                       const char* line, EntropyStatus* status);
 
 /* ============================================================================
  * File Management
@@ -249,10 +214,8 @@ ENTROPY_API entropy_FileOperationHandle entropy_file_handle_write_line(
  * @threadsafety Thread-safe
  * @ownership Returns owned pointer - must call entropy_file_operation_handle_destroy()
  */
-ENTROPY_API entropy_FileOperationHandle entropy_file_handle_create_empty(
-    entropy_FileHandle handle,
-    EntropyStatus* status
-);
+ENTROPY_API entropy_FileOperationHandle entropy_file_handle_create_empty(entropy_FileHandle handle,
+                                                                         EntropyStatus* status);
 
 /**
  * @brief Delete the file if it exists (idempotent)
@@ -263,10 +226,7 @@ ENTROPY_API entropy_FileOperationHandle entropy_file_handle_create_empty(
  * @threadsafety Thread-safe
  * @ownership Returns owned pointer - must call entropy_file_operation_handle_destroy()
  */
-ENTROPY_API entropy_FileOperationHandle entropy_file_handle_remove(
-    entropy_FileHandle handle,
-    EntropyStatus* status
-);
+ENTROPY_API entropy_FileOperationHandle entropy_file_handle_remove(entropy_FileHandle handle, EntropyStatus* status);
 
 /* ============================================================================
  * Metadata Access
@@ -284,11 +244,8 @@ ENTROPY_API entropy_FileOperationHandle entropy_file_handle_remove(
  * @threadsafety Thread-safe
  * @ownership Returns borrowed pointer - do NOT free
  */
-ENTROPY_API const char* entropy_file_handle_normalized_key(
-    entropy_FileHandle handle,
-    EntropyStatus* status
-);
+ENTROPY_API const char* entropy_file_handle_normalized_key(entropy_FileHandle handle, EntropyStatus* status);
 
 #ifdef __cplusplus
-} // extern "C"
+}  // extern "C"
 #endif

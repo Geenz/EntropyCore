@@ -50,12 +50,14 @@
 
 #pragma once
 
-#include "EntropyObject.h"
 #include <atomic>
 #include <cstdint>
 #include <type_traits>
 
-namespace EntropyEngine::Core {
+#include "EntropyObject.h"
+
+namespace EntropyEngine::Core
+{
 
 /**
  * @brief Generation counter component for slot-based pools
@@ -73,7 +75,8 @@ namespace EntropyEngine::Core {
  * };
  * @endcode
  */
-struct SlotGeneration {
+struct SlotGeneration
+{
     std::atomic<uint32_t> value{1};  ///< Generation counter (starts at 1, 0 reserved for "never allocated")
 
     SlotGeneration() noexcept = default;
@@ -82,9 +85,7 @@ struct SlotGeneration {
     SlotGeneration(const SlotGeneration&) = delete;
     SlotGeneration& operator=(const SlotGeneration&) = delete;
 
-    SlotGeneration(SlotGeneration&& other) noexcept
-        : value(other.value.load(std::memory_order_relaxed)) {
-    }
+    SlotGeneration(SlotGeneration&& other) noexcept : value(other.value.load(std::memory_order_relaxed)) {}
 
     SlotGeneration& operator=(SlotGeneration&& other) noexcept {
         value.store(other.value.load(std::memory_order_relaxed), std::memory_order_relaxed);
@@ -130,7 +131,8 @@ struct SlotGeneration {
  * These helper functions encapsulate the common handle lifecycle operations,
  * ensuring consistent usage of the generation pattern across all pools.
  */
-struct HandleSlotOps {
+struct HandleSlotOps
+{
     /**
      * @brief Stamps an EntropyObject with the slot's identity
      *
@@ -143,10 +145,10 @@ struct HandleSlotOps {
      * @param index Slot index within the pool
      * @param generation The slot's generation counter
      */
-    template<typename T>
+    template <typename T>
     static void stamp(T& obj, void* owner, uint32_t index, const SlotGeneration& generation) {
         static_assert(std::is_base_of_v<EntropyObject, T>,
-            "HandleSlotOps::stamp requires T to derive from EntropyObject");
+                      "HandleSlotOps::stamp requires T to derive from EntropyObject");
         HandleAccess::set(obj, owner, index, generation.current());
     }
 
@@ -167,11 +169,11 @@ struct HandleSlotOps {
      * @param generation The slot's generation counter
      * @return true if the object is valid for this slot
      */
-    template<typename T>
-    [[nodiscard]] static bool validate(const T* obj, const void* expectedOwner,
-                                        uint32_t expectedIndex, const SlotGeneration& generation) noexcept {
+    template <typename T>
+    [[nodiscard]] static bool validate(const T* obj, const void* expectedOwner, uint32_t expectedIndex,
+                                       const SlotGeneration& generation) noexcept {
         static_assert(std::is_base_of_v<EntropyObject, T>,
-            "HandleSlotOps::validate requires T to derive from EntropyObject");
+                      "HandleSlotOps::validate requires T to derive from EntropyObject");
 
         if (!obj) return false;
         if (!obj->hasHandle()) return false;
@@ -190,10 +192,10 @@ struct HandleSlotOps {
      * @param obj Object to release
      * @param generation The slot's generation counter (will be incremented)
      */
-    template<typename T>
+    template <typename T>
     static void release(T& obj, SlotGeneration& generation) {
         static_assert(std::is_base_of_v<EntropyObject, T>,
-            "HandleSlotOps::release requires T to derive from EntropyObject");
+                      "HandleSlotOps::release requires T to derive from EntropyObject");
         HandleAccess::clear(obj);
         generation.increment();
     }
@@ -208,10 +210,10 @@ struct HandleSlotOps {
      * @tparam T EntropyObject-derived type
      * @param obj Object to clear
      */
-    template<typename T>
+    template <typename T>
     static void clear(T& obj) {
         static_assert(std::is_base_of_v<EntropyObject, T>,
-            "HandleSlotOps::clear requires T to derive from EntropyObject");
+                      "HandleSlotOps::clear requires T to derive from EntropyObject");
         HandleAccess::clear(obj);
     }
 };
@@ -223,4 +225,4 @@ struct HandleSlotOps {
  */
 constexpr uint32_t INVALID_SLOT_INDEX = ~0u;
 
-} // namespace EntropyEngine::Core
+}  // namespace EntropyEngine::Core

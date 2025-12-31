@@ -3,11 +3,12 @@
  * @brief Implementation of WriteBatch C API
  */
 
-#include "entropy/entropy_write_batch.h"
-#include "VirtualFileSystem/WriteBatch.h"
+#include <new>
+
 #include "VirtualFileSystem/FileOperationHandle.h"
 #include "VirtualFileSystem/IFileSystemBackend.h"
-#include <new>
+#include "VirtualFileSystem/WriteBatch.h"
+#include "entropy/entropy_write_batch.h"
 
 using namespace EntropyEngine::Core::IO;
 
@@ -81,12 +82,8 @@ void entropy_write_batch_destroy(entropy_WriteBatch batch) {
     delete cpp_batch;
 }
 
-void entropy_write_batch_write_line(
-    entropy_WriteBatch batch,
-    size_t line_number,
-    const char* content,
-    EntropyStatus* status
-) {
+void entropy_write_batch_write_line(entropy_WriteBatch batch, size_t line_number, const char* content,
+                                    EntropyStatus* status) {
     if (!status) return;
     if (!batch || !content) {
         *status = ENTROPY_ERR_INVALID_ARG;
@@ -102,12 +99,8 @@ void entropy_write_batch_write_line(
     }
 }
 
-void entropy_write_batch_insert_line(
-    entropy_WriteBatch batch,
-    size_t line_number,
-    const char* content,
-    EntropyStatus* status
-) {
+void entropy_write_batch_insert_line(entropy_WriteBatch batch, size_t line_number, const char* content,
+                                     EntropyStatus* status) {
     if (!status) return;
     if (!batch || !content) {
         *status = ENTROPY_ERR_INVALID_ARG;
@@ -123,11 +116,7 @@ void entropy_write_batch_insert_line(
     }
 }
 
-void entropy_write_batch_delete_line(
-    entropy_WriteBatch batch,
-    size_t line_number,
-    EntropyStatus* status
-) {
+void entropy_write_batch_delete_line(entropy_WriteBatch batch, size_t line_number, EntropyStatus* status) {
     if (!status) return;
     if (!batch) {
         *status = ENTROPY_ERR_INVALID_ARG;
@@ -143,11 +132,7 @@ void entropy_write_batch_delete_line(
     }
 }
 
-void entropy_write_batch_append_line(
-    entropy_WriteBatch batch,
-    const char* content,
-    EntropyStatus* status
-) {
+void entropy_write_batch_append_line(entropy_WriteBatch batch, const char* content, EntropyStatus* status) {
     if (!status) return;
     if (!batch || !content) {
         *status = ENTROPY_ERR_INVALID_ARG;
@@ -163,11 +148,7 @@ void entropy_write_batch_append_line(
     }
 }
 
-void entropy_write_batch_replace_all(
-    entropy_WriteBatch batch,
-    const char* content,
-    EntropyStatus* status
-) {
+void entropy_write_batch_replace_all(entropy_WriteBatch batch, const char* content, EntropyStatus* status) {
     if (!status) return;
     if (!batch || !content) {
         *status = ENTROPY_ERR_INVALID_ARG;
@@ -183,10 +164,7 @@ void entropy_write_batch_replace_all(
     }
 }
 
-void entropy_write_batch_clear(
-    entropy_WriteBatch batch,
-    EntropyStatus* status
-) {
+void entropy_write_batch_clear(entropy_WriteBatch batch, EntropyStatus* status) {
     if (!status) return;
     if (!batch) {
         *status = ENTROPY_ERR_INVALID_ARG;
@@ -202,10 +180,7 @@ void entropy_write_batch_clear(
     }
 }
 
-entropy_FileOperationHandle entropy_write_batch_commit(
-    entropy_WriteBatch batch,
-    EntropyStatus* status
-) {
+entropy_FileOperationHandle entropy_write_batch_commit(entropy_WriteBatch batch, EntropyStatus* status) {
     if (!status) return nullptr;
     if (!batch) {
         *status = ENTROPY_ERR_INVALID_ARG;
@@ -223,11 +198,9 @@ entropy_FileOperationHandle entropy_write_batch_commit(
     }
 }
 
-entropy_FileOperationHandle entropy_write_batch_commit_with_options(
-    entropy_WriteBatch batch,
-    const EntropyWriteOptions* options,
-    EntropyStatus* status
-) {
+entropy_FileOperationHandle entropy_write_batch_commit_with_options(entropy_WriteBatch batch,
+                                                                    const EntropyWriteOptions* options,
+                                                                    EntropyStatus* status) {
     if (!status) return nullptr;
     if (!batch || !options) {
         *status = ENTROPY_ERR_INVALID_ARG;
@@ -246,10 +219,7 @@ entropy_FileOperationHandle entropy_write_batch_commit_with_options(
     }
 }
 
-entropy_FileOperationHandle entropy_write_batch_preview(
-    entropy_WriteBatch batch,
-    EntropyStatus* status
-) {
+entropy_FileOperationHandle entropy_write_batch_preview(entropy_WriteBatch batch, EntropyStatus* status) {
     if (!status) return nullptr;
     if (!batch) {
         *status = ENTROPY_ERR_INVALID_ARG;
@@ -267,10 +237,7 @@ entropy_FileOperationHandle entropy_write_batch_preview(
     }
 }
 
-size_t entropy_write_batch_pending_operations(
-    entropy_WriteBatch batch,
-    EntropyStatus* status
-) {
+size_t entropy_write_batch_pending_operations(entropy_WriteBatch batch, EntropyStatus* status) {
     if (!status) return 0;
     if (!batch) {
         *status = ENTROPY_ERR_INVALID_ARG;
@@ -287,10 +254,7 @@ size_t entropy_write_batch_pending_operations(
     }
 }
 
-EntropyBool entropy_write_batch_is_empty(
-    entropy_WriteBatch batch,
-    EntropyStatus* status
-) {
+EntropyBool entropy_write_batch_is_empty(entropy_WriteBatch batch, EntropyStatus* status) {
     if (!status) return ENTROPY_FALSE;
     if (!batch) {
         *status = ENTROPY_ERR_INVALID_ARG;
@@ -307,10 +271,7 @@ EntropyBool entropy_write_batch_is_empty(
     }
 }
 
-void entropy_write_batch_reset(
-    entropy_WriteBatch batch,
-    EntropyStatus* status
-) {
+void entropy_write_batch_reset(entropy_WriteBatch batch, EntropyStatus* status) {
     if (!status) return;
     if (!batch) {
         *status = ENTROPY_ERR_INVALID_ARG;
@@ -326,10 +287,7 @@ void entropy_write_batch_reset(
     }
 }
 
-const char* entropy_write_batch_get_path(
-    entropy_WriteBatch batch,
-    EntropyStatus* status
-) {
+const char* entropy_write_batch_get_path(entropy_WriteBatch batch, EntropyStatus* status) {
     if (!status) return nullptr;
     if (!batch) {
         *status = ENTROPY_ERR_INVALID_ARG;
@@ -346,4 +304,4 @@ const char* entropy_write_batch_get_path(
     }
 }
 
-} // extern "C"
+}  // extern "C"

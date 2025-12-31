@@ -8,11 +8,13 @@
  */
 
 #include <gtest/gtest.h>
+
+#include <atomic>
 #include <chrono>
 #include <thread>
-#include <atomic>
-#include "Core/TimerService.h"
+
 #include "Concurrency/WorkService.h"
+#include "Core/TimerService.h"
 
 using namespace EntropyEngine::Core;
 using namespace EntropyEngine::Core::Concurrency;
@@ -24,10 +26,11 @@ using namespace std::chrono_literals;
 #ifdef _WIN32
 constexpr auto kWindowsDrainTime = 200ms;  // Windows: slower callback completion
 #else
-constexpr auto kUnixDrainTime = 50ms;      // Unix (macOS, Linux): faster callback completion
+constexpr auto kUnixDrainTime = 50ms;  // Unix (macOS, Linux): faster callback completion
 #endif
 
-class TimerServiceTest : public ::testing::Test {
+class TimerServiceTest : public ::testing::Test
+{
 protected:
     void SetUp() override {
         // Create WorkService
@@ -146,8 +149,7 @@ TEST_F(TimerServiceTest, OneShotTimer_Fires) {
     std::atomic<bool> fired{false};
 
     auto timer = timerService->scheduleTimer(
-        50ms,
-        [&fired]() { fired.store(true, std::memory_order_release); },
+        50ms, [&fired]() { fired.store(true, std::memory_order_release); },
         false  // One-shot
     );
 
@@ -156,8 +158,7 @@ TEST_F(TimerServiceTest, OneShotTimer_Fires) {
 
     // Wait for timer to fire - automatic pumping via main thread contract
     auto start = std::chrono::steady_clock::now();
-    while (!fired.load(std::memory_order_acquire) &&
-           std::chrono::steady_clock::now() - start < 500ms) {
+    while (!fired.load(std::memory_order_acquire) && std::chrono::steady_clock::now() - start < 500ms) {
         // Must pump main thread work for automatic timer pumping
         workService->executeMainThreadWork(10);
         std::this_thread::sleep_for(10ms);
@@ -180,9 +181,8 @@ TEST_F(TimerServiceTest, OneShotTimer_DoesNotRepeat) {
     auto count = std::make_shared<std::atomic<int>>(0);
 
     auto timer = timerService->scheduleTimer(
-        50ms,
-        [count]() { count->fetch_add(1, std::memory_order_relaxed); },  // Capture by value
-        false  // One-shot
+        50ms, [count]() { count->fetch_add(1, std::memory_order_relaxed); },  // Capture by value
+        false                                                                 // One-shot
     );
 
     // Wait longer than one interval - automatic pumping via main thread work
@@ -211,9 +211,8 @@ TEST_F(TimerServiceTest, RepeatingTimer_FiresMultipleTimes) {
     auto count = std::make_shared<std::atomic<int>>(0);
 
     auto timer = timerService->scheduleTimer(
-        50ms,
-        [count]() { count->fetch_add(1, std::memory_order_relaxed); },  // Capture by value
-        true  // Repeating
+        50ms, [count]() { count->fetch_add(1, std::memory_order_relaxed); },  // Capture by value
+        true                                                                  // Repeating
     );
 
     EXPECT_TRUE(timer.isValid());
@@ -249,9 +248,8 @@ TEST_F(TimerServiceTest, TimerCancellation_PreventsExecution) {
     auto fired = std::make_shared<std::atomic<bool>>(false);
 
     auto timer = timerService->scheduleTimer(
-        100ms,
-        [fired]() { fired->store(true, std::memory_order_release); },  // Capture by value
-        false  // One-shot
+        100ms, [fired]() { fired->store(true, std::memory_order_release); },  // Capture by value
+        false                                                                 // One-shot
     );
 
     EXPECT_TRUE(timer.isValid());
@@ -275,9 +273,8 @@ TEST_F(TimerServiceTest, RepeatingTimer_CancellationStopsFiring) {
     auto count = std::make_shared<std::atomic<int>>(0);
 
     auto timer = timerService->scheduleTimer(
-        50ms,
-        [count]() { count->fetch_add(1, std::memory_order_relaxed); },  // Capture by value
-        true  // Repeating
+        50ms, [count]() { count->fetch_add(1, std::memory_order_relaxed); },  // Capture by value
+        true                                                                  // Repeating
     );
 
     // Let it fire a few times - automatic pumping via main thread work
@@ -311,14 +308,12 @@ TEST_F(TimerServiceTest, MultipleTimers_ExecuteIndependently) {
     std::atomic<int> count2{0};
 
     auto timer1 = timerService->scheduleTimer(
-        50ms,
-        [&count1]() { count1.fetch_add(1, std::memory_order_relaxed); },
+        50ms, [&count1]() { count1.fetch_add(1, std::memory_order_relaxed); },
         true  // Repeating
     );
 
     auto timer2 = timerService->scheduleTimer(
-        75ms,
-        [&count2]() { count2.fetch_add(1, std::memory_order_relaxed); },
+        75ms, [&count2]() { count2.fetch_add(1, std::memory_order_relaxed); },
         true  // Repeating
     );
 
@@ -359,13 +354,11 @@ TEST_F(TimerServiceTest, MainThreadTimer_ExecutesOnMainThread) {
             fired.store(true, std::memory_order_release);
         },
         false,  // One-shot
-        ExecutionType::MainThread
-    );
+        ExecutionType::MainThread);
 
     // Pump main thread work for automatic timer pumping
     auto start = std::chrono::steady_clock::now();
-    while (!fired.load(std::memory_order_acquire) &&
-           std::chrono::steady_clock::now() - start < 500ms) {
+    while (!fired.load(std::memory_order_acquire) && std::chrono::steady_clock::now() - start < 500ms) {
         workService->executeMainThreadWork(10);
         std::this_thread::sleep_for(10ms);
     }
@@ -388,9 +381,8 @@ TEST_F(TimerServiceTest, TimerMove_TransfersOwnership) {
     auto count = std::make_shared<std::atomic<int>>(0);
 
     auto timer1 = timerService->scheduleTimer(
-        50ms,
-        [count]() { count->fetch_add(1, std::memory_order_relaxed); },  // Capture by value
-        true  // Repeating
+        50ms, [count]() { count->fetch_add(1, std::memory_order_relaxed); },  // Capture by value
+        true                                                                  // Repeating
     );
 
     EXPECT_TRUE(timer1.isValid());
@@ -431,9 +423,8 @@ TEST_F(TimerServiceTest, TimerDestruction_CancelsTimer) {
 
     {
         auto timer = timerService->scheduleTimer(
-            50ms,
-            [count]() { count->fetch_add(1, std::memory_order_relaxed); },  // Capture by value
-            true  // Repeating
+            50ms, [count]() { count->fetch_add(1, std::memory_order_relaxed); },  // Capture by value
+            true                                                                  // Repeating
         );
 
         // Let it fire once or twice

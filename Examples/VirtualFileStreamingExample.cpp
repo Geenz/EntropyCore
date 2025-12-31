@@ -1,11 +1,12 @@
-#include "EntropyCore.h"
-#include "Concurrency/WorkService.h"
+#include <cstring>
+#include <vector>
+
 #include "Concurrency/WorkContractGroup.h"
-#include "VirtualFileSystem/VirtualFileSystem.h"
+#include "Concurrency/WorkService.h"
+#include "EntropyCore.h"
 #include "VirtualFileSystem/DirectoryHandle.h"
 #include "VirtualFileSystem/FileStream.h"
-#include <vector>
-#include <cstring>
+#include "VirtualFileSystem/VirtualFileSystem.h"
 
 using namespace EntropyEngine::Core;
 using namespace EntropyEngine::Core::Concurrency;
@@ -45,7 +46,8 @@ int main() {
         BufferedFileStream buffered(std::move(base), 4096);
         const char* msgB = "Buffered streaming block B\n";
         buffered.seek(0, std::ios::end);
-        auto wroteB = buffered.write(std::span<const std::byte>(reinterpret_cast<const std::byte*>(msgB), strlen(msgB)));
+        auto wroteB =
+            buffered.write(std::span<const std::byte>(reinterpret_cast<const std::byte*>(msgB), strlen(msgB)));
         buffered.flush();
         ENTROPY_LOG_INFO(std::string("Buffered:   wrote ") + std::to_string(wroteB.bytesTransferred) + " bytes");
 

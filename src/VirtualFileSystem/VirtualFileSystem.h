@@ -1,67 +1,75 @@
 /**
  * @file VirtualFileSystem.h
  * @brief High-level facade for file operations over pluggable backends
- * 
+ *
  * VirtualFileSystem (VFS) routes file operations to a selected backend (local filesystem by default)
  * and provides ergonomic helpers: value-semantic FileHandle creation, advisory per-path write
  * serialization, batching, and file watching. Use with a WorkContractGroup; operations are executed
  * asynchronously and can be waited on. See Examples/VirtualFileSystemExample.cpp for end-to-end usage.
  */
 #pragma once
-#include <string>
-#include <vector>
+#include <algorithm>
+#include <chrono>
+#include <filesystem>
+#include <functional>
+#include <list>
+#include <memory>
 #include <mutex>
 #include <shared_mutex>
+#include <string>
 #include <unordered_map>
-#include <memory>
-#include <functional>
-#include <chrono>
-#include <list>
-#include <filesystem>
-#include <algorithm>
+#include <vector>
+
 #include "../Concurrency/WorkContractGroup.h"
-#include "FileOperationHandle.h"
 #include "FileHandle.h"
-#include "IFileSystemBackend.h"
+#include "FileOperationHandle.h"
 #include "FileWatch.h"
+#include "IFileSystemBackend.h"
 
-namespace EntropyEngine::Core::IO {
+namespace EntropyEngine::Core::IO
+{
 
-class FileStream; // fwd
-class BufferedFileStream; // fwd
-class WriteBatch; // fwd
-class FileWatchManager; // fwd
-class FileWatch; // fwd
-class DirectoryHandle; // fwd
+class FileStream;          // fwd
+class BufferedFileStream;  // fwd
+class WriteBatch;          // fwd
+class FileWatchManager;    // fwd
+class FileWatch;           // fwd
+class DirectoryHandle;     // fwd
 
-class VirtualFileSystem {
+class VirtualFileSystem
+{
 public:
-    struct Config { 
+    struct Config
+    {
         bool serializeWritesPerPath;
-        size_t maxWriteLocksCached;  // Maximum number of write locks to cache
+        size_t maxWriteLocksCached;             // Maximum number of write locks to cache
         std::chrono::minutes writeLockTimeout;  // Timeout for unused write locks
-        bool defaultCreateParentDirs;       // Default behavior for creating parent directories
+        bool defaultCreateParentDirs;           // Default behavior for creating parent directories
 
         // Advisory locking policy (in-process fallback)
-        std::chrono::milliseconds advisoryAcquireTimeout; // 5s default
-        enum class AdvisoryFallbackPolicy { None, FallbackWithTimeout };
+        std::chrono::milliseconds advisoryAcquireTimeout;  // 5s default
+        enum class AdvisoryFallbackPolicy
+        {
+            None,
+            FallbackWithTimeout
+        };
         AdvisoryFallbackPolicy advisoryFallback;
 
         // Cross-process lock-file serialization (optional)
-        bool defaultUseLockFile;                                    // default: false
-        std::chrono::milliseconds lockAcquireTimeout;               // default: 5s
-        std::string lockSuffix;                                     // default: ".lock"
+        bool defaultUseLockFile;                       // default: false
+        std::chrono::milliseconds lockAcquireTimeout;  // default: 5s
+        std::string lockSuffix;                        // default: ".lock"
 
         Config()
-            : serializeWritesPerPath(true)
-            , maxWriteLocksCached(1024)
-            , writeLockTimeout(std::chrono::minutes(5))
-            , defaultCreateParentDirs(false)
-            , advisoryAcquireTimeout(std::chrono::milliseconds(5000))
-            , advisoryFallback(AdvisoryFallbackPolicy::FallbackWithTimeout)
-            , defaultUseLockFile(false)
-            , lockAcquireTimeout(std::chrono::milliseconds(5000))
-            , lockSuffix(".lock") {}
+            : serializeWritesPerPath(true),
+              maxWriteLocksCached(1024),
+              writeLockTimeout(std::chrono::minutes(5)),
+              defaultCreateParentDirs(false),
+              advisoryAcquireTimeout(std::chrono::milliseconds(5000)),
+              advisoryFallback(AdvisoryFallbackPolicy::FallbackWithTimeout),
+              defaultUseLockFile(false),
+              lockAcquireTimeout(std::chrono::milliseconds(5000)),
+              lockSuffix(".lock") {}
     };
 
     explicit VirtualFileSystem(EntropyEngine::Core::Concurrency::WorkContractGroup* group, Config cfg = {});
@@ -70,7 +78,7 @@ public:
     // Factory is defined in .cpp to avoid circular includes issues
     /**
      * @brief Creates a value-semantic handle for the given path
-     * 
+     *
      * Routes the path to the appropriate backend (mounted or default). The handle is copyable and
      * caches a backend-normalized identity key for equality/locking purposes.
      * @param path Target path
@@ -81,11 +89,15 @@ public:
     /**
      * @brief Shorthand for createFileHandle(path)
      */
-    FileHandle handle(std::string path) { return createFileHandle(std::move(path)); }
+    FileHandle handle(std::string path) {
+        return createFileHandle(std::move(path));
+    }
     /**
      * @brief Functor shorthand for createFileHandle(path)
      */
-    FileHandle operator()(std::string path) { return createFileHandle(std::move(path)); }
+    FileHandle operator()(std::string path) {
+        return createFileHandle(std::move(path));
+    }
 
     /**
      * @brief Creates a value-semantic handle for a directory path
@@ -96,7 +108,7 @@ public:
      * @return DirectoryHandle bound to this VFS
      */
     DirectoryHandle createDirectoryHandle(std::string path);
-    
+
     // Streaming convenience
     /**
      * @brief Opens a stream via the routed backend
@@ -112,8 +124,9 @@ public:
      * @param options Base stream options (buffered is ignored; wrapper handles buffering)
      * @return BufferedFileStream unique_ptr, or null on failure
      */
-    std::unique_ptr<BufferedFileStream> openBufferedStream(const std::string& path, size_t bufferSize = 65536, StreamOptions options = {});
-    
+    std::unique_ptr<BufferedFileStream> openBufferedStream(const std::string& path, size_t bufferSize = 65536,
+                                                           StreamOptions options = {});
+
     // Batch operations
     /**
      * @brief Creates a WriteBatch builder for atomic multi-line edits
@@ -183,7 +196,9 @@ public:
      * @param body Lambda that populates OpState and calls complete()
      * @return FileOperationHandle that will be completed when body finishes
      */
-    FileOperationHandle submit(std::string path, std::function<void(FileOperationHandle::OpState&, const std::string&, const ExecContext&)> body) const;
+    FileOperationHandle submit(
+        std::string path,
+        std::function<void(FileOperationHandle::OpState&, const std::string&, const ExecContext&)> body) const;
 
     /**
      * @brief Get VFS configuration (for backends)
@@ -191,7 +206,9 @@ public:
      *
      * Backends can check settings like defaultCreateParentDirs to respect VFS policy.
      */
-    const Config& getConfig() const { return _cfg; }
+    const Config& getConfig() const {
+        return _cfg;
+    }
 
     /**
      * @brief Get WorkContractGroup for advanced scheduling (for backends)
@@ -199,7 +216,9 @@ public:
      *
      * Backends can use this to detect same-group execution and avoid nested scheduling.
      */
-    EntropyEngine::Core::Concurrency::WorkContractGroup* getWorkGroup() const { return _group; }
+    EntropyEngine::Core::Concurrency::WorkContractGroup* getWorkGroup() const {
+        return _group;
+    }
 
     /**
      * @brief Normalize path for consistent comparison (for backends)
@@ -216,17 +235,20 @@ private:
     Config _cfg{};
 
     // LRU cache for write serialization per path
-    struct LockEntry {
+    struct LockEntry
+    {
         std::shared_ptr<std::timed_mutex> mutex;
         std::chrono::steady_clock::time_point lastAccess;
         std::list<std::string>::iterator lruIt;
     };
-    
+
     mutable std::mutex _mapMutex;
     mutable std::unordered_map<std::string, LockEntry> _writeLocks;
     mutable std::list<std::string> _lruList;  // Most recently used at front
 
-    std::shared_ptr<FileOperationHandle::OpState> makeState() const { return std::make_shared<FileOperationHandle::OpState>(); }
+    std::shared_ptr<FileOperationHandle::OpState> makeState() const {
+        return std::make_shared<FileOperationHandle::OpState>();
+    }
 
     // Lock management
     std::shared_ptr<std::timed_mutex> lockForPath(const std::string& path) const;
@@ -245,8 +267,11 @@ private:
      * Errors include backend message/systemError when provided.
      * The op must complete inline and call s.complete(). It must NOT schedule nested async work.
      */
-    FileOperationHandle submitSerialized(std::string path, std::function<void(FileOperationHandle::OpState&, std::shared_ptr<IFileSystemBackend>, const std::string&, const ExecContext&)> op) const;
-    
+    FileOperationHandle submitSerialized(
+        std::string path, std::function<void(FileOperationHandle::OpState&, std::shared_ptr<IFileSystemBackend>,
+                                             const std::string&, const ExecContext&)>
+                              op) const;
+
     // Backend storage (reference-counted for thread-safe lifetime management)
     std::shared_ptr<IFileSystemBackend> _defaultBackend;
     std::unordered_map<std::string, std::shared_ptr<IFileSystemBackend>> _mountedBackends;
@@ -261,4 +286,4 @@ private:
     friend class FileWatchManager;
 };
 
-} // namespace EntropyEngine::Core::IO
+}  // namespace EntropyEngine::Core::IO

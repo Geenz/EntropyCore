@@ -7,14 +7,15 @@
  * This file is part of the Entropy Core project.
  */
 
-#include "Core/entropy_main.h"
 #include "Core/EntropyApplication.h"
+#include "Core/entropy_main.h"
 
 using EntropyEngine::Core::EntropyApplication;
 
 extern "C" {
 
-struct CppDelegate : EntropyEngine::Core::EntropyAppDelegate {
+struct CppDelegate : EntropyEngine::Core::EntropyAppDelegate
+{
     EntropyAppDelegateC del{};
     EntropyApplication* app = nullptr;
     void applicationWillFinishLaunching() override {
@@ -30,13 +31,12 @@ struct CppDelegate : EntropyEngine::Core::EntropyAppDelegate {
     void applicationWillTerminate() override {
         if (del.will_terminate) del.will_terminate((EntropyApp*)app, del.userdata);
     }
-    void applicationDidCatchUnhandledException(std::exception_ptr) override {
+    void applicationDidCatchUnhandledException([[maybe_unused]] std::exception_ptr ex) override {
         if (del.did_catch_unhandled_exception) del.did_catch_unhandled_exception((EntropyApp*)app, del.userdata);
     }
 };
 
-int entropy_main_run(const EntropyMainConfig* cfg,
-                     const EntropyAppDelegateC* delegate) {
+int entropy_main_run(const EntropyMainConfig* cfg, const EntropyAppDelegateC* delegate) {
     auto& app = EntropyApplication::shared();
 
     EntropyEngine::Core::EntropyApplicationConfig cc{};
@@ -59,6 +59,8 @@ void entropy_main_terminate(int code) {
     EntropyApplication::shared().terminate(code);
 }
 
-EntropyApp* entropy_main_app(void) { return (EntropyApp*)&EntropyApplication::shared(); }
+EntropyApp* entropy_main_app(void) {
+    return (EntropyApp*)&EntropyApplication::shared();
+}
 
-} // extern "C"
+}  // extern "C"

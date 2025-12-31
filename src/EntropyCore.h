@@ -12,7 +12,7 @@
 /**
  * @file EntropyCore.h
  * @brief Single header that includes all EntropyCore components
- * 
+ *
  * This header can be used as an alternative to C++20 modules for
  * compilers that don't fully support modules yet.
  */
@@ -22,9 +22,9 @@
 
 // Core object model
 #include "Core/EntropyClass.h"
+#include "Core/EntropyInterop.h"
 #include "Core/EntropyObject.h"
 #include "Core/RefObject.h"
-#include "Core/EntropyInterop.h"
 
 // Type System
 #include "TypeSystem/GenericHandle.h"
@@ -34,27 +34,27 @@
 #include "Graph/DirectedAcyclicGraph.h"
 
 // Debug
-#include "Debug/INamed.h"
-#include "Debug/DebugUtilities.h"
 #include "Debug/Debug.h"
+#include "Debug/DebugUtilities.h"
+#include "Debug/INamed.h"
 
 // Logging
-#include "Logging/LogLevel.h"
-#include "Logging/LogEntry.h"
-#include "Logging/ILogSink.h"
 #include "Logging/ConsoleSink.h"
+#include "Logging/ILogSink.h"
+#include "Logging/LogEntry.h"
+#include "Logging/LogLevel.h"
 #include "Logging/Logger.h"
 
 // Concurrency
-#include "Concurrency/WorkContractHandle.h"
-#include "Concurrency/WorkContractGroup.h"
-#include "Concurrency/WorkGraph.h"
-#include "Concurrency/WorkService.h"
-#include "Concurrency/SignalTree.h"
+#include "Concurrency/AdaptiveRankingScheduler.h"
+#include "Concurrency/DirectScheduler.h"
 #include "Concurrency/IConcurrencyProvider.h"
 #include "Concurrency/IWorkScheduler.h"
-#include "Concurrency/DirectScheduler.h"
-#include "Concurrency/SpinningDirectScheduler.h"
-#include "Concurrency/AdaptiveRankingScheduler.h"
 #include "Concurrency/RandomScheduler.h"
 #include "Concurrency/RoundRobinScheduler.h"
+#include "Concurrency/SignalTree.h"
+#include "Concurrency/SpinningDirectScheduler.h"
+#include "Concurrency/WorkContractGroup.h"
+#include "Concurrency/WorkContractHandle.h"
+#include "Concurrency/WorkGraph.h"
+#include "Concurrency/WorkService.h"

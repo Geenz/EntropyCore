@@ -30,10 +30,8 @@ extern "C" {
  * @threadsafety Thread-safe
  * @ownership Returns owned pointer - must call entropy_file_operation_handle_destroy()
  */
-ENTROPY_API entropy_FileOperationHandle entropy_file_operation_handle_clone(
-    entropy_FileOperationHandle handle,
-    EntropyStatus* status
-);
+ENTROPY_API entropy_FileOperationHandle entropy_file_operation_handle_clone(entropy_FileOperationHandle handle,
+                                                                            EntropyStatus* status);
 
 /**
  * @brief Destroy a file operation handle
@@ -44,9 +42,7 @@ ENTROPY_API entropy_FileOperationHandle entropy_file_operation_handle_clone(
  * @param handle Handle to destroy (can be NULL)
  * @threadsafety Thread-safe
  */
-ENTROPY_API void entropy_file_operation_handle_destroy(
-    entropy_FileOperationHandle handle
-);
+ENTROPY_API void entropy_file_operation_handle_destroy(entropy_FileOperationHandle handle);
 
 /* ============================================================================
  * Synchronization
@@ -62,10 +58,7 @@ ENTROPY_API void entropy_file_operation_handle_destroy(
  * @param status Error reporting (required)
  * @threadsafety Thread-safe
  */
-ENTROPY_API void entropy_file_operation_handle_wait(
-    entropy_FileOperationHandle handle,
-    EntropyStatus* status
-);
+ENTROPY_API void entropy_file_operation_handle_wait(entropy_FileOperationHandle handle, EntropyStatus* status);
 
 /**
  * @brief Get current operation status
@@ -77,10 +70,8 @@ ENTROPY_API void entropy_file_operation_handle_wait(
  * @return Current status
  * @threadsafety Thread-safe
  */
-ENTROPY_API EntropyFileOpStatus entropy_file_operation_handle_status(
-    entropy_FileOperationHandle handle,
-    EntropyStatus* status
-);
+ENTROPY_API EntropyFileOpStatus entropy_file_operation_handle_status(entropy_FileOperationHandle handle,
+                                                                     EntropyStatus* status);
 
 /* ============================================================================
  * Read Results - only valid after wait()
@@ -107,11 +98,8 @@ ENTROPY_API EntropyFileOpStatus entropy_file_operation_handle_status(
  * }
  * @endcode
  */
-ENTROPY_API const uint8_t* entropy_file_operation_handle_contents_bytes(
-    entropy_FileOperationHandle handle,
-    size_t* out_size,
-    EntropyStatus* status
-);
+ENTROPY_API const uint8_t* entropy_file_operation_handle_contents_bytes(entropy_FileOperationHandle handle,
+                                                                        size_t* out_size, EntropyStatus* status);
 
 /**
  * @brief Get read result as text
@@ -125,10 +113,8 @@ ENTROPY_API const uint8_t* entropy_file_operation_handle_contents_bytes(
  * @threadsafety NOT thread-safe - do not call concurrently on same handle
  * @ownership Returns borrowed pointer - do NOT free
  */
-ENTROPY_API const char* entropy_file_operation_handle_contents_text(
-    entropy_FileOperationHandle handle,
-    EntropyStatus* status
-);
+ENTROPY_API const char* entropy_file_operation_handle_contents_text(entropy_FileOperationHandle handle,
+                                                                    EntropyStatus* status);
 
 /* ============================================================================
  * Write Results - only valid after wait()
@@ -144,10 +130,8 @@ ENTROPY_API const char* entropy_file_operation_handle_contents_text(
  * @return Bytes written (0 if not a write operation)
  * @threadsafety Thread-safe
  */
-ENTROPY_API uint64_t entropy_file_operation_handle_bytes_written(
-    entropy_FileOperationHandle handle,
-    EntropyStatus* status
-);
+ENTROPY_API uint64_t entropy_file_operation_handle_bytes_written(entropy_FileOperationHandle handle,
+                                                                 EntropyStatus* status);
 
 /* ============================================================================
  * Metadata Results - only valid after wait()
@@ -165,10 +149,8 @@ ENTROPY_API uint64_t entropy_file_operation_handle_bytes_written(
  * @threadsafety NOT thread-safe - do not call concurrently on same handle
  * @ownership Returns borrowed pointer - do NOT free
  */
-ENTROPY_API const EntropyFileMetadata* entropy_file_operation_handle_metadata(
-    entropy_FileOperationHandle handle,
-    EntropyStatus* status
-);
+ENTROPY_API const EntropyFileMetadata* entropy_file_operation_handle_metadata(entropy_FileOperationHandle handle,
+                                                                              EntropyStatus* status);
 
 /* ============================================================================
  * Directory Listing Results - only valid after wait()
@@ -197,10 +179,7 @@ ENTROPY_API const EntropyFileMetadata* entropy_file_operation_handle_metadata(
  * @endcode
  */
 ENTROPY_API const EntropyDirectoryEntry* entropy_file_operation_handle_directory_entries(
-    entropy_FileOperationHandle handle,
-    size_t* out_count,
-    EntropyStatus* status
-);
+    entropy_FileOperationHandle handle, size_t* out_count, EntropyStatus* status);
 
 /* ============================================================================
  * Error Information - only valid after wait() when status is Failed
@@ -226,11 +205,9 @@ ENTROPY_API const EntropyDirectoryEntry* entropy_file_operation_handle_directory
  * }
  * @endcode
  */
-ENTROPY_API const EntropyFileErrorInfo* entropy_file_operation_handle_error_info(
-    entropy_FileOperationHandle handle,
-    EntropyStatus* status
-);
+ENTROPY_API const EntropyFileErrorInfo* entropy_file_operation_handle_error_info(entropy_FileOperationHandle handle,
+                                                                                 EntropyStatus* status);
 
 #ifdef __cplusplus
-} // extern "C"
+}  // extern "C"
 #endif

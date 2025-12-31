@@ -7,15 +7,17 @@
  * equality and hashing are backend-aware via a normalized key.
  */
 #pragma once
-#include <string>
 #include <memory>
+#include <string>
+
 #include "FileOperationHandle.h"
 #include "IFileSystemBackend.h"
 
-namespace EntropyEngine::Core::IO {
+namespace EntropyEngine::Core::IO
+{
 
-class VirtualFileSystem; // fwd
-class IFileSystemBackend; // fwd
+class VirtualFileSystem;   // fwd
+class IFileSystemBackend;  // fwd
 
 /**
  * @brief Copyable handle to a directory path routed through a backend
@@ -39,9 +41,11 @@ class IFileSystemBackend; // fwd
  * dh.remove(true).wait(); // recursive
  * @endcode
  */
-class DirectoryHandle {
+class DirectoryHandle
+{
 public:
-    struct Metadata {
+    struct Metadata
+    {
         std::string path;       // full path as provided
         std::string directory;  // parent directory (may be empty)
         std::string name;       // directory name
@@ -59,8 +63,8 @@ private:
      */
     explicit DirectoryHandle(VirtualFileSystem* vfs, std::string path);
     DirectoryHandle() = delete;
-public:
 
+public:
     // Directory operations
     /**
      * @brief Creates the directory at this path
@@ -108,43 +112,50 @@ public:
      * @brief Returns static metadata captured at handle construction
      * @return Reference to directory metadata (existence at creation time, etc.)
      */
-    const Metadata& metadata() const noexcept { return _meta; }
+    const Metadata& metadata() const noexcept {
+        return _meta;
+    }
 
     /**
      * @brief Backend-aware normalized key for identity/locking
      * @return Normalized key string used for equality
      */
-    const std::string& normalizedKey() const noexcept { return _normKey; }
-
+    const std::string& normalizedKey() const noexcept {
+        return _normKey;
+    }
 
     // Equality based on backend identity and normalized key
     friend bool operator==(const DirectoryHandle& a, const DirectoryHandle& b) noexcept {
         return a._backend.get() == b._backend.get() && a._normKey == b._normKey;
     }
-    friend bool operator!=(const DirectoryHandle& a, const DirectoryHandle& b) noexcept { return !(a == b); }
+    friend bool operator!=(const DirectoryHandle& a, const DirectoryHandle& b) noexcept {
+        return !(a == b);
+    }
 
 private:
     VirtualFileSystem* _vfs;
     std::shared_ptr<IFileSystemBackend> _backend;  // Backend for this directory (ref-counted for safety)
-    Metadata _meta; // associated metadata for this handle
-    std::string _normKey; // backend-normalized key captured at creation
+    Metadata _meta;                                // associated metadata for this handle
+    std::string _normKey;                          // backend-normalized key captured at creation
 
     friend class VirtualFileSystem;
     // Allow hasher to access private members without exposing opaque pointers publicly
     friend struct std::hash<EntropyEngine::Core::IO::DirectoryHandle>;
 };
 
-} // namespace EntropyEngine::Core::IO
+}  // namespace EntropyEngine::Core::IO
 
 // Hash support for DirectoryHandle
-namespace std {
-    template<>
-    struct hash<EntropyEngine::Core::IO::DirectoryHandle> {
-        size_t operator()(const EntropyEngine::Core::IO::DirectoryHandle& dh) const noexcept {
-            // Combine backend identity pointer and normalized key
-            size_t h1 = hash<const void*>()(dh._backend.get());
-            size_t h2 = hash<string>()(dh.normalizedKey());
-            return h1 ^ (h2 << 1);
-        }
-    };
-}
+namespace std
+{
+template <>
+struct hash<EntropyEngine::Core::IO::DirectoryHandle>
+{
+    size_t operator()(const EntropyEngine::Core::IO::DirectoryHandle& dh) const noexcept {
+        // Combine backend identity pointer and normalized key
+        size_t h1 = hash<const void*>()(dh._backend.get());
+        size_t h2 = hash<string>()(dh.normalizedKey());
+        return h1 ^ (h2 << 1);
+    }
+};
+}  // namespace std

@@ -33,14 +33,14 @@ extern "C" {
  *
  * These extend the base EntropyStatus enum with concurrency-specific errors.
  */
-#define ENTROPY_ERR_ALREADY_SCHEDULED  ((EntropyStatus)100)  ///< Contract is already scheduled
-#define ENTROPY_ERR_EXECUTING          ((EntropyStatus)101)  ///< Contract is currently executing
-#define ENTROPY_ERR_GROUP_FULL         ((EntropyStatus)102)  ///< Work group has reached capacity
-#define ENTROPY_ERR_NOT_SCHEDULED      ((EntropyStatus)103)  ///< Contract is not scheduled
-#define ENTROPY_ERR_ALREADY_RUNNING    ((EntropyStatus)104)  ///< Service is already running
-#define ENTROPY_ERR_NOT_RUNNING        ((EntropyStatus)105)  ///< Service is not running
-#define ENTROPY_ERR_GROUP_EXISTS       ((EntropyStatus)106)  ///< Group is already registered
-#define ENTROPY_ERR_GROUP_NOT_FOUND    ((EntropyStatus)107)  ///< Group was not found
+#define ENTROPY_ERR_ALREADY_SCHEDULED ((EntropyStatus)100)  ///< Contract is already scheduled
+#define ENTROPY_ERR_EXECUTING ((EntropyStatus)101)          ///< Contract is currently executing
+#define ENTROPY_ERR_GROUP_FULL ((EntropyStatus)102)         ///< Work group has reached capacity
+#define ENTROPY_ERR_NOT_SCHEDULED ((EntropyStatus)103)      ///< Contract is not scheduled
+#define ENTROPY_ERR_ALREADY_RUNNING ((EntropyStatus)104)    ///< Service is already running
+#define ENTROPY_ERR_NOT_RUNNING ((EntropyStatus)105)        ///< Service is not running
+#define ENTROPY_ERR_GROUP_EXISTS ((EntropyStatus)106)       ///< Group is already registered
+#define ENTROPY_ERR_GROUP_NOT_FOUND ((EntropyStatus)107)    ///< Group was not found
 
 // ============================================================================
 // Contract State
@@ -52,7 +52,8 @@ extern "C" {
  * These states track a contract's progress from allocation through completion.
  * State transitions are atomic and thread-safe.
  */
-typedef enum EntropyContractState {
+typedef enum EntropyContractState
+{
     ENTROPY_CONTRACT_FREE = 0,       ///< Contract slot is available for allocation
     ENTROPY_CONTRACT_ALLOCATED = 1,  ///< Contract has been allocated but not scheduled
     ENTROPY_CONTRACT_SCHEDULED = 2,  ///< Contract is scheduled and ready for execution
@@ -69,12 +70,13 @@ typedef enum EntropyContractState {
  *
  * Indicates the outcome of attempting to change a contract's scheduling state.
  */
-typedef enum EntropyScheduleResult {
-    ENTROPY_SCHEDULE_SCHEDULED = 0,        ///< Contract is now scheduled (successful schedule operation)
-    ENTROPY_SCHEDULE_ALREADY_SCHEDULED = 1,///< Contract was already scheduled (schedule operation failed)
-    ENTROPY_SCHEDULE_NOT_SCHEDULED = 2,    ///< Contract is not scheduled (successful unschedule operation)
-    ENTROPY_SCHEDULE_EXECUTING = 3,        ///< Cannot modify - currently executing
-    ENTROPY_SCHEDULE_INVALID = 4           ///< Invalid handle provided
+typedef enum EntropyScheduleResult
+{
+    ENTROPY_SCHEDULE_SCHEDULED = 0,          ///< Contract is now scheduled (successful schedule operation)
+    ENTROPY_SCHEDULE_ALREADY_SCHEDULED = 1,  ///< Contract was already scheduled (schedule operation failed)
+    ENTROPY_SCHEDULE_NOT_SCHEDULED = 2,      ///< Contract is not scheduled (successful unschedule operation)
+    ENTROPY_SCHEDULE_EXECUTING = 3,          ///< Cannot modify - currently executing
+    ENTROPY_SCHEDULE_INVALID = 4             ///< Invalid handle provided
 } EntropyScheduleResult;
 
 // ============================================================================
@@ -87,9 +89,10 @@ typedef enum EntropyScheduleResult {
  * Determines where a contract is allowed to execute. Use MainThread for
  * work that must run on the main thread (UI updates, rendering setup, etc.).
  */
-typedef enum EntropyExecutionType {
-    ENTROPY_EXEC_ANY_THREAD = 0,   ///< Runs on any worker thread from the pool
-    ENTROPY_EXEC_MAIN_THREAD = 1   ///< Must run on the main/UI thread
+typedef enum EntropyExecutionType
+{
+    ENTROPY_EXEC_ANY_THREAD = 0,  ///< Runs on any worker thread from the pool
+    ENTROPY_EXEC_MAIN_THREAD = 1  ///< Must run on the main/UI thread
 } EntropyExecutionType;
 
 // ============================================================================
@@ -159,10 +162,11 @@ typedef void (*EntropyWorkCallback)(void* user_data);
  *
  * Controls thread pool size and scheduling behavior.
  */
-typedef struct EntropyWorkServiceConfig {
-    uint32_t thread_count;           ///< Worker thread count (0 = use all CPU cores)
-    size_t max_soft_failure_count;   ///< Number of selection failures before sleeping
-    size_t failure_sleep_time_ns;    ///< Sleep duration in nanoseconds when no work found
+typedef struct EntropyWorkServiceConfig
+{
+    uint32_t thread_count;          ///< Worker thread count (0 = use all CPU cores)
+    size_t max_soft_failure_count;  ///< Number of selection failures before sleeping
+    size_t failure_sleep_time_ns;   ///< Sleep duration in nanoseconds when no work found
 } EntropyWorkServiceConfig;
 
 /**
@@ -170,10 +174,11 @@ typedef struct EntropyWorkServiceConfig {
  *
  * Provides detailed statistics about main thread work execution.
  */
-typedef struct EntropyMainThreadWorkResult {
-    size_t contracts_executed;    ///< Number of contracts actually executed
-    size_t groups_with_work;      ///< Number of groups that had work available
-    EntropyBool more_work_available; ///< Whether there's more work that could be executed
+typedef struct EntropyMainThreadWorkResult
+{
+    size_t contracts_executed;        ///< Number of contracts actually executed
+    size_t groups_with_work;          ///< Number of groups that had work available
+    EntropyBool more_work_available;  ///< Whether there's more work that could be executed
 } EntropyMainThreadWorkResult;
 
 // ============================================================================

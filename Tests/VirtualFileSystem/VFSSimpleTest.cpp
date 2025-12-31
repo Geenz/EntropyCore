@@ -1,13 +1,14 @@
-#include "EntropyCore.h"
-#include "VirtualFileSystem/VirtualFileSystem.h"
-#include "VirtualFileSystem/FileHandle.h"
-#include "../TestHelpers/VFSTestHelpers.h"
 #include <iostream>
+
+#include "../TestHelpers/VFSTestHelpers.h"
+#include "EntropyCore.h"
+#include "VirtualFileSystem/FileHandle.h"
+#include "VirtualFileSystem/VirtualFileSystem.h"
 
 using namespace EntropyEngine::Core;
 using namespace EntropyEngine::Core::IO;
-using entropy::test_helpers::ScopedWorkEnv;
 using entropy::test_helpers::ScopedTempDir;
+using entropy::test_helpers::ScopedWorkEnv;
 
 int main() {
     std::cout << "Starting VFS simple test...\n";

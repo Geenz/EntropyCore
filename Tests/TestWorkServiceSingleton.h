@@ -8,13 +8,17 @@
 
 #pragma once
 
-#include "Concurrency/WorkService.h"
 #include <memory>
 #include <mutex>
 
-namespace EntropyEngine {
-namespace Core {
-namespace Testing {
+#include "Concurrency/WorkService.h"
+
+namespace EntropyEngine
+{
+namespace Core
+{
+namespace Testing
+{
 
 /**
  * @brief Singleton wrapper for WorkService in tests
@@ -22,7 +26,8 @@ namespace Testing {
  * WorkService should only have one instance active at a time due to
  * static thread_local variables. This wrapper ensures that constraint.
  */
-class TestWorkServiceSingleton {
+class TestWorkServiceSingleton
+{
 private:
     static std::unique_ptr<Concurrency::WorkService> instance;
     static std::mutex mutex;
@@ -54,6 +59,6 @@ public:
 inline std::unique_ptr<Concurrency::WorkService> TestWorkServiceSingleton::instance = nullptr;
 inline std::mutex TestWorkServiceSingleton::mutex;
 
-} // namespace Testing
-} // namespace Core
-} // namespace EntropyEngine
+}  // namespace Testing
+}  // namespace Core
+}  // namespace EntropyEngine

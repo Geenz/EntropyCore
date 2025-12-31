@@ -8,9 +8,10 @@
  * It follows the hourglass pattern: stable C89 ABI with internal C++ implementation.
  */
 
-#include "Core/entropy_c_api.h"
-#include <stdint.h>
 #include <stddef.h>
+#include <stdint.h>
+
+#include "Core/entropy_c_api.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -20,14 +21,14 @@ extern "C" {
  * Error Codes - VFS-specific extensions to EntropyStatus
  * ============================================================================ */
 
-#define ENTROPY_ERR_VFS_FILE_NOT_FOUND  100
-#define ENTROPY_ERR_VFS_ACCESS_DENIED   101
-#define ENTROPY_ERR_VFS_DISK_FULL       102
-#define ENTROPY_ERR_VFS_INVALID_PATH    103
-#define ENTROPY_ERR_VFS_IO_ERROR        104
-#define ENTROPY_ERR_VFS_NETWORK_ERROR   105
-#define ENTROPY_ERR_VFS_TIMEOUT         106
-#define ENTROPY_ERR_VFS_CONFLICT        107
+#define ENTROPY_ERR_VFS_FILE_NOT_FOUND 100
+#define ENTROPY_ERR_VFS_ACCESS_DENIED 101
+#define ENTROPY_ERR_VFS_DISK_FULL 102
+#define ENTROPY_ERR_VFS_INVALID_PATH 103
+#define ENTROPY_ERR_VFS_IO_ERROR 104
+#define ENTROPY_ERR_VFS_NETWORK_ERROR 105
+#define ENTROPY_ERR_VFS_TIMEOUT 106
+#define ENTROPY_ERR_VFS_CONFLICT 107
 
 /* ============================================================================
  * Enumerations
@@ -36,56 +37,61 @@ extern "C" {
 /**
  * @brief Status of a file operation
  */
-typedef enum EntropyFileOpStatus {
-    ENTROPY_FILE_OP_PENDING = 0,   /**< Operation scheduled but not started */
-    ENTROPY_FILE_OP_RUNNING = 1,   /**< Operation in progress */
-    ENTROPY_FILE_OP_PARTIAL = 2,   /**< Operation partially completed (e.g., EOF on read) */
-    ENTROPY_FILE_OP_COMPLETE = 3,  /**< Operation completed successfully */
-    ENTROPY_FILE_OP_FAILED = 4     /**< Operation failed (check error info) */
+typedef enum EntropyFileOpStatus
+{
+    ENTROPY_FILE_OP_PENDING = 0,  /**< Operation scheduled but not started */
+    ENTROPY_FILE_OP_RUNNING = 1,  /**< Operation in progress */
+    ENTROPY_FILE_OP_PARTIAL = 2,  /**< Operation partially completed (e.g., EOF on read) */
+    ENTROPY_FILE_OP_COMPLETE = 3, /**< Operation completed successfully */
+    ENTROPY_FILE_OP_FAILED = 4    /**< Operation failed (check error info) */
 } EntropyFileOpStatus;
 
 /**
  * @brief File operation error taxonomy
  */
-typedef enum EntropyFileError {
-    ENTROPY_FILE_ERROR_NONE = 0,          /**< No error */
-    ENTROPY_FILE_ERROR_FILE_NOT_FOUND,    /**< Path does not exist when required */
-    ENTROPY_FILE_ERROR_ACCESS_DENIED,     /**< Permission denied */
-    ENTROPY_FILE_ERROR_DISK_FULL,         /**< No space left on device */
-    ENTROPY_FILE_ERROR_INVALID_PATH,      /**< Malformed path or parent missing */
-    ENTROPY_FILE_ERROR_IO_ERROR,          /**< Other I/O failure */
-    ENTROPY_FILE_ERROR_NETWORK_ERROR,     /**< Remote backend transport failure */
-    ENTROPY_FILE_ERROR_TIMEOUT,           /**< Operation timed out */
-    ENTROPY_FILE_ERROR_CONFLICT,          /**< Contention detected */
-    ENTROPY_FILE_ERROR_UNKNOWN            /**< Unknown error */
+typedef enum EntropyFileError
+{
+    ENTROPY_FILE_ERROR_NONE = 0,       /**< No error */
+    ENTROPY_FILE_ERROR_FILE_NOT_FOUND, /**< Path does not exist when required */
+    ENTROPY_FILE_ERROR_ACCESS_DENIED,  /**< Permission denied */
+    ENTROPY_FILE_ERROR_DISK_FULL,      /**< No space left on device */
+    ENTROPY_FILE_ERROR_INVALID_PATH,   /**< Malformed path or parent missing */
+    ENTROPY_FILE_ERROR_IO_ERROR,       /**< Other I/O failure */
+    ENTROPY_FILE_ERROR_NETWORK_ERROR,  /**< Remote backend transport failure */
+    ENTROPY_FILE_ERROR_TIMEOUT,        /**< Operation timed out */
+    ENTROPY_FILE_ERROR_CONFLICT,       /**< Contention detected */
+    ENTROPY_FILE_ERROR_UNKNOWN         /**< Unknown error */
 } EntropyFileError;
 
 /**
  * @brief Stream access mode
  */
-typedef enum EntropyStreamMode {
-    ENTROPY_STREAM_MODE_READ = 0,       /**< Read-only */
-    ENTROPY_STREAM_MODE_WRITE = 1,      /**< Write-only */
-    ENTROPY_STREAM_MODE_READ_WRITE = 2  /**< Read-write */
+typedef enum EntropyStreamMode
+{
+    ENTROPY_STREAM_MODE_READ = 0,      /**< Read-only */
+    ENTROPY_STREAM_MODE_WRITE = 1,     /**< Write-only */
+    ENTROPY_STREAM_MODE_READ_WRITE = 2 /**< Read-write */
 } EntropyStreamMode;
 
 /**
  * @brief Directory listing sort order
  */
-typedef enum EntropySortOrder {
-    ENTROPY_SORT_NONE = 0,              /**< No sorting */
-    ENTROPY_SORT_BY_NAME = 1,           /**< Sort by name */
-    ENTROPY_SORT_BY_SIZE = 2,           /**< Sort by file size */
-    ENTROPY_SORT_BY_MODIFIED_TIME = 3   /**< Sort by modification time */
+typedef enum EntropySortOrder
+{
+    ENTROPY_SORT_NONE = 0,            /**< No sorting */
+    ENTROPY_SORT_BY_NAME = 1,         /**< Sort by name */
+    ENTROPY_SORT_BY_SIZE = 2,         /**< Sort by file size */
+    ENTROPY_SORT_BY_MODIFIED_TIME = 3 /**< Sort by modification time */
 } EntropySortOrder;
 
 /**
  * @brief Stream seek direction
  */
-typedef enum EntropySeekDir {
-    ENTROPY_SEEK_BEGIN = 0,    /**< Seek from beginning */
-    ENTROPY_SEEK_CURRENT = 1,  /**< Seek from current position */
-    ENTROPY_SEEK_END = 2       /**< Seek from end */
+typedef enum EntropySeekDir
+{
+    ENTROPY_SEEK_BEGIN = 0,   /**< Seek from beginning */
+    ENTROPY_SEEK_CURRENT = 1, /**< Seek from current position */
+    ENTROPY_SEEK_END = 2      /**< Seek from end */
 } EntropySeekDir;
 
 /* ============================================================================
@@ -117,7 +123,8 @@ typedef struct entropy_WriteBatch_t* entropy_WriteBatch;
 /**
  * @brief Configuration for VirtualFileSystem
  */
-typedef struct EntropyVFSConfig {
+typedef struct EntropyVFSConfig
+{
     /** Serialize writes per path (advisory locking) */
     EntropyBool serialize_writes_per_path;
 
@@ -146,7 +153,8 @@ typedef struct EntropyVFSConfig {
 /**
  * @brief Options for file read operations
  */
-typedef struct EntropyReadOptions {
+typedef struct EntropyReadOptions
+{
     /** Starting byte offset */
     uint64_t offset;
 
@@ -160,7 +168,8 @@ typedef struct EntropyReadOptions {
 /**
  * @brief Options for file write operations
  */
-typedef struct EntropyWriteOptions {
+typedef struct EntropyWriteOptions
+{
     /** Starting byte offset (ignored if append=true) */
     uint64_t offset;
 
@@ -195,7 +204,8 @@ typedef struct EntropyWriteOptions {
 /**
  * @brief Options for stream operations
  */
-typedef struct EntropyStreamOptions {
+typedef struct EntropyStreamOptions
+{
     /** Access mode */
     EntropyStreamMode mode;
 
@@ -209,7 +219,8 @@ typedef struct EntropyStreamOptions {
 /**
  * @brief Options for directory listing
  */
-typedef struct EntropyListDirectoryOptions {
+typedef struct EntropyListDirectoryOptions
+{
     /** Recurse into subdirectories */
     EntropyBool recursive;
 
@@ -239,7 +250,8 @@ typedef struct EntropyListDirectoryOptions {
 /**
  * @brief Error information for failed operations
  */
-typedef struct EntropyFileErrorInfo {
+typedef struct EntropyFileErrorInfo
+{
     /** Error code */
     EntropyFileError code;
 
@@ -259,7 +271,8 @@ typedef struct EntropyFileErrorInfo {
 /**
  * @brief File metadata
  */
-typedef struct EntropyFileMetadata {
+typedef struct EntropyFileMetadata
+{
     /** Full path */
     const char* path;
 
@@ -297,7 +310,8 @@ typedef struct EntropyFileMetadata {
 /**
  * @brief Directory entry with metadata
  */
-typedef struct EntropyDirectoryEntry {
+typedef struct EntropyDirectoryEntry
+{
     /** Filename only (borrowed pointer) */
     const char* name;
 
@@ -317,7 +331,8 @@ typedef struct EntropyDirectoryEntry {
 /**
  * @brief I/O operation result
  */
-typedef struct EntropyIoResult {
+typedef struct EntropyIoResult
+{
     /** Bytes transferred */
     size_t bytes_transferred;
 
@@ -382,5 +397,5 @@ ENTROPY_API const char* entropy_file_op_status_to_string(EntropyFileOpStatus sta
 ENTROPY_API const char* entropy_file_error_to_string(EntropyFileError error);
 
 #ifdef __cplusplus
-} // extern "C"
+}  // extern "C"
 #endif

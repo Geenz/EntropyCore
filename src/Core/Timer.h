@@ -18,15 +18,18 @@
 
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <functional>
-#include <atomic>
 #include <memory>
+
 #include "../Concurrency/WorkGraph.h"
 #include "../Concurrency/WorkGraphTypes.h"
 
-namespace EntropyEngine {
-namespace Core {
+namespace EntropyEngine
+{
+namespace Core
+{
 
 // Forward declaration
 class TimerService;
@@ -80,7 +83,8 @@ class TimerService;
  * );
  * @endcode
  */
-class Timer {
+class Timer
+{
 public:
     using TimePoint = std::chrono::steady_clock::time_point;
     using Duration = std::chrono::steady_clock::duration;
@@ -162,14 +166,18 @@ public:
      *
      * @return The interval duration, or zero for one-shot timers
      */
-    Duration getInterval() const { return _interval; }
+    Duration getInterval() const {
+        return _interval;
+    }
 
     /**
      * @brief Checks if this is a repeating timer
      *
      * @return true if the timer repeats, false for one-shot
      */
-    bool isRepeating() const { return _repeating; }
+    bool isRepeating() const {
+        return _repeating;
+    }
 
 private:
     // Only TimerService can create active timers
@@ -183,10 +191,7 @@ private:
      * @param interval Timer interval (for repeating timers)
      * @param repeating Whether this timer repeats
      */
-    Timer(TimerService* service,
-          Concurrency::WorkGraph::NodeHandle node,
-          Duration interval,
-          bool repeating);
+    Timer(TimerService* service, Concurrency::WorkGraph::NodeHandle node, Duration interval, bool repeating);
 
     TimerService* _service = nullptr;
     Concurrency::WorkGraph::NodeHandle _node;
@@ -195,5 +200,5 @@ private:
     std::atomic<bool> _valid{false};
 };
 
-} // namespace Core
-} // namespace EntropyEngine
+}  // namespace Core
+}  // namespace EntropyEngine

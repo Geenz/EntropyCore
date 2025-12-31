@@ -49,13 +49,15 @@
 
 #pragma once
 
-#include "HandleSlot.h"
-#include "RefObject.h"
-#include <vector>
 #include <mutex>
 #include <optional>
+#include <vector>
 
-namespace EntropyEngine::Core {
+#include "HandleSlot.h"
+#include "RefObject.h"
+
+namespace EntropyEngine::Core
+{
 
 /**
  * @brief Slot-based pool with generation-based handle validation
@@ -66,13 +68,15 @@ namespace EntropyEngine::Core {
  * - All public methods are thread-safe (protected by internal mutex)
  * - SlotData must be safe to access under the returned lock guard
  */
-template<typename SlotData>
-class SlotPool {
+template <typename SlotData>
+class SlotPool
+{
 public:
     /**
      * @brief Internal slot structure combining generation tracking with user data
      */
-    struct Slot {
+    struct Slot
+    {
         SlotGeneration generation;  ///< Authoritative generation counter
         SlotData data;              ///< User-defined slot data
         bool active = false;        ///< Slot is currently allocated
@@ -81,7 +85,8 @@ public:
     /**
      * @brief Result of allocate() containing slot index and data reference
      */
-    struct AllocResult {
+    struct AllocResult
+    {
         uint32_t index;
         SlotData& data;
     };
@@ -94,10 +99,7 @@ public:
      *
      * @param capacity Maximum number of slots
      */
-    explicit SlotPool(size_t capacity)
-        : _slots(capacity)
-        , _capacity(capacity)
-    {
+    explicit SlotPool(size_t capacity) : _slots(capacity), _capacity(capacity) {
         // Initialize free list (all slots are free initially)
         _freeList.reserve(capacity);
         for (size_t i = 0; i < capacity; ++i) {
@@ -136,7 +138,7 @@ public:
      * @param obj Object to stamp
      * @param index Slot index from allocate()
      */
-    template<typename T>
+    template <typename T>
     void stamp(T& obj, uint32_t index) {
         std::lock_guard<std::mutex> lock(_mutex);
 
@@ -152,7 +154,7 @@ public:
      * @param index Expected slot index
      * @return true if object is valid for this slot
      */
-    template<typename T>
+    template <typename T>
     [[nodiscard]] bool isValid(const T* obj, uint32_t index) const {
         std::lock_guard<std::mutex> lock(_mutex);
 
@@ -172,7 +174,7 @@ public:
      * @param obj Object to validate
      * @return Pointer to slot data, or nullptr if invalid
      */
-    template<typename T>
+    template <typename T>
     [[nodiscard]] const SlotData* getIfValid(const T* obj) const {
         if (!obj || !obj->hasHandle()) return nullptr;
         if (obj->handleOwner() != this) return nullptr;
@@ -199,7 +201,7 @@ public:
      * @param obj Object to release
      * @param index Slot index
      */
-    template<typename T>
+    template <typename T>
     void release(T& obj, uint32_t index) {
         std::lock_guard<std::mutex> lock(_mutex);
 
@@ -258,7 +260,9 @@ public:
     }
 
     // Statistics
-    [[nodiscard]] size_t capacity() const noexcept { return _capacity; }
+    [[nodiscard]] size_t capacity() const noexcept {
+        return _capacity;
+    }
     [[nodiscard]] size_t activeCount() const noexcept {
         std::lock_guard<std::mutex> lock(_mutex);
         return _activeCount;
@@ -273,7 +277,7 @@ public:
      *
      * @param fn Callback receiving (index, SlotData&) for each active slot
      */
-    template<typename Fn>
+    template <typename Fn>
     void forEachActive(Fn&& fn) {
         std::lock_guard<std::mutex> lock(_mutex);
         for (size_t i = 0; i < _capacity; ++i) {
@@ -286,7 +290,7 @@ public:
     /**
      * @brief Iterates over all active slots (const)
      */
-    template<typename Fn>
+    template <typename Fn>
     void forEachActive(Fn&& fn) const {
         std::lock_guard<std::mutex> lock(_mutex);
         for (size_t i = 0; i < _capacity; ++i) {
@@ -304,4 +308,4 @@ private:
     mutable std::mutex _mutex;
 };
 
-} // namespace EntropyEngine::Core
+}  // namespace EntropyEngine::Core
