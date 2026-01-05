@@ -192,7 +192,7 @@ FileHandle VirtualFileSystem::createFileHandle(std::string path) {
         backend = getDefaultBackend();
         if (!backend) {
             // Create a default local backend if none exists
-            auto localBackend = std::make_shared<LocalFileSystemBackend>();
+            auto localBackend = makeRef<LocalFileSystemBackend>();
             localBackend->setVirtualFileSystem(this);
             setDefaultBackend(localBackend);
             backend = localBackend;
@@ -213,7 +213,7 @@ DirectoryHandle VirtualFileSystem::createDirectoryHandle(std::string path) {
     if (!backend) {
         backend = getDefaultBackend();
         if (!backend) {
-            auto localBackend = std::make_shared<LocalFileSystemBackend>();
+            auto localBackend = makeRef<LocalFileSystemBackend>();
             localBackend->setVirtualFileSystem(this);
             setDefaultBackend(localBackend);
             backend = localBackend;
@@ -357,7 +357,7 @@ std::unique_ptr<FileStream> VirtualFileSystem::openStream(const std::string& pat
         // Ensure default backend exists
         backend = getDefaultBackend();
         if (!backend) {
-            auto localBackend = std::make_shared<LocalFileSystemBackend>();
+            auto localBackend = makeRef<LocalFileSystemBackend>();
             localBackend->setVirtualFileSystem(this);
             setDefaultBackend(localBackend);
             backend = localBackend;

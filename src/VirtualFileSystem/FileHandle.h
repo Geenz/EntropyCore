@@ -17,13 +17,13 @@
 #include "../Core/RefObject.h"
 #include "FileOperationHandle.h"
 #include "FileStream.h"
+#include "IFileSystemBackend.h"
 
 namespace EntropyEngine::Core::IO
 {
 
-class VirtualFileSystem;   // fwd
-class IFileSystemBackend;  // fwd
-struct WriteOptions;       // fwd
+class VirtualFileSystem;  // fwd
+struct WriteOptions;      // fwd
 
 /**
  * @brief Copyable handle to a file path routed through a backend
