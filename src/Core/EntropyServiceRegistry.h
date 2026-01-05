@@ -9,7 +9,6 @@
 
 #pragma once
 
-#include <memory>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -52,13 +51,13 @@ public:
     EntropyServiceRegistry& operator=(EntropyServiceRegistry&&) = delete;
 
     // Registration API
-    bool registerService(std::shared_ptr<EntropyService> service);
+    bool registerService(RefObject<EntropyService> service);
     // Preferred: register with static type to avoid dynamic RTTI lookups
     template <typename TService>
-    bool registerService(std::shared_ptr<TService> service) {
+    bool registerService(RefObject<TService> service) {
         static_assert(std::is_base_of_v<EntropyService, TService>, "TService must derive from EntropyService");
-        // Delegate to non-template version for stamping
-        return registerService(std::static_pointer_cast<EntropyService>(service));
+        // Delegate to non-template version for stamping (implicit upcast via converting move ctor)
+        return registerService(RefObject<EntropyService>(std::move(service)));
     }
 
     /**
@@ -75,26 +74,14 @@ public:
         return unregisterService(TypeSystem::createTypeId<T>());
     }
 
-    // Type-based lookup API (returns shared_ptr for compatibility)
-    std::shared_ptr<EntropyService> get(const TypeSystem::TypeID& tid) const;
+    // Type-based lookup API
+    RefObject<EntropyService> get(const TypeSystem::TypeID& tid) const;
     template <typename T>
-    std::shared_ptr<T> get() const {
+    RefObject<T> get() const {
         auto base = get(TypeSystem::createTypeId<T>());
-        return std::static_pointer_cast<T>(base);
-    }
-
-    /**
-     * @brief Get a RefObject reference to a service
-     *
-     * Returns a RefObject that can be used with WeakRef for safe non-owning
-     * references. The service is stamped with generation for validation.
-     */
-    template <typename T>
-    RefObject<T> getRef() const {
-        auto slot = getSlot(TypeSystem::createTypeId<T>());
-        if (!slot || !slot->service) return {};
-        // Create RefObject with retain
-        return RefObject<T>(retain, static_cast<T*>(slot->service.get()));
+        if (!base) return {};
+        // Downcast with retain (ref_dynamic_cast handles the tryRetain)
+        return ref_dynamic_cast<T>(base);
     }
 
     bool has(const TypeSystem::TypeID& tid) const noexcept;
@@ -124,9 +111,9 @@ private:
      */
     struct ServiceSlot
     {
-        std::shared_ptr<EntropyService> service;  ///< The service instance
-        SlotGeneration generation;                ///< Handle validation counter
-        uint32_t slotIndex = 0;                   ///< Index used for handle stamping
+        RefObject<EntropyService> service;  ///< The service instance
+        SlotGeneration generation;          ///< Handle validation counter
+        uint32_t slotIndex = 0;             ///< Index used for handle stamping
     };
 
     // Returns topologically sorted type ids according to dependencies

@@ -14,12 +14,13 @@
 #include <condition_variable>
 #include <cstdint>
 #include <functional>
-#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
 
+#include "Core/EntropyObject.h"
 #include "Core/EntropyServiceRegistry.h"
+#include "Core/RefObject.h"
 
 #if defined(_WIN32)
 #endif
@@ -49,14 +50,18 @@ struct EntropyApplicationConfig
     std::chrono::milliseconds shutdownDeadline{3000};
 };
 
-class EntropyApplication
+class EntropyApplication : public EntropyObject
 {
 public:
     static EntropyApplication& shared();
-    static std::shared_ptr<EntropyApplication> sharedPtr();
 
     void configure(const EntropyApplicationConfig& cfg);
     void setDelegate(EntropyAppDelegate* del);
+
+    // EntropyObject overrides
+    const char* className() const noexcept override {
+        return "EntropyApplication";
+    }
 
     // Lifecycle
     int run();                 // blocks until termination

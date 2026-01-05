@@ -13,6 +13,11 @@ public:
     LocalFileSystemBackend();
     ~LocalFileSystemBackend() override = default;
 
+    // EntropyObject overrides
+    const char* className() const noexcept override {
+        return "LocalFileSystemBackend";
+    }
+
     // Core file operations
     FileOperationHandle readFile(const std::string& path, ReadOptions options = {}) override;
     FileOperationHandle writeFile(const std::string& path, std::span<const uint8_t> data,

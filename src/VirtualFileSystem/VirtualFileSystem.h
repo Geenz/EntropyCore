@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "../Concurrency/WorkContractGroup.h"
+#include "../Core/RefObject.h"
 #include "FileHandle.h"
 #include "FileOperationHandle.h"
 #include "FileWatch.h"
@@ -153,26 +154,26 @@ public:
     // Backend management
     /**
      * @brief Sets the default backend used when no mount matches
-     * @param backend Backend implementation (shared ownership)
+     * @param backend Backend implementation (RefObject ownership)
      */
-    void setDefaultBackend(std::shared_ptr<IFileSystemBackend> backend);
+    void setDefaultBackend(RefObject<IFileSystemBackend> backend);
     /**
      * @brief Mounts a backend at a path prefix (longest-prefix match)
      * @param prefix Path prefix (e.g., "s3://bucket/")
      * @param backend Backend to route to when prefix matches
      */
-    void mountBackend(const std::string& prefix, std::shared_ptr<IFileSystemBackend> backend);
+    void mountBackend(const std::string& prefix, RefObject<IFileSystemBackend> backend);
     /**
      * @brief Finds the backend that would handle a given path
      * @param path Input path
-     * @return Shared pointer to backend (mounted or default), or nullptr if none
+     * @return RefObject to backend (mounted or default), or empty if none
      */
-    std::shared_ptr<IFileSystemBackend> findBackend(const std::string& path) const;
+    RefObject<IFileSystemBackend> findBackend(const std::string& path) const;
     /**
      * @brief Gets the current default backend
-     * @return Shared pointer to default backend (may be null)
+     * @return RefObject to default backend (may be empty)
      */
-    std::shared_ptr<IFileSystemBackend> getDefaultBackend() const;
+    RefObject<IFileSystemBackend> getDefaultBackend() const;
 
     /**
      * @brief Submit async work to VFS WorkContractGroup (for backends)
@@ -268,13 +269,13 @@ private:
      * The op must complete inline and call s.complete(). It must NOT schedule nested async work.
      */
     FileOperationHandle submitSerialized(
-        std::string path, std::function<void(FileOperationHandle::OpState&, std::shared_ptr<IFileSystemBackend>,
+        std::string path, std::function<void(FileOperationHandle::OpState&, RefObject<IFileSystemBackend>,
                                              const std::string&, const ExecContext&)>
                               op) const;
 
     // Backend storage (reference-counted for thread-safe lifetime management)
-    std::shared_ptr<IFileSystemBackend> _defaultBackend;
-    std::unordered_map<std::string, std::shared_ptr<IFileSystemBackend>> _mountedBackends;
+    RefObject<IFileSystemBackend> _defaultBackend;
+    std::unordered_map<std::string, RefObject<IFileSystemBackend>> _mountedBackends;
     mutable std::shared_mutex _backendMutex;
 
     // File watching

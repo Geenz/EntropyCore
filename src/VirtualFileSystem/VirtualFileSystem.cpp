@@ -26,18 +26,18 @@ VirtualFileSystem::~VirtualFileSystem() {
     _watchManager.reset();
 }
 
-std::shared_ptr<IFileSystemBackend> VirtualFileSystem::getDefaultBackend() const {
+RefObject<IFileSystemBackend> VirtualFileSystem::getDefaultBackend() const {
     {
         std::shared_lock rlock(_backendMutex);
-        if (_defaultBackend) return _defaultBackend;
+        if (_defaultBackend) return RefObject<IFileSystemBackend>(retain, _defaultBackend.get());
     }
     std::unique_lock wlock(_backendMutex);
     if (!_defaultBackend) {
-        auto localBackend = std::make_shared<LocalFileSystemBackend>();
+        auto localBackend = makeRef<LocalFileSystemBackend>();
         localBackend->setVirtualFileSystem(const_cast<VirtualFileSystem*>(this));
-        const_cast<VirtualFileSystem*>(this)->_defaultBackend = localBackend;
+        const_cast<VirtualFileSystem*>(this)->_defaultBackend = std::move(localBackend);
     }
-    return _defaultBackend;
+    return RefObject<IFileSystemBackend>(retain, _defaultBackend.get());
 }
 
 // VFS submit helper
@@ -100,7 +100,7 @@ FileOperationHandle VirtualFileSystem::submit(
  *   WorkContractGroup as the caller.
  */
 FileOperationHandle VirtualFileSystem::submitSerialized(
-    std::string path, std::function<void(FileOperationHandle::OpState&, std::shared_ptr<IFileSystemBackend>,
+    std::string path, std::function<void(FileOperationHandle::OpState&, RefObject<IFileSystemBackend>,
                                          const std::string&, const ExecContext&)>
                           op) const {
     auto backend = findBackend(path);
@@ -226,7 +226,7 @@ DirectoryHandle VirtualFileSystem::createDirectoryHandle(std::string path) {
 }
 
 // Backend management
-void VirtualFileSystem::setDefaultBackend(std::shared_ptr<IFileSystemBackend> backend) {
+void VirtualFileSystem::setDefaultBackend(RefObject<IFileSystemBackend> backend) {
     std::unique_lock lock(_backendMutex);
     if (backend) {
         backend->setVirtualFileSystem(this);
@@ -234,7 +234,7 @@ void VirtualFileSystem::setDefaultBackend(std::shared_ptr<IFileSystemBackend> ba
     _defaultBackend = std::move(backend);
 }
 
-void VirtualFileSystem::mountBackend(const std::string& prefix, std::shared_ptr<IFileSystemBackend> backend) {
+void VirtualFileSystem::mountBackend(const std::string& prefix, RefObject<IFileSystemBackend> backend) {
     std::unique_lock lock(_backendMutex);
     if (backend) {
         backend->setVirtualFileSystem(this);
@@ -242,11 +242,11 @@ void VirtualFileSystem::mountBackend(const std::string& prefix, std::shared_ptr<
     _mountedBackends[prefix] = std::move(backend);
 }
 
-std::shared_ptr<IFileSystemBackend> VirtualFileSystem::findBackend(const std::string& path) const {
+RefObject<IFileSystemBackend> VirtualFileSystem::findBackend(const std::string& path) const {
     std::shared_lock lock(_backendMutex);
 
     // Check mounted backends for longest matching prefix
-    std::shared_ptr<IFileSystemBackend> bestMatch;
+    IFileSystemBackend* bestMatch = nullptr;
     size_t longestPrefix = 0;
 
 #if defined(_WIN32)
@@ -260,20 +260,24 @@ std::shared_ptr<IFileSystemBackend> VirtualFileSystem::findBackend(const std::st
     for (const auto& [prefix, backend] : _mountedBackends) {
         const std::string prefixLower = toLower(prefix);
         if (pathLower.rfind(prefixLower, 0) == 0 && prefixLower.length() > longestPrefix) {
-            bestMatch = backend;
+            bestMatch = backend.get();
             longestPrefix = prefixLower.length();
         }
     }
 #else
     for (const auto& [prefix, backend] : _mountedBackends) {
         if (path.rfind(prefix, 0) == 0 && prefix.length() > longestPrefix) {
-            bestMatch = backend;
+            bestMatch = backend.get();
             longestPrefix = prefix.length();
         }
     }
 #endif
 
-    return bestMatch ? bestMatch : _defaultBackend;
+    IFileSystemBackend* result = bestMatch ? bestMatch : _defaultBackend.get();
+    if (result) {
+        return RefObject<IFileSystemBackend>(retain, result);
+    }
+    return {};
 }
 
 // Path normalization for consistent lock keys

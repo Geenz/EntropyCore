@@ -33,4 +33,21 @@ std::shared_ptr<T> wrapInSharedPtr(T* ptr) {
     return nullptr;
 }
 
+/**
+ * @brief Converts a shared_ptr to a RefObject
+ *
+ * Creates a RefObject from a shared_ptr, retaining the object.
+ * Useful for bridging code that uses shared_ptr to the RefObject model.
+ *
+ * @param sp Shared pointer to convert
+ * @return RefObject wrapping the same pointer with an additional retain
+ */
+template <typename T>
+RefObject<T> fromSharedPtr(const std::shared_ptr<T>& sp) {
+    if (sp) {
+        return RefObject<T>(retain, sp.get());
+    }
+    return {};
+}
+
 }  // namespace EntropyEngine::Core

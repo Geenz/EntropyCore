@@ -10,6 +10,7 @@
 #include <Concurrency/WorkContractGroup.h>
 #include <Concurrency/WorkService.h>
 #include <Core/EntropyApplication.h>
+#include <Core/RefObject.h>
 #include <Logging/Logger.h>
 
 #include <atomic>
@@ -29,7 +30,7 @@ using namespace EntropyEngine::Core::Concurrency;
  */
 class CustomAppDelegate : public EntropyAppDelegate
 {
-    std::shared_ptr<WorkService> workService_;
+    RefObject<WorkService> workService_;
     std::unique_ptr<WorkContractGroup> backgroundGroup_;
     std::unique_ptr<WorkContractGroup> mainThreadGroup_;
 

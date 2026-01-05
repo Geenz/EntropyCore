@@ -9,13 +9,13 @@
 #pragma once
 #include <chrono>
 #include <functional>
-#include <memory>
 #include <optional>
 #include <span>
 #include <string>
 #include <system_error>
 #include <vector>
 
+#include "../Core/EntropyObject.h"
 #include "FileOperationHandle.h"
 
 namespace EntropyEngine::Core::IO
@@ -194,10 +194,15 @@ struct ProgressOptions
 };
 
 // Backend interface
-class IFileSystemBackend
+class IFileSystemBackend : public EntropyEngine::Core::EntropyObject
 {
 public:
-    virtual ~IFileSystemBackend() = default;
+    ~IFileSystemBackend() override = default;
+
+    // EntropyObject overrides
+    const char* className() const noexcept override {
+        return "IFileSystemBackend";
+    }
 
     // Core file operations
     /**

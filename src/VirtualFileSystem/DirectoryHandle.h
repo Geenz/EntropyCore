@@ -7,9 +7,9 @@
  * equality and hashing are backend-aware via a normalized key.
  */
 #pragma once
-#include <memory>
 #include <string>
 
+#include "../Core/RefObject.h"
 #include "FileOperationHandle.h"
 #include "IFileSystemBackend.h"
 
@@ -134,9 +134,9 @@ public:
 
 private:
     VirtualFileSystem* _vfs;
-    std::shared_ptr<IFileSystemBackend> _backend;  // Backend for this directory (ref-counted for safety)
-    Metadata _meta;                                // associated metadata for this handle
-    std::string _normKey;                          // backend-normalized key captured at creation
+    RefObject<IFileSystemBackend> _backend;  // Backend for this directory (ref-counted for safety)
+    Metadata _meta;                          // associated metadata for this handle
+    std::string _normKey;                    // backend-normalized key captured at creation
 
     friend class VirtualFileSystem;
     // Allow hasher to access private members without exposing opaque pointers publicly

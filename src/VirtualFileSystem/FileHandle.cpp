@@ -103,7 +103,7 @@ FileOperationHandle FileHandle::writeAll(std::span<const uint8_t> bytes) const {
         auto data = std::vector<uint8_t>(bytes.begin(), bytes.end());
         return _vfs->submitSerialized(_meta.path,
                                       [opts, data = std::move(data)](FileOperationHandle::OpState& s,
-                                                                     const std::shared_ptr<IFileSystemBackend>& backend,
+                                                                     const RefObject<IFileSystemBackend>& backend,
                                                                      const std::string& p, const ExecContext&) mutable {
                                           auto byteSpan = std::span<const uint8_t>(data.data(), data.size());
                                           auto inner = backend->writeFile(p, byteSpan, opts);
@@ -128,7 +128,7 @@ FileOperationHandle FileHandle::writeAll(std::span<const uint8_t> bytes, const W
         auto data = std::vector<uint8_t>(bytes.begin(), bytes.end());
         return _vfs->submitSerialized(
             _meta.path, [opts, data = std::move(data)](FileOperationHandle::OpState& s,
-                                                       const std::shared_ptr<IFileSystemBackend>& backend,
+                                                       const RefObject<IFileSystemBackend>& backend,
                                                        const std::string& p, const ExecContext&) mutable {
                 auto byteSpan = std::span<const uint8_t>(data.data(), data.size());
                 if (auto* local = dynamic_cast<LocalFileSystemBackend*>(backend.get())) {
@@ -160,7 +160,7 @@ FileOperationHandle FileHandle::writeRange(uint64_t offset, std::span<const uint
         auto data = std::vector<uint8_t>(bytes.begin(), bytes.end());
         return _vfs->submitSerialized(
             _meta.path, [opts, data = std::move(data)](FileOperationHandle::OpState& s,
-                                                       const std::shared_ptr<IFileSystemBackend>& backend,
+                                                       const RefObject<IFileSystemBackend>& backend,
                                                        const std::string& p, const ExecContext&) mutable {
                 auto byteSpan = std::span<const uint8_t>(data.data(), data.size());
                 if (auto* local = dynamic_cast<LocalFileSystemBackend*>(backend.get())) {
@@ -193,7 +193,7 @@ FileOperationHandle FileHandle::writeRange(uint64_t offset, std::span<const uint
         auto data = std::vector<uint8_t>(bytes.begin(), bytes.end());
         return _vfs->submitSerialized(
             _meta.path, [wopts, data = std::move(data)](FileOperationHandle::OpState& s,
-                                                        const std::shared_ptr<IFileSystemBackend>& backend,
+                                                        const RefObject<IFileSystemBackend>& backend,
                                                         const std::string& p, const ExecContext&) mutable {
                 auto byteSpan = std::span<const uint8_t>(data.data(), data.size());
                 if (auto* local = dynamic_cast<LocalFileSystemBackend*>(backend.get())) {
@@ -222,7 +222,7 @@ FileOperationHandle FileHandle::writeLine(size_t lineNumber, std::string_view li
         auto lineCopy = std::string(line);
         return _vfs->submitSerialized(
             _meta.path, [lineNumber, lineCopy = std::move(lineCopy)](FileOperationHandle::OpState& s,
-                                                                     const std::shared_ptr<IFileSystemBackend>& backend,
+                                                                     const RefObject<IFileSystemBackend>& backend,
                                                                      const std::string& p, const ExecContext&) mutable {
                 if (auto* local = dynamic_cast<LocalFileSystemBackend*>(backend.get())) {
                     local->doWriteLine(s, p, lineNumber, lineCopy);
@@ -252,7 +252,7 @@ FileOperationHandle FileHandle::writeAll(std::string_view text) const {
         auto textCopy = std::string(text);
         return _vfs->submitSerialized(
             _meta.path, [opts, textCopy = std::move(textCopy)](FileOperationHandle::OpState& s,
-                                                               const std::shared_ptr<IFileSystemBackend>& backend,
+                                                               const RefObject<IFileSystemBackend>& backend,
                                                                const std::string& p, const ExecContext&) mutable {
                 auto spanBytes =
                     std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(textCopy.data()), textCopy.size());
@@ -282,7 +282,7 @@ FileOperationHandle FileHandle::writeAll(std::string_view text, const WriteOptio
         auto textCopy = std::string(text);
         return _vfs->submitSerialized(
             _meta.path, [opts, textCopy = std::move(textCopy)](FileOperationHandle::OpState& s,
-                                                               const std::shared_ptr<IFileSystemBackend>& backend,
+                                                               const RefObject<IFileSystemBackend>& backend,
                                                                const std::string& p, const ExecContext&) mutable {
                 auto spanBytes =
                     std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(textCopy.data()), textCopy.size());
@@ -317,7 +317,7 @@ FileOperationHandle FileHandle::writeLine(size_t lineNumber, std::string_view li
 FileOperationHandle FileHandle::createEmpty() const {
     if (_backend && _vfs) {
         return _vfs->submitSerialized(
-            _meta.path, [](FileOperationHandle::OpState& s, const std::shared_ptr<IFileSystemBackend>& backend,
+            _meta.path, [](FileOperationHandle::OpState& s, const RefObject<IFileSystemBackend>& backend,
                            const std::string& p, const ExecContext&) mutable {
                 if (auto* local = dynamic_cast<LocalFileSystemBackend*>(backend.get())) {
                     local->doCreateFile(s, p);
@@ -342,7 +342,7 @@ FileOperationHandle FileHandle::createEmpty() const {
 FileOperationHandle FileHandle::remove() const {
     if (_backend && _vfs) {
         return _vfs->submitSerialized(
-            _meta.path, [](FileOperationHandle::OpState& s, const std::shared_ptr<IFileSystemBackend>& backend,
+            _meta.path, [](FileOperationHandle::OpState& s, const RefObject<IFileSystemBackend>& backend,
                            const std::string& p, const ExecContext&) mutable {
                 if (auto* local = dynamic_cast<LocalFileSystemBackend*>(backend.get())) {
                     local->doDeleteFile(s, p);

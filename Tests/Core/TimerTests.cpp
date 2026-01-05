@@ -14,6 +14,7 @@
 #include <thread>
 
 #include "Concurrency/WorkService.h"
+#include "Core/RefObject.h"
 #include "Core/TimerService.h"
 
 using namespace EntropyEngine::Core;
@@ -36,10 +37,10 @@ protected:
         // Create WorkService
         WorkService::Config workConfig;
         workConfig.threadCount = 2;
-        workService = std::make_shared<WorkService>(workConfig);
+        workService = makeRef<WorkService>(workConfig);
 
         // Create TimerService
-        timerService = std::make_shared<TimerService>();
+        timerService = makeRef<TimerService>();
 
         // Load services
         workService->load();
@@ -131,14 +132,14 @@ protected:
         timerService->processReadyTimers();
     }
 
-    std::shared_ptr<WorkService> workService;
-    std::shared_ptr<TimerService> timerService;
+    RefObject<WorkService> workService;
+    RefObject<TimerService> timerService;
 };
 
 TEST_F(TimerServiceTest, ServiceLifecycle) {
     // Verify services were created and initialized successfully
-    EXPECT_NE(timerService, nullptr);
-    EXPECT_NE(workService, nullptr);
+    EXPECT_TRUE(static_cast<bool>(timerService));
+    EXPECT_TRUE(static_cast<bool>(workService));
 
     // Note: State management is the responsibility of ServiceRegistry, not the service itself.
     // When calling lifecycle methods directly (not through registry), state remains Registered.

@@ -1,6 +1,7 @@
 #include <Concurrency/WorkContractGroup.h>
 #include <Concurrency/WorkService.h>
 #include <Core/EntropyApplication.h>
+#include <Core/RefObject.h>
 #include <Logging/Logger.h>
 
 #include <chrono>
@@ -11,7 +12,7 @@ using namespace EntropyEngine::Core::Concurrency;
 
 class MyDelegate : public EntropyAppDelegate
 {
-    std::shared_ptr<WorkService> work_;
+    RefObject<WorkService> work_;
     std::unique_ptr<WorkContractGroup> group_;
     std::atomic<int> remaining_{0};
 

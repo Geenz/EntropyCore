@@ -1111,8 +1111,8 @@ FileOperationHandle LocalFileSystemBackend::writeFile(const std::string& path, s
         auto buf = std::vector<uint8_t>(data.begin(), data.end());
         return _vfs->submitSerialized(
             path, [this, buf = std::move(buf), options](FileOperationHandle::OpState& s,
-                                                        std::shared_ptr<IFileSystemBackend> /*backend*/,
-                                                        const std::string& p, const ExecContext& /*ctx*/) mutable {
+                                                        RefObject<IFileSystemBackend> /*backend*/, const std::string& p,
+                                                        const ExecContext& /*ctx*/) mutable {
                 this->doWriteFile(s, p, std::span<const uint8_t>(buf.data(), buf.size()), options);
             });
     }

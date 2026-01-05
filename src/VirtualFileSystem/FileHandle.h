@@ -8,13 +8,13 @@
  */
 #pragma once
 #include <cstddef>
-#include <memory>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include "../Core/RefObject.h"
 #include "FileOperationHandle.h"
 #include "FileStream.h"
 
@@ -219,9 +219,9 @@ public:
 
 private:
     VirtualFileSystem* _vfs;
-    std::shared_ptr<IFileSystemBackend> _backend;  // Backend for this file (ref-counted for safety)
-    Metadata _meta;                                // associated metadata for this handle
-    std::string _normKey;                          // backend-normalized key captured at creation
+    RefObject<IFileSystemBackend> _backend;  // Backend for this file (ref-counted for safety)
+    Metadata _meta;                          // associated metadata for this handle
+    std::string _normKey;                    // backend-normalized key captured at creation
 
     friend class VirtualFileSystem;
 };

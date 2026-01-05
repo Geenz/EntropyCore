@@ -10,11 +10,11 @@
 #include "Core/EntropyApplication.h"
 
 #include <cstdlib>
-#include <memory>
 #include <thread>
 #include <utility>
 
 #include "Concurrency/WorkService.h"
+#include "Core/RefObject.h"
 #include "Core/TimerService.h"
 
 #if defined(_WIN32)
@@ -33,11 +33,7 @@ namespace Core
 {
 
 EntropyApplication& EntropyApplication::shared() {
-    return *sharedPtr();
-}
-
-std::shared_ptr<EntropyApplication> EntropyApplication::sharedPtr() {
-    static std::shared_ptr<EntropyApplication> inst{std::shared_ptr<EntropyApplication>(new EntropyApplication())};
+    static EntropyApplication inst;
     return inst;
 }
 
@@ -55,13 +51,13 @@ void EntropyApplication::ensureCoreServices() {
     if (!_services.has<Concurrency::WorkService>()) {
         Concurrency::WorkService::Config wcfg{};
         wcfg.threadCount = static_cast<uint32_t>(_cfg.workerThreads);
-        auto work = std::make_shared<Concurrency::WorkService>(wcfg);
-        _services.registerService<Concurrency::WorkService>(work);
+        auto work = makeRef<Concurrency::WorkService>(wcfg);
+        _services.registerService<Concurrency::WorkService>(std::move(work));
     }
 
     if (!_services.has<TimerService>()) {
-        auto timer = std::make_shared<TimerService>();
-        _services.registerService<TimerService>(timer);
+        auto timer = makeRef<TimerService>();
+        _services.registerService<TimerService>(std::move(timer));
     }
 }
 
@@ -272,19 +268,17 @@ void EntropyApplication::handleConsoleSignal(unsigned long ctrlType) {
         // Start escalation timer after first signal regardless, to avoid hanging forever
         if (!_escalationStarted.exchange(true)) {
             auto deadline = _cfg.shutdownDeadline;
-            std::weak_ptr<EntropyApplication> weak = EntropyApplication::sharedPtr();
-            std::thread([weak, deadline] {
+            // EntropyApplication is a static singleton - safe to capture 'this'
+            std::thread([this, deadline] {
                 auto endAt = std::chrono::steady_clock::now() + deadline;
                 std::this_thread::sleep_until(endAt);
-                if (auto sp = weak.lock()) {
-                    if (sp->isRunning()) {
-                        // Escalate: attempt a harder exit
-                        // If terminate didn't succeed yet, try again, then quick_exit.
-                        sp->terminate(1);
-                        std::this_thread::sleep_for(std::chrono::milliseconds(200));
-                        if (sp->isRunning()) {
-                            std::quick_exit(1);
-                        }
+                if (isRunning()) {
+                    // Escalate: attempt a harder exit
+                    // If terminate didn't succeed yet, try again, then quick_exit.
+                    terminate(1);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                    if (isRunning()) {
+                        std::quick_exit(1);
                     }
                 }
             }).detach();
@@ -401,18 +395,16 @@ void EntropyApplication::handlePosixSignal(int signum) {
         // Start escalation timer after first signal regardless, to avoid hanging forever
         if (!_escalationStarted.exchange(true) && !isFatal) {
             auto deadline = _cfg.shutdownDeadline;
-            std::weak_ptr<EntropyApplication> weak = EntropyApplication::sharedPtr();
-            std::thread([weak, deadline] {
+            // EntropyApplication is a static singleton - safe to capture 'this'
+            std::thread([this, deadline] {
                 auto endAt = std::chrono::steady_clock::now() + deadline;
                 std::this_thread::sleep_until(endAt);
-                if (auto sp = weak.lock()) {
-                    if (sp->isRunning()) {
-                        // Escalate: attempt a harder exit
-                        sp->terminate(1);
-                        std::this_thread::sleep_for(std::chrono::milliseconds(200));
-                        if (sp->isRunning()) {
-                            std::quick_exit(1);
-                        }
+                if (isRunning()) {
+                    // Escalate: attempt a harder exit
+                    terminate(1);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                    if (isRunning()) {
+                        std::quick_exit(1);
                     }
                 }
             }).detach();

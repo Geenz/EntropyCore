@@ -26,7 +26,7 @@ EntropyServiceRegistry::~EntropyServiceRegistry() {
     }
 }
 
-bool EntropyServiceRegistry::registerService(std::shared_ptr<EntropyService> service) {
+bool EntropyServiceRegistry::registerService(RefObject<EntropyService> service) {
     if (!service) return false;
 
     auto tid = service->typeId();
@@ -69,9 +69,11 @@ bool EntropyServiceRegistry::unregisterService(const TypeSystem::TypeID& tid) {
     return true;
 }
 
-std::shared_ptr<EntropyService> EntropyServiceRegistry::get(const TypeSystem::TypeID& tid) const {
+RefObject<EntropyService> EntropyServiceRegistry::get(const TypeSystem::TypeID& tid) const {
     auto slot = getSlot(tid);
-    return slot ? slot->service : nullptr;
+    if (!slot || !slot->service) return {};
+    // Return a new RefObject with an additional retain
+    return RefObject<EntropyService>(retain, slot->service.get());
 }
 
 bool EntropyServiceRegistry::has(const TypeSystem::TypeID& tid) const noexcept {
