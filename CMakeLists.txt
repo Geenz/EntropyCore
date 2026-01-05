@@ -106,6 +106,7 @@ set(ENTROPY_CORE_SOURCES
         src/Core/EntropyMain.cpp
         src/Core/Timer.cpp
         src/Core/TimerService.cpp
+        src/VirtualFileSystem/PlatformResourceUtils.cpp
 )
 
 set(ENTROPY_CORE_HEADERS
@@ -123,6 +124,7 @@ set(ENTROPY_CORE_HEADERS
         src/Core/entropy_main.h
         src/Core/Timer.h
         src/Core/TimerService.h
+        src/VirtualFileSystem/PlatformResourceUtils.h
         src/TypeSystem/GenericHandle.h
         src/TypeSystem/TypeID.h
         src/TypeSystem/Reflection.h
@@ -236,6 +238,14 @@ target_link_libraries(EntropyCore
     PRIVATE
         efsw::efsw
 )
+
+# Platform-specific libraries
+if(APPLE)
+    target_link_libraries(EntropyCore
+        PRIVATE
+            "-framework CoreFoundation"
+    )
+endif()
 
 # Define for export macros when building the library
 target_compile_definitions(EntropyCore PRIVATE ENTROPYCORE_BUILDING)
@@ -396,6 +406,7 @@ if(ENTROPY_BUILD_TESTS)
             Tests/Core/TypeSystemTests.cpp
             Tests/Core/SignalTreeTests.cpp
             Tests/Core/EntropyObjectTests.cpp
+            Tests/Core/WeakRefSafetyTest.cpp
             Tests/Core/TimerTests.cpp
     )
 

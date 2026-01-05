@@ -71,6 +71,8 @@ template <class T, class OwnerType>
 class TypedHandle;  // fwd decl for helpers (optional)
 }  // namespace TypeSystem
 
+struct WeakControlBlock;  // fwd decl
+
 /**
  * @class EntropyObject
  * @brief Ref-counted base with optional handle stamping and basic introspection
@@ -103,6 +105,8 @@ protected:
             return (static_cast<uint64_t>(index) << 32) | generation;
         }
     } _handle{};
+
+    mutable std::atomic<WeakControlBlock*> _weakBlock{nullptr};  ///< Lazily allocated control block for weak refs
 
     // Internal setters used by owners/registries to stamp identity
     void _setHandleIdentity(void* owner, uint32_t index, uint32_t generation) noexcept {
@@ -212,6 +216,12 @@ public:
     virtual const TypeSystem::TypeInfo* typeInfo() const {
         return nullptr;
     }
+
+    /**
+     * @brief Lazily retrieves or creates the weak control block
+     * @return Pointer to the control block (retained by the object)
+     */
+    WeakControlBlock* getWeakControlBlock() const;
 };
 
 /**

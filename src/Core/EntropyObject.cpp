@@ -9,6 +9,7 @@
 
 #include "../Logging/Logger.h"
 #include "../TypeSystem/TypeID.h"
+#include "WeakControlBlock.h"
 
 namespace EntropyEngine::Core
 {
@@ -27,6 +28,14 @@ void EntropyObject::release() const noexcept {
 #endif
 
     if (oldCount == 1) {
+        // If we have a weak block, we must safely detach from it
+        if (WeakControlBlock* block = _weakBlock.load(std::memory_order_acquire)) {
+            std::lock_guard<std::mutex> lock(block->mutex);
+            block->object = nullptr;
+            // We are done with our reference to the block
+            block->release();
+        }
+
 #ifdef ENTROPY_DEBUG
         const char* name = className();
         ENTROPY_LOG_TRACE_CAT("RefCount", std::format("Delete {} @ {}", name, static_cast<const void*>(this)));
@@ -77,6 +86,25 @@ std::string EntropyObject::debugString() const {
 
 std::string EntropyObject::description() const {
     return toString();
+}
+
+WeakControlBlock* EntropyObject::getWeakControlBlock() const {
+    WeakControlBlock* block = _weakBlock.load(std::memory_order_acquire);
+    if (!block) {
+        // Create new block starting with refCount=1 (owned by us)
+        WeakControlBlock* newBlock = new WeakControlBlock(const_cast<EntropyObject*>(this));
+
+        WeakControlBlock* expected = nullptr;
+        if (_weakBlock.compare_exchange_strong(expected, newBlock, std::memory_order_acq_rel,
+                                               std::memory_order_acquire)) {
+            block = newBlock;
+        } else {
+            // Race lost, delete ours and use winner's
+            delete newBlock;
+            block = expected;
+        }
+    }
+    return block;
 }
 
 }  // namespace EntropyEngine::Core
