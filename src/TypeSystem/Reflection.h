@@ -89,6 +89,15 @@ struct FieldInfo
      * @brief Memory offset of the field within the containing object
      */
     size_t offset;
+
+    /**
+     * @brief Whether this field is a USD schema extension (real-time rendering, etc.)
+     *
+     * Extension fields are collected into EntropyCanvasRenderAPI rather than
+     * the component's own API schema. This allows using native USD schemas
+     * (UsdLux, UsdGeom) while adding Entropy-specific extensions.
+     */
+    bool isExtension = false;
 };
 
 /**
@@ -441,21 +450,81 @@ public:                                                                     \
  * @warning Field types containing commas (like `std::map<K,V>`) may require
  *          careful handling or typedef declarations
  */
-#define ENTROPY_FIELD(Type, Name)                                                                             \
-private:                                                                                                      \
-    struct _EntropyFieldRegistrar_##Name                                                                      \
-    {                                                                                                         \
-        _EntropyFieldRegistrar_##Name() {                                                                     \
-            static ::EntropyEngine::Core::TypeSystem::detail::FieldInfoNode node{                             \
-                {#Name, ::EntropyEngine::Core::TypeSystem::createTypeId<Type>(), offsetof(OwnerType, Name)}}; \
-            node.next = ::EntropyEngine::Core::TypeSystem::detail::FieldListHead<OwnerType>::head;            \
-            ::EntropyEngine::Core::TypeSystem::detail::FieldListHead<OwnerType>::head = &node;                \
-        }                                                                                                     \
-    };                                                                                                        \
-    inline static _EntropyFieldRegistrar_##Name _entropy_field_registrar_##Name;                              \
-                                                                                                              \
-public:                                                                                                       \
+/**
+ * @brief Internal macro for field registration with extension flag
+ */
+#define _ENTROPY_FIELD_IMPL(Type, Name, IsExtension)                                                        \
+private:                                                                                                    \
+    struct _EntropyFieldRegistrar_##Name                                                                    \
+    {                                                                                                       \
+        _EntropyFieldRegistrar_##Name() {                                                                   \
+            static ::EntropyEngine::Core::TypeSystem::detail::FieldInfoNode node{                           \
+                {#Name, ::EntropyEngine::Core::TypeSystem::createTypeId<Type>(), offsetof(OwnerType, Name), \
+                 IsExtension}};                                                                             \
+            node.next = ::EntropyEngine::Core::TypeSystem::detail::FieldListHead<OwnerType>::head;          \
+            ::EntropyEngine::Core::TypeSystem::detail::FieldListHead<OwnerType>::head = &node;              \
+        }                                                                                                   \
+    };                                                                                                      \
+    inline static _EntropyFieldRegistrar_##Name _entropy_field_registrar_##Name;                            \
+                                                                                                            \
+public:                                                                                                     \
     Type Name
+
+#define ENTROPY_FIELD(Type, Name) _ENTROPY_FIELD_IMPL(Type, Name, false)
+
+/**
+ * @def ENTROPY_FIELD_EXTENSION(Type, Name)
+ * @brief Register a field as a USD schema extension
+ * @param Type The type of the field (fully qualified if needed)
+ * @param Name The name of the field (unquoted)
+ *
+ * Extension fields are collected into a shared EntropyCanvasRenderAPI schema
+ * rather than the component's own API schema. Use this for real-time rendering
+ * properties that extend native USD schemas (UsdLux, UsdGeom, etc.).
+ *
+ * Example use cases:
+ * - Light range/attenuation (extends UsdLux)
+ * - Shadow mapping settings (extends UsdLux)
+ * - LOD bias (extends UsdGeom)
+ * - Real-time material properties
+ *
+ * Usage:
+ * @code
+ * struct Light {
+ *     ENTROPY_REGISTER_TYPE(Light);
+ *     ENTROPY_SKIP_USD_SCHEMA;  // Use native UsdLux
+ *
+ *     ENTROPY_FIELD(float, intensity);              // Native UsdLux attribute
+ *     ENTROPY_FIELD_EXTENSION(float, range);        // Real-time extension
+ *     ENTROPY_FIELD_EXTENSION(bool, castsShadows);  // Real-time extension
+ * };
+ * @endcode
+ */
+#define ENTROPY_FIELD_EXTENSION(Type, Name) _ENTROPY_FIELD_IMPL(Type, Name, true)
+
+/**
+ * @def ENTROPY_SKIP_USD_SCHEMA
+ * @brief Mark a type to skip USD schema generation
+ *
+ * Place this macro in a class alongside ENTROPY_REGISTER_TYPE to indicate
+ * that this type should not have a USD Applied API schema generated.
+ * Use this for types that map directly to native USD types (e.g., Transform
+ * maps to UsdGeomXformable xformOps).
+ *
+ * Usage:
+ * @code
+ * struct Transform {
+ *     ENTROPY_REGISTER_TYPE(Transform);
+ *     ENTROPY_SKIP_USD_SCHEMA;  // Use native USD xformOps instead
+ *
+ *     ENTROPY_FIELD(glm::vec3, position);
+ *     // ...
+ * };
+ * @endcode
+ */
+#define ENTROPY_SKIP_USD_SCHEMA \
+public:                         \
+    static constexpr bool _entropy_skip_usd_schema = true
 
 }  // namespace TypeSystem
 }  // namespace Core
