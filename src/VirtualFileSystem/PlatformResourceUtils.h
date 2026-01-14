@@ -45,4 +45,30 @@ std::optional<std::string> getExecutableDirectory();
  */
 std::optional<std::string> getExecutablePath();
 
+/**
+ * Get platform-appropriate app data directory.
+ *
+ * Platform behavior:
+ * - macOS: ~/Library/Application Support/{appName}/
+ * - Linux: $XDG_DATA_HOME/{appName}/ or ~/.local/share/{appName}/
+ * - Windows: %APPDATA%\{appName}\
+ *
+ * @param appName Application name (used as subdirectory)
+ * @return Absolute path to app data directory, or nullopt on failure
+ */
+std::optional<std::string> getAppDataPath(const std::string& appName);
+
+/**
+ * Get platform-appropriate app cache directory.
+ *
+ * Platform behavior:
+ * - macOS: ~/Library/Caches/{appName}/
+ * - Linux: $XDG_CACHE_HOME/{appName}/ or ~/.cache/{appName}/
+ * - Windows: %LOCALAPPDATA%\{appName}\
+ *
+ * @param appName Application name (used as subdirectory)
+ * @return Absolute path to app cache directory, or nullopt on failure
+ */
+std::optional<std::string> getAppCachePath(const std::string& appName);
+
 }  // namespace EntropyEngine::VirtualFileSystem
