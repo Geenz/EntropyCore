@@ -84,6 +84,21 @@ public:
         return ref_dynamic_cast<T>(base);
     }
 
+    /**
+     * @brief Get weak reference to service by type
+     *
+     * Returns a WeakRef that does not prevent service unregistration.
+     * Caller must lock() before use and handle the case where service is gone.
+     *
+     * @return WeakRef<T> to the service, empty if not found
+     */
+    template <typename T>
+    WeakRef<T> getWeak() const {
+        auto strong = get<T>();
+        if (!strong) return WeakRef<T>();
+        return WeakRef<T>(strong);
+    }
+
     bool has(const TypeSystem::TypeID& tid) const noexcept;
     template <typename T>
     bool has() const noexcept {
