@@ -41,16 +41,6 @@ namespace EntropyEngine::Core
  *
  * These callbacks allow external profilers (e.g., Tracy) to track EntropyObject
  * allocations without adding profiler dependencies to EntropyCore.
- *
- * @code
- * // Example: Register Tracy callbacks in EntropyPortal
- * EntropyObjectMemoryHooks::onAlloc = [](void* ptr, size_t size, const char* name) {
- *     TracyAllocN(ptr, size, name);
- * };
- * EntropyObjectMemoryHooks::onFree = [](void* ptr, const char* name) {
- *     TracyFreeN(ptr, name);
- * };
- * @endcode
  */
 struct EntropyObjectMemoryHooks
 {

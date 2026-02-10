@@ -51,7 +51,7 @@ enum class ServiceState
  * happen in load()/start(). All lifecycle methods are expected to be called on the
  * main thread by the orchestrator.
  */
-class EntropyService : public EntropyObject
+class EntropyService : public virtual EntropyObject
 {
 public:
     ~EntropyService() override = default;

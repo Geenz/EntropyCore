@@ -80,7 +80,7 @@ int main() {
     // Write range (append-like by offset)
     const char* tail = "\nAppended via writeRange.";
     auto wr = handle.writeRange(rAll.contentsBytes().size(),
-                                std::span<const std::byte>(reinterpret_cast<const std::byte*>(tail), strlen(tail)));
+                                std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(tail), strlen(tail)));
     wr.wait();
     if (wr.status() != FileOpStatus::Complete) {
         ENTROPY_LOG_ERROR("writeRange failed");
@@ -109,14 +109,14 @@ int main() {
         // Write some data using stream
         const char* streamData = "\nData written via streaming API";
         stream->seek(0, std::ios::end);
-        auto writeResult = stream->write(
-            std::span<const std::byte>(reinterpret_cast<const std::byte*>(streamData), strlen(streamData)));
+        auto writeResult =
+            stream->write(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(streamData), strlen(streamData)));
         stream->flush();
         ENTROPY_LOG_INFO("Wrote " + std::to_string(writeResult.bytesTransferred) + " bytes via stream");
 
         // Read back using stream
         stream->seek(0, std::ios::beg);
-        std::vector<std::byte> buffer(256);
+        std::vector<uint8_t> buffer(256);
         auto readResult = stream->read(buffer);
         ENTROPY_LOG_INFO("Read " + std::to_string(readResult.bytesTransferred) + " bytes via stream");
     }

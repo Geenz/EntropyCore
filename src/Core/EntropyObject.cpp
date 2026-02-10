@@ -40,9 +40,8 @@ void EntropyObject::release() const noexcept {
         const char* name = className();
         ENTROPY_LOG_TRACE_CAT("RefCount", std::format("Delete {} @ {}", name, static_cast<const void*>(this)));
 #endif
-        // Call memory profiling hook before delete (while pointer is still valid)
         if (EntropyObjectMemoryHooks::onFree) {
-            EntropyObjectMemoryHooks::onFree(const_cast<void*>(static_cast<const void*>(this)), "EntropyObject");
+            EntropyObjectMemoryHooks::onFree(const_cast<void*>(static_cast<const void*>(this)), className());
         }
         std::atomic_thread_fence(std::memory_order_acquire);
         delete this;

@@ -70,6 +70,8 @@ endif()
 # Find packages
 find_package(Boost REQUIRED COMPONENTS type_index)
 find_package(efsw CONFIG REQUIRED)
+find_package(Tracy CONFIG REQUIRED)
+find_package(unofficial-sodium CONFIG REQUIRED)
 
 # Only require GoogleTest when building tests
 if(ENTROPY_BUILD_TESTS)
@@ -107,6 +109,7 @@ set(ENTROPY_CORE_SOURCES
         src/Core/Timer.cpp
         src/Core/TimerService.cpp
         src/VirtualFileSystem/PlatformResourceUtils.cpp
+        src/Crypto/SHA256.cpp
 )
 
 set(ENTROPY_CORE_HEADERS
@@ -115,6 +118,8 @@ set(ENTROPY_CORE_HEADERS
         src/Core/EntropyClass.h
         src/Core/EntropyObject.h
         src/Core/RefObject.h
+        src/Core/HandleSlot.h
+        src/Core/SlotPool.h
         src/Core/EntropyInterop.h
         src/Core/entropy_c_api.h
         src/EntropyCore.h
@@ -165,6 +170,7 @@ set(ENTROPY_CORE_HEADERS
         src/VirtualFileSystem/WriteBatch.h
         src/VirtualFileSystem/FileWatch.h
         src/VirtualFileSystem/FileWatchManager.h
+        src/Crypto/SHA256.h
 )
 
 # C Concurrency API sources and headers
@@ -235,6 +241,8 @@ target_include_directories(EntropyCore
 target_link_libraries(EntropyCore
     PUBLIC
         Boost::type_index
+        Tracy::TracyClient
+        unofficial-sodium::sodium
     PRIVATE
         efsw::efsw
 )

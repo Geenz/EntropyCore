@@ -68,7 +68,7 @@ int main() {
     auto rAll = fh.readAll();
     rAll.wait();
     auto bytes = rAll.contentsBytes();
-    bool endsWithLF = !bytes.empty() && bytes.back() == std::byte('\n');
+    bool endsWithLF = !bytes.empty() && bytes.back() == static_cast<uint8_t>('\n');
     ENTROPY_LOG_INFO(std::string("Final newline present: ") + (endsWithLF ? "true" : "false"));
 
     // Cleanup

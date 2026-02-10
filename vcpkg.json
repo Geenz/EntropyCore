@@ -12,6 +12,10 @@
     "version>=" : "1.5.0"
   }, {
     "name" : "gtest"
+  }, {
+    "name" : "tracy"
+  }, {
+    "name" : "libsodium"
   } ],
   "features": {
     "tests": {

@@ -191,12 +191,13 @@ class WeakRef
     static_assert(std::is_base_of_v<EntropyObject, T>, "T must derive from EntropyObject");
 
     WeakControlBlock* _block = nullptr;
+    T* _ptr = nullptr;  // Stored pointer to handle virtual offsets correctly without RTTI
 
 public:
     WeakRef() noexcept = default;
 
     /// Construct from raw pointer (acquires weak block)
-    explicit WeakRef(T* ptr) noexcept {
+    explicit WeakRef(T* ptr) noexcept : _ptr(ptr) {
         if (ptr) {
             _block = ptr->getWeakControlBlock();
             _block->retain();
@@ -214,7 +215,7 @@ public:
         reset();
     }
 
-    WeakRef(const WeakRef& other) noexcept : _block(other._block) {
+    WeakRef(const WeakRef& other) noexcept : _block(other._block), _ptr(other._ptr) {
         if (_block) _block->retain();
     }
 
@@ -223,16 +224,19 @@ public:
             if (other._block) other._block->retain();
             reset();
             _block = other._block;
+            _ptr = other._ptr;
         }
         return *this;
     }
 
-    WeakRef(WeakRef&& other) noexcept : _block(std::exchange(other._block, nullptr)) {}
+    WeakRef(WeakRef&& other) noexcept
+        : _block(std::exchange(other._block, nullptr)), _ptr(std::exchange(other._ptr, nullptr)) {}
 
     WeakRef& operator=(WeakRef&& other) noexcept {
         if (this != &other) {
             reset();
             _block = std::exchange(other._block, nullptr);
+            _ptr = std::exchange(other._ptr, nullptr);
         }
         return *this;
     }
@@ -240,8 +244,9 @@ public:
     /// Assign from RefObject
     WeakRef& operator=(const RefObject<T>& ref) noexcept {
         reset();
-        if (T* ptr = ref.get()) {
-            _block = ptr->getWeakControlBlock();
+        _ptr = ref.get();
+        if (_ptr) {
+            _block = _ptr->getWeakControlBlock();
             _block->retain();
         }
         return *this;
@@ -260,13 +265,15 @@ public:
      * @return RefObject<T> if successful, empty RefObject if expired
      */
     [[nodiscard]] RefObject<T> lock() const noexcept {
-        if (!_block) return {};
+        if (!_block || !_ptr) return {};
 
         std::lock_guard<std::mutex> lock(_block->mutex);
-        if (auto* ptr = static_cast<T*>(_block->object)) {
+        if (_block->object) {
             // Object is alive and we hold the lock, so it can't die while we tryRetain
-            if (ptr->tryRetain()) {
-                return RefObject<T>(adopt, ptr);
+            // We use the stored _ptr which has the correct offset for T*
+            // But we must call tryRetain on the block's object (EntropyObject*)
+            if (_block->object->tryRetain()) {
+                return RefObject<T>(adopt, _ptr);
             }
         }
         return {};
@@ -283,10 +290,11 @@ public:
             _block->release();
             _block = nullptr;
         }
+        _ptr = nullptr;
     }
 
     friend bool operator==(const WeakRef& a, const WeakRef& b) noexcept {
-        return a._block == b._block;
+        return a._ptr == b._ptr;  // Comparing pointers is more semantically correct for equality
     }
     friend bool operator!=(const WeakRef& a, const WeakRef& b) noexcept {
         return !(a == b);
@@ -296,9 +304,9 @@ public:
 template <typename T, typename... Args>
 [[nodiscard]] RefObject<T> makeRef(Args&&... args) {
     T* ptr = new T(std::forward<Args>(args)...);
-    // Call memory profiling hook after allocation
     if (EntropyObjectMemoryHooks::onAlloc) {
-        EntropyObjectMemoryHooks::onAlloc(ptr, sizeof(T), "EntropyObject");
+        // Pass actual class name for tracking visibility
+        EntropyObjectMemoryHooks::onAlloc(ptr, sizeof(T), ptr->className());
     }
     return RefObject<T>(ptr);
 }
