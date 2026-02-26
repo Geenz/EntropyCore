@@ -207,6 +207,18 @@ public:
         return nullptr;
     }
 
+    /// Returns estimated total memory footprint including GPU/external allocations.
+    /// Override in classes that manage significant non-C++ memory.
+    /// Returns 0 by default (hooks use sizeof(T) as fallback).
+    virtual size_t memoryFootprint() const noexcept {
+        return 0;
+    }
+
+    /// Notify the memory tracking system that this object's footprint has changed.
+    /// Fires a free+realloc pair through EntropyObjectMemoryHooks so Tracy sees
+    /// the updated size. Call after init/shutdown that changes GPU allocations.
+    void notifyMemoryFootprintChanged() const noexcept;
+
     /**
      * @brief Lazily retrieves or creates the weak control block
      * @return Pointer to the control block (retained by the object)

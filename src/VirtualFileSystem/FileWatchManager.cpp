@@ -4,10 +4,36 @@
  */
 #include "FileWatchManager.h"
 
+#include "../Logging/Logger.h"
+
+#ifdef ENTROPY_NO_EFSW
+
+// No-op stubs for platforms without efsw (iOS)
+namespace EntropyEngine::Core::IO
+{
+
+FileWatchManager::FileWatchManager(VirtualFileSystem* vfs) : _vfs(vfs) {}
+FileWatchManager::~FileWatchManager() = default;
+
+FileWatch* FileWatchManager::createWatch(const std::string& path, FileWatchCallback /*callback*/,
+                                         const WatchOptions& /*options*/) {
+    ENTROPY_LOG_WARNING("FileWatchManager: File watching not available on this platform (path: " + path + ")");
+    return nullptr;
+}
+
+void FileWatchManager::destroyWatch(FileWatch* /*watch*/) {}
+
+bool FileWatchManager::isValid(const FileWatch* /*watch*/) const {
+    return false;
+}
+
+}  // namespace EntropyEngine::Core::IO
+
+#else  // !ENTROPY_NO_EFSW
+
 #include <algorithm>
 #include <efsw/efsw.hpp>
 
-#include "../Logging/Logger.h"
 #include "VirtualFileSystem.h"
 
 namespace EntropyEngine::Core::IO
@@ -396,3 +422,5 @@ void FileWatchManager::removeEfswWatch(FileWatch* watch) {
 }
 
 }  // namespace EntropyEngine::Core::IO
+
+#endif  // ENTROPY_NO_EFSW

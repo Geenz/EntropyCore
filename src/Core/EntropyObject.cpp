@@ -87,6 +87,23 @@ std::string EntropyObject::description() const {
     return toString();
 }
 
+void EntropyObject::notifyMemoryFootprintChanged() const noexcept {
+    size_t footprint = memoryFootprint();
+    if (footprint == 0) return;
+    // Skip during destruction — release() already fired onFree before delete.
+    // Firing here would re-track a pointer that's about to be freed by the allocator,
+    // leaving a stale entry that triggers "already tracked" on the next allocation
+    // at the same address.
+    if (refCount() == 0) return;
+    // Re-register with updated size: free old entry, alloc with new size
+    if (EntropyObjectMemoryHooks::onFree) {
+        EntropyObjectMemoryHooks::onFree(const_cast<void*>(static_cast<const void*>(this)), className());
+    }
+    if (EntropyObjectMemoryHooks::onAlloc) {
+        EntropyObjectMemoryHooks::onAlloc(const_cast<void*>(static_cast<const void*>(this)), footprint, className());
+    }
+}
+
 WeakControlBlock* EntropyObject::getWeakControlBlock() const {
     WeakControlBlock* block = _weakBlock.load(std::memory_order_acquire);
     if (!block) {

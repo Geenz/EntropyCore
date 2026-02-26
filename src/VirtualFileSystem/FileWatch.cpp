@@ -10,6 +10,8 @@
 namespace EntropyEngine::Core::IO
 {
 
+#ifndef ENTROPY_NO_EFSW
+
 FileWatch::FileWatch(FileWatchManager* owner, const std::string& path, FileWatchCallback callback,
                      const WatchOptions& options)
     : _owner(owner), _path(path), _callback(std::move(callback)), _options(options), _efswId(0), _watching(false) {}
@@ -32,5 +34,19 @@ void FileWatch::stop() {
 
     ENTROPY_LOG_INFO("Stopped file watch for: " + _path);
 }
+
+#else  // ENTROPY_NO_EFSW
+
+FileWatch::FileWatch(FileWatchManager* owner, const std::string& path, FileWatchCallback callback,
+                     const WatchOptions& options)
+    : _owner(owner), _path(path), _callback(std::move(callback)), _options(options), _watching(false) {}
+
+FileWatch::~FileWatch() noexcept = default;
+
+void FileWatch::stop() {
+    _watching.store(false, std::memory_order_release);
+}
+
+#endif  // ENTROPY_NO_EFSW
 
 }  // namespace EntropyEngine::Core::IO

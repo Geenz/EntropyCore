@@ -11,7 +11,10 @@
 
 #if defined(__APPLE__)
 #include <CoreFoundation/CoreFoundation.h>
+#include <TargetConditionals.h>
+#if !TARGET_OS_IPHONE
 #include <mach-o/dyld.h>
+#endif
 #endif
 
 #if defined(_WIN32)
@@ -30,6 +33,19 @@ namespace EntropyEngine::VirtualFileSystem
 
 std::optional<std::string> getExecutablePath() {
 #if defined(__APPLE__)
+#if TARGET_OS_IPHONE
+    // iOS: Use CFBundleCopyExecutableURL for the executable path
+    CFBundleRef bundle = CFBundleGetMainBundle();
+    if (!bundle) return std::nullopt;
+    CFURLRef execURL = CFBundleCopyExecutableURL(bundle);
+    if (!execURL) return std::nullopt;
+    char pathBuf[PATH_MAX];
+    Boolean ok = CFURLGetFileSystemRepresentation(execURL, true, reinterpret_cast<UInt8*>(pathBuf), PATH_MAX);
+    CFRelease(execURL);
+    if (!ok) return std::nullopt;
+    return std::string(pathBuf);
+#else
+    // macOS: _NSGetExecutablePath
     uint32_t bufferSize = 0;
     _NSGetExecutablePath(nullptr, &bufferSize);
 
@@ -50,6 +66,7 @@ std::optional<std::string> getExecutablePath() {
         return path;  // Return non-canonical path if resolution fails
     }
     return canonical.string();
+#endif  // TARGET_OS_IPHONE
 
 #elif defined(_WIN32)
     char buffer[MAX_PATH];
@@ -129,12 +146,23 @@ std::optional<std::string> getAppDataPath(const std::string& appName) {
     }
 
 #if defined(__APPLE__)
+#if TARGET_OS_IPHONE
+    // iOS: App sandbox container's Library/Application Support
+    CFURLRef homeURL = CFCopyHomeDirectoryURL();
+    if (!homeURL) return std::nullopt;
+    char homeBuf[PATH_MAX];
+    Boolean ok = CFURLGetFileSystemRepresentation(homeURL, true, reinterpret_cast<UInt8*>(homeBuf), PATH_MAX);
+    CFRelease(homeURL);
+    if (!ok) return std::nullopt;
+    std::filesystem::path basePath = std::filesystem::path(homeBuf) / "Library" / "Application Support" / appName;
+#else
     // macOS: ~/Library/Application Support/{appName}/
     const char* home = std::getenv("HOME");
     if (!home) {
         return std::nullopt;
     }
     std::filesystem::path basePath = std::filesystem::path(home) / "Library" / "Application Support" / appName;
+#endif
     std::string result = basePath.string();
     if (!result.empty() && result.back() != '/') {
         result += '/';
@@ -198,12 +226,23 @@ std::optional<std::string> getAppCachePath(const std::string& appName) {
     }
 
 #if defined(__APPLE__)
+#if TARGET_OS_IPHONE
+    // iOS: App sandbox container's Library/Caches
+    CFURLRef homeURL = CFCopyHomeDirectoryURL();
+    if (!homeURL) return std::nullopt;
+    char homeBuf[PATH_MAX];
+    Boolean ok = CFURLGetFileSystemRepresentation(homeURL, true, reinterpret_cast<UInt8*>(homeBuf), PATH_MAX);
+    CFRelease(homeURL);
+    if (!ok) return std::nullopt;
+    std::filesystem::path basePath = std::filesystem::path(homeBuf) / "Library" / "Caches" / appName;
+#else
     // macOS: ~/Library/Caches/{appName}/
     const char* home = std::getenv("HOME");
     if (!home) {
         return std::nullopt;
     }
     std::filesystem::path basePath = std::filesystem::path(home) / "Library" / "Caches" / appName;
+#endif
     std::string result = basePath.string();
     if (!result.empty() && result.back() != '/') {
         result += '/';

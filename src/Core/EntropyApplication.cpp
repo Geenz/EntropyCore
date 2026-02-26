@@ -25,6 +25,9 @@
 #include <poll.h>
 #include <signal.h>
 #include <unistd.h>
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
 #endif
 
 namespace EntropyEngine
@@ -305,6 +308,10 @@ static void entropySigHandler(int signum) {
 }  // namespace
 
 void EntropyApplication::installSignalHandlers() {
+#if TARGET_OS_IPHONE
+    // iOS apps don't receive POSIX signals — lifecycle managed by UIKit
+    return;
+#else
     if (_handlersInstalled.exchange(true)) return;
 
     // Set up sigaction for graceful termination signals
@@ -330,9 +337,13 @@ void EntropyApplication::installSignalHandlers() {
     sigaction(SIGBUS, &fatalSa, nullptr);   // bus error
     sigaction(SIGFPE, &fatalSa, nullptr);   // floating point exception
     sigaction(SIGILL, &fatalSa, nullptr);   // illegal instruction
+#endif
 }
 
 void EntropyApplication::uninstallSignalHandlers() {
+#if TARGET_OS_IPHONE
+    return;
+#else
     if (!_handlersInstalled.exchange(false)) return;
 
     // Restore default signal handlers
@@ -345,6 +356,7 @@ void EntropyApplication::uninstallSignalHandlers() {
     signal(SIGBUS, SIG_DFL);
     signal(SIGFPE, SIG_DFL);
     signal(SIGILL, SIG_DFL);
+#endif
 }
 
 void EntropyApplication::notifyPosixSignalFromHandler(int signum) noexcept {

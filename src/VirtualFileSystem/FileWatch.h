@@ -12,11 +12,13 @@
 
 #include "../Core/EntropyObject.h"
 
+#ifndef ENTROPY_NO_EFSW
 // Forward declare efsw types
 namespace efsw
 {
 using WatchID = long;
 }
+#endif
 
 namespace EntropyEngine::Core::IO
 {
@@ -124,11 +126,13 @@ public:
     }
 
 private:
-    FileWatchManager* _owner;            ///< Owning manager
-    std::string _path;                   ///< Watched path
-    FileWatchCallback _callback;         ///< User callback
-    WatchOptions _options;               ///< Watch configuration
-    efsw::WatchID _efswId = 0;           ///< efsw watch ID (0 = invalid)
+    FileWatchManager* _owner;     ///< Owning manager
+    std::string _path;            ///< Watched path
+    FileWatchCallback _callback;  ///< User callback
+    WatchOptions _options;        ///< Watch configuration
+#ifndef ENTROPY_NO_EFSW
+    efsw::WatchID _efswId = 0;  ///< efsw watch ID (0 = invalid)
+#endif
     std::atomic<bool> _watching{false};  ///< true if actively watching
 
     friend class FileWatchManager;

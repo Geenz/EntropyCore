@@ -9,12 +9,14 @@
 
 #include "FileWatch.h"
 
+#ifndef ENTROPY_NO_EFSW
 // Forward declare efsw types
 namespace efsw
 {
 class FileWatcher;
 class FileWatchListener;
 }  // namespace efsw
+#endif
 
 namespace EntropyEngine::Core::IO
 {
@@ -31,6 +33,8 @@ class VirtualFileSystem;
  * HandleAccess::set(). This enables generation-based validation.
  *
  * Thread safety: All public methods are thread-safe via mutex.
+ *
+ * On iOS (ENTROPY_NO_EFSW), all operations are no-ops that log a warning.
  */
 class FileWatchManager
 {
@@ -68,6 +72,7 @@ public:
     bool isValid(const FileWatch* watch) const;
 
 private:
+#ifndef ENTROPY_NO_EFSW
     /**
      * @brief Storage slot for a FileWatch
      */
@@ -129,6 +134,9 @@ private:
 
     friend class FileWatchListener;  // efsw listener needs access
     friend class FileWatch;          // FileWatch needs access to removeEfswWatch
+#else
+    VirtualFileSystem* _vfs;  ///< Parent VFS (unused on iOS, stored for API consistency)
+#endif
 };
 
 }  // namespace EntropyEngine::Core::IO

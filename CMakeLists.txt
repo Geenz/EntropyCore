@@ -69,7 +69,10 @@ endif()
 
 # Find packages
 find_package(Boost REQUIRED COMPONENTS type_index)
-find_package(efsw CONFIG REQUIRED)
+# efsw not available on iOS (no FSEvents access in sandboxed apps)
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    find_package(efsw CONFIG REQUIRED)
+endif()
 find_package(Tracy CONFIG REQUIRED)
 find_package(unofficial-sodium CONFIG REQUIRED)
 
@@ -93,6 +96,7 @@ set(ENTROPY_CORE_SOURCES
         src/Concurrency/NodeStateManager.cpp
         src/Concurrency/NodeScheduler.cpp
         src/Core/EntropyObject.cpp
+        src/Core/MemoryTracker.cpp
         src/Core/EntropyCAPI.cpp
         src/VirtualFileSystem/VirtualFileSystem.cpp
         src/VirtualFileSystem/FileOperationHandle.cpp
@@ -117,6 +121,7 @@ set(ENTROPY_CORE_HEADERS
         src/Core/EventBus.h
         src/Core/EntropyClass.h
         src/Core/EntropyObject.h
+        src/Core/MemoryTracker.h
         src/Core/RefObject.h
         src/Core/HandleSlot.h
         src/Core/SlotPool.h
@@ -243,9 +248,14 @@ target_link_libraries(EntropyCore
         Boost::type_index
         Tracy::TracyClient
         unofficial-sodium::sodium
-    PRIVATE
-        efsw::efsw
 )
+
+# efsw not available on iOS (no FSEvents access in sandboxed apps)
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    target_link_libraries(EntropyCore PRIVATE efsw::efsw)
+else()
+    target_compile_definitions(EntropyCore PRIVATE ENTROPY_NO_EFSW)
+endif()
 
 # Platform-specific libraries
 if(APPLE)
@@ -368,10 +378,12 @@ else()
         target_compile_options(EntropyCore PUBLIC -fexperimental-library)
     endif()
     if(APPLE)
-        # macOS specific
-        target_compile_definitions(EntropyCore PUBLIC EntropyDarwin)
+        if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+            target_compile_definitions(EntropyCore PUBLIC EntropyiOS EntropyDarwin)
+        else()
+            target_compile_definitions(EntropyCore PUBLIC EntropyDarwin)
+        endif()
     elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-        # Linux specific
         target_compile_definitions(EntropyCore PUBLIC EntropyLinux)
     endif()
     # Optionally disable RTTI if requested
