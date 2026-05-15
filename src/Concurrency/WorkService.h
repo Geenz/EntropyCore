@@ -429,6 +429,19 @@ public:
      */
     static void resetThreadLocalState();
 
+    /**
+     * @brief Worker thread index for the calling thread.
+     *
+     * Stable id in `[0, threadCount)` for the worker thread that runs the
+     * caller. Set during worker bootstrap and never changes. Returns 0
+     * on threads that aren't WorkService workers (e.g. the main thread).
+     * Callers that need to address per-worker resources by id read this
+     * inside a WorkGraph node closure.
+     */
+    [[nodiscard]] static size_t getThreadId() noexcept {
+        return stThreadId;
+    }
+
 private:
     /**
      * @brief The main execution loop for worker threads - core of the work system
