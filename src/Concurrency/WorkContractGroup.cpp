@@ -15,6 +15,10 @@
 #include <iostream>
 #include <limits>
 
+#include <tracy/Tracy.hpp>  // main-thread work-queue profiling (per-frame "gap")
+
+#include "../Debug/CpuZoneProfiler.h"  // headless `cpu.zones` mirror
+
 #include "../TypeSystem/TypeID.h"
 #include "IConcurrencyProvider.h"
 
@@ -584,6 +588,13 @@ WorkContractHandle WorkContractGroup::selectForMainThreadExecution(
 }
 
 void WorkContractGroup::executeContract(const WorkContractHandle& handle) {
+    // Covers EVERY contract execution — background worker threads AND the
+    // main-thread queue — so Tracy shows the whole concurrency system across all
+    // threads (the main-thread ones nest under WorkService::executeMainThreadWork).
+    // CpuZoneScope mirrors it into `state get cpu.zones` (gated; self-inflates a
+    // little when enabled since this is per-contract — read it as a coarse total).
+    ZoneScopedN("WCG::executeContract");
+    ::EntropyEngine::Core::Debug::CpuZoneScope _cpuz("WCG::executeContract");
     if (!handle.valid()) return;
 
     const uint32_t index = handle.handleIndex();
@@ -716,6 +727,13 @@ size_t WorkContractGroup::executeAllMainThreadWork() {
 }
 
 size_t WorkContractGroup::executeMainThreadWork(size_t maxContracts) {
+    // Per-group zone, NAMED by the group (ZoneName) so Tracy aggregates the
+    // per-frame main-thread "gap" by which subsystem's queue is spending it.
+    // CpuZoneScope mirrors the same per-group split into `cpu.zones` (_name
+    // outlives this scope; the profiler copies it on accumulate).
+    ZoneScoped;
+    ZoneName(_name.c_str(), _name.size());
+    ::EntropyEngine::Core::Debug::CpuZoneScope _cpuz(_name.c_str());
     size_t executed = 0;
     uint64_t localBias = 0;
 
@@ -725,7 +743,8 @@ size_t WorkContractGroup::executeMainThreadWork(size_t maxContracts) {
             break;  // No more main thread contracts scheduled
         }
 
-        // Execute the contract (includes all cleanup)
+        // Execute the contract (includes all cleanup). Per-contract timing comes
+        // from the zone inside executeContract (covers main + background paths).
         executeContract(handle);
         executed++;
 

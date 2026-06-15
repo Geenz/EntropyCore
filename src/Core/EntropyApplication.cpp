@@ -13,6 +13,8 @@
 #include <thread>
 #include <utility>
 
+#include <tracy/Tracy.hpp>  // per-frame boundary (FrameMark) for the Tracy timeline
+
 #include "Concurrency/WorkService.h"
 #include "Core/RefObject.h"
 #include "Core/TimerService.h"
@@ -161,6 +163,11 @@ int EntropyApplication::run() {
         if (_delegate) {
             _delegate->applicationMainLoop();
         }
+
+        // Frame boundary for Tracy — one loop iteration = one frame
+        // (executeMainThreadWork + delegate render). Lets Tracy slice the
+        // timeline per frame so the per-frame "gap" and spikes are readable.
+        FrameMark;
     }
 
     // Signal handler thread will stop automatically via stop_token when signalThread goes out of scope

@@ -8,6 +8,9 @@
 #include <cmath>
 #include <limits>
 
+#include <tracy/Tracy.hpp>  // main-thread work-queue profiling (the per-frame "gap")
+
+#include "../Debug/CpuZoneProfiler.h"  // headless `cpu.zones` mirror
 #include "AdaptiveRankingScheduler.h"
 #include "WorkContractGroup.h"
 #include "WorkGraph.h"
@@ -335,6 +338,12 @@ void WorkService::resetThreadLocalState() {
 }
 
 WorkService::MainThreadWorkResult WorkService::executeMainThreadWork(size_t maxContracts) {
+    // This is the per-frame "gap" — run from EntropyApplication's loop BEFORE the
+    // render delegate. CpuZoneScope feeds the (now EntropyCore-resident)
+    // CpuZoneProfiler so this shows in `state get cpu.zones` headlessly, and the
+    // Tracy zone attributes it in the GUI timeline.
+    ZoneScopedN("WorkService::executeMainThreadWork");
+    ::EntropyEngine::Core::Debug::CpuZoneScope _cpuz("WorkService::executeMainThreadWork");
     MainThreadWorkResult result{0, 0, false};
 
     // Get current snapshot of groups

@@ -114,6 +114,7 @@ set(ENTROPY_CORE_SOURCES
         src/Core/TimerService.cpp
         src/VirtualFileSystem/PlatformResourceUtils.cpp
         src/Crypto/SHA256.cpp
+        src/Debug/CpuZoneProfiler.cpp
 )
 
 set(ENTROPY_CORE_HEADERS
@@ -142,6 +143,7 @@ set(ENTROPY_CORE_HEADERS
         src/Graph/AcyclicNodeHandle.h
         src/Debug/INamed.h
         src/Debug/DebugUtilities.h
+        src/Debug/CpuZoneProfiler.h
         src/Debug/Debug.h
         src/Logging/LogLevel.h
         src/Logging/LogEntry.h
