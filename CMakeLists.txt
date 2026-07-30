@@ -85,6 +85,7 @@ endif()
 set(ENTROPY_CORE_SOURCES
         src/Logging/Logger.cpp
         src/Logging/ConsoleSink.cpp
+        src/Logging/FileSink.cpp
         src/Logging/CLogger.cpp
         src/Concurrency/WorkContractHandle.cpp
         src/Concurrency/WorkContractGroup.cpp
@@ -149,6 +150,7 @@ set(ENTROPY_CORE_HEADERS
         src/Logging/LogEntry.h
         src/Logging/ILogSink.h
         src/Logging/ConsoleSink.h
+        src/Logging/FileSink.h
         src/Logging/Logger.h
         src/Logging/CLogger.h
         src/Concurrency/WorkContractHandle.h
