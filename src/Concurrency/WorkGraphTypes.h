@@ -64,8 +64,12 @@ class NodeStateManager;
  */
 enum class ExecutionType : uint8_t
 {
-    AnyThread = 0,  ///< Runs on any worker thread from the pool
-    MainThread = 1  ///< Must run on the main/UI thread
+    AnyThread = 0,    ///< Runs on any worker thread from the pool
+    MainThread = 1,   ///< Must run on the main/UI thread
+    PinnedThread = 2  ///< Must run on a specific registered thread (see
+                      ///< WorkContractGroup::registerPinnedThread). Used for work
+                      ///< bound to thread-affine data (non-thread-safe structures
+                      ///< that must stay on their owning thread).
 };
 
 /**

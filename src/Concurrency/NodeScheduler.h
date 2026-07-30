@@ -156,9 +156,9 @@ public:
      * );
      * @endcode
      */
-    NodeScheduler(WorkContractGroup* contractGroup, const WorkGraph* graph, std::shared_mutex* graphMutex,
+    NodeScheduler(WorkContractGroup* contractGroup, const WorkGraph* graph,
                   Core::EventBus* eventBus = nullptr, const Config& config = {})
-        : _contractGroup(contractGroup), _graph(graph), _graphMutex(graphMutex), _eventBus(eventBus), _config(config) {}
+        : _contractGroup(contractGroup), _graph(graph), _eventBus(eventBus), _config(config) {}
 
     ~NodeScheduler() {
         // Signal that this scheduler is being destroyed
@@ -423,9 +423,14 @@ public:
     };
 
     Stats getStats() const {
+        // Read the deferred count BEFORE taking _statsMutex: deferNode() updates
+        // stats after releasing _deferredMutex, but nesting deferredMutex inside
+        // statsMutex here while any path nests them the other way is a lock-order
+        // inversion waiting to deadlock. Never hold both.
+        size_t currentDeferred = getDeferredCount();
         std::lock_guard<std::mutex> lock(_statsMutex);
         Stats stats = _stats;
-        stats.currentDeferred = getDeferredCount();
+        stats.currentDeferred = currentDeferred;
         return stats;
     }
 
@@ -470,7 +475,6 @@ public:
 private:
     WorkContractGroup* _contractGroup;  ///< Where we schedule work (not owned)
     const WorkGraph* _graph;            ///< Graph we're scheduling for (not owned)
-    std::shared_mutex* _graphMutex;     ///< Mutex protecting graph structure (not owned)
     Core::EventBus* _eventBus;          ///< Optional event system for notifications
     Config _config;                     ///< Scheduler configuration
     Callbacks _callbacks;               ///< Lifecycle event callbacks
@@ -532,12 +536,6 @@ private:
      */
     void publishScheduledEvent(const NodeHandle& node);
 
-    /**
-     * @brief Publishes a "node deferred" event to the event bus
-     *
-     * @param node The node that was deferred
-     */
-    void publishDeferredEvent(const NodeHandle& node);
 };
 
 }  // namespace Concurrency

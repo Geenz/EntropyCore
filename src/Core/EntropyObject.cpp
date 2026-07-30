@@ -30,9 +30,13 @@ void EntropyObject::release() const noexcept {
     if (oldCount == 1) {
         // If we have a weak block, we must safely detach from it
         if (WeakControlBlock* block = _weakBlock.load(std::memory_order_acquire)) {
-            std::lock_guard<std::mutex> lock(block->mutex);
-            block->object = nullptr;
-            // We are done with our reference to the block
+            {
+                std::lock_guard<std::mutex> lock(block->mutex);
+                block->object = nullptr;
+            }
+            // Release outside the lock scope: release() may `delete this` on the
+            // block, and destroying a locked mutex (then unlocking freed memory
+            // via the guard) is undefined behavior.
             block->release();
         }
 

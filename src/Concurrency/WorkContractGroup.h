@@ -145,12 +145,20 @@ private:
         std::atomic<ContractState> state{ContractState::Free};  ///< Current lifecycle state
         std::function<void()> work;                             ///< Work function
         std::atomic<uint32_t> nextFree{INVALID_INDEX};          ///< Next free slot
-        ExecutionType executionType{ExecutionType::AnyThread};  ///< Execution context (main/any thread)
+        ExecutionType executionType{ExecutionType::AnyThread};  ///< Execution context (main/any/pinned)
+        uint32_t pinnedLane{INVALID_INDEX};  ///< Lane index when executionType == PinnedThread
     };
 
     std::vector<ContractSlot> _contracts;                  ///< Contract storage
     std::unique_ptr<SignalTreeBase> _readyContracts;       ///< Ready work queue
     std::unique_ptr<SignalTreeBase> _mainThreadContracts;  ///< Main thread work queue
+
+    /// Pinned lane ready queues, one per lane, allocated at construction.
+    /// The group is deliberately dumb about threads: a lane is an opaque index,
+    /// exactly as the main-thread queue is "whoever calls the main-thread pump".
+    /// The WorkService maps its worker ids onto lanes; external threads pump a
+    /// lane by convention via executePinnedWork().
+    std::vector<std::unique_ptr<SignalTreeBase>> _pinnedLanes;
     std::atomic<uint64_t> _freeListHead{0};  ///< Free list head (packed: [tag:32(upper) | index:32(lower)])
 
     std::atomic<size_t> _activeCount{0};               ///< Active contract count
@@ -175,12 +183,17 @@ private:
     std::list<std::function<void()>> _onCapacityAvailableCallbacks;  ///< Capacity callbacks
     mutable std::mutex _callbackMutex;                               ///< Protects callback list
 
-    // Stopping support
-    std::atomic<bool> _stopping{false};  ///< Stopping flag
+    // Stopping support. A depth counter, not a bool: independent owners (e.g.
+    // multiple WorkGraph destructors draining over one shared group) each
+    // stop()/resume() around their critical window, and one owner's resume()
+    // must not reopen selection while another's window is still open.
+    std::atomic<int64_t> _stopDepth{0};  ///< >0 means selection is stopped
 
-    // Timed deferral support (for WorkGraph timer integration)
-    std::function<size_t()> _timedDeferralCallback;  ///< Callback for checking timed deferrals
-    mutable std::mutex _timedDeferralCallbackMutex;  ///< Protects callback access
+    // Timed deferral support (for WorkGraph timer integration). A list, not a
+    // single slot: multiple WorkGraphs can share one group, and a single slot
+    // silently clobbers every graph's timers but the last registrant's.
+    std::list<std::function<size_t()>> _timedDeferralCallbacks;  ///< Callbacks for checking timed deferrals
+    mutable std::mutex _timedDeferralCallbackMutex;              ///< Protects callback list
 
 public:
     /**
@@ -199,7 +212,7 @@ public:
      * WorkContractGroup backgroundTasks(512);
      * @endcode
      */
-    explicit WorkContractGroup(size_t capacity, std::string name = "WorkContractGroup");
+    explicit WorkContractGroup(size_t capacity, std::string name = "WorkContractGroup", size_t maxPinnedThreads = 0);
 
     /**
      * @brief Destructor ensures all work is stopped and completed
@@ -227,9 +240,10 @@ public:
     WorkContractGroup(const WorkContractGroup&) = delete;
     WorkContractGroup& operator=(const WorkContractGroup&) = delete;
 
-    // Move operations
-    WorkContractGroup(WorkContractGroup&& other) noexcept;
-    WorkContractGroup& operator=(WorkContractGroup&& other) noexcept;
+    // Moves are deleted: outstanding handles are stamped with this group's address
+    // and providers hold pointers to it, so both would dangle across a move.
+    WorkContractGroup(WorkContractGroup&&) = delete;
+    WorkContractGroup& operator=(WorkContractGroup&&) = delete;
 
     /**
      * @brief Creates a new work contract with the given work function
@@ -255,8 +269,75 @@ public:
      * }
      * @endcode
      */
+    /**
+     * @brief Creates a new work contract
+     *
+     * For ExecutionType::PinnedThread the contract executes only on the given
+     * lane: a WorkService worker whose id equals the lane, or whatever external
+     * thread pumps that lane via executePinnedWork(). Use pinning for work
+     * bound to thread-affine data (non-thread-safe structures that must stay on
+     * their owning thread). Pinning to a lane nothing pumps is a wait() hang,
+     * so an out-of-range lane fails loudly (invalid handle + error log).
+     *
+     * @param work Function to execute
+     * @param executionType Where this contract may run
+     * @param pinnedLane Target lane for PinnedThread (ignored otherwise); must
+     *                   be < maxPinnedLanes(). For WorkService-executed work the
+     *                   lane is the worker id (WorkService::getThreadId()).
+     * @return Handle, or invalid handle if the group is full or the lane invalid
+     *
+     * @code
+     * // From inside work running on the owning worker thread:
+     * auto h = group.createContract([&]{ touchThreadBoundStructure(); },
+     *                               ExecutionType::PinnedThread,
+     *                               WorkService::getThreadId());
+     * h.schedule();
+     * @endcode
+     */
     WorkContractHandle createContract(std::function<void()> work,
-                                      ExecutionType executionType = ExecutionType::AnyThread);
+                                      ExecutionType executionType = ExecutionType::AnyThread,
+                                      uint32_t pinnedLane = 0);
+
+    /**
+     * @brief Number of pinned lanes this group was constructed with
+     */
+    size_t maxPinnedLanes() const noexcept {
+        return _pinnedLanes.size();
+    }
+
+    /**
+     * @brief Selects a contract scheduled on the given pinned lane
+     *
+     * The pinned mirror of selectForMainThreadExecution(): the caller asserts
+     * "I am lane `lane`" exactly as the main-thread pump asserts "I am the main
+     * thread" - the group is deliberately dumb about which thread that is.
+     *
+     * @param lane The lane to select from
+     * @param bias Optional selection bias for fair work distribution
+     * @return Handle to an executing contract, or invalid handle if none available
+     */
+    WorkContractHandle selectForPinnedExecution(size_t lane,
+                                                std::optional<std::reference_wrapper<uint64_t>> bias = std::nullopt);
+
+    /**
+     * @brief Executes contracts scheduled on the given pinned lane
+     *
+     * The pump for external (non-WorkService) threads that own a lane,
+     * mirroring executeMainThreadWork(). Call from the owning thread.
+     *
+     * @param lane The lane to drain
+     * @param maxContracts Maximum number to execute
+     * @return Number of contracts executed
+     */
+    size_t executePinnedWork(size_t lane, size_t maxContracts = std::numeric_limits<size_t>::max());
+
+    /**
+     * @brief True if work is queued on the given pinned lane
+     *
+     * Lock-free single atomic read; safe to poll from the lane's owner or the
+     * WorkService worker loop.
+     */
+    bool hasPinnedWork(size_t lane) const noexcept;
 
     /**
      * @brief Waits for all scheduled and executing contracts to complete
@@ -280,16 +361,20 @@ public:
     /**
      * @brief Stops the group from accepting new work selections
      *
-     * Prevents new work selection. Executing work continues.
+     * Prevents new work selection. Executing work continues. Stops nest: each
+     * stop() must be balanced by a resume(), and selection stays stopped until
+     * every stop has been resumed - so independent owners (e.g. two WorkGraph
+     * destructors draining over one shared group) cannot reopen each other's
+     * critical windows.
      * Thread-safe.
      */
     void stop();
 
     /**
-     * @brief Resumes the group to allow new work selections
+     * @brief Balances one stop(); selection resumes when all stops are balanced
      *
-     * Clears the stopping flag to allow selectForExecution() to return work
-     * again. Does NOT automatically notify waiting threads.
+     * Does NOT automatically notify waiting threads. Unbalanced resume() calls
+     * are clamped and logged.
      *
      * Thread-safe.
      */
@@ -298,10 +383,10 @@ public:
     /**
      * @brief Checks if the group is in the process of stopping
      *
-     * @return true if stop() has been called, false otherwise
+     * @return true if there are unbalanced stop() calls
      */
     bool isStopping() const noexcept {
-        return _stopping.load(std::memory_order_seq_cst);
+        return _stopDepth.load(std::memory_order_seq_cst) > 0;
     }
 
     /**
@@ -605,24 +690,36 @@ public:
     /**
      * @brief Checks for timed deferrals and schedules ready nodes
      *
-     * Invokes the timed deferral callback if one is set (used by WorkGraph for timer support).
-     * Returns 0 if no callback is registered (standard WorkContractGroups don't support timers).
+     * Invokes every registered timed deferral callback (used by WorkGraphs for
+     * timer support). Returns 0 if none are registered.
      * Thread-safe: Protected by mutex.
      *
-     * @return Number of nodes that were scheduled from timed deferral queue
+     * @return Number of nodes that were scheduled from timed deferral queues
      */
     size_t checkTimedDeferrals();
 
+    using TimedDeferralCallback = std::list<std::function<size_t()>>::iterator;
+
     /**
-     * @brief Sets a callback for checking timed deferrals
+     * @brief Registers a callback for checking timed deferrals
      *
      * Allows external owners (like WorkGraph) to provide timer functionality
-     * without requiring inheritance or RTTI/dynamic_cast.
-     * Thread-safe: Protected by mutex.
+     * without requiring inheritance or RTTI/dynamic_cast. Multiple graphs may
+     * share one group; each registers its own callback.
+     * Thread-safe: Protected by mutex. Removal blocks until any in-flight
+     * invocation completes (callbacks are invoked under the same mutex).
      *
-     * @param callback Function that checks and schedules timed deferrals, or nullptr to clear
+     * @param callback Function that checks and schedules timed deferrals
+     * @return Iterator for removeTimedDeferralCallback
      */
-    void setTimedDeferralCallback(std::function<size_t()> callback);
+    TimedDeferralCallback addTimedDeferralCallback(std::function<size_t()> callback);
+
+    /**
+     * @brief Removes a timed deferral callback
+     *
+     * @param it Iterator returned from addTimedDeferralCallback
+     */
+    void removeTimedDeferralCallback(TimedDeferralCallback it);
 
 private:
     /**
@@ -656,6 +753,23 @@ private:
      * @param isMainThread Whether this is a main thread contract (default: false)
      */
     void returnSlotToFreeList(uint32_t index, ContractState previousState, bool isMainThread = false);
+
+    /// The queue a slot's ready bit lives in (main, pinned lane, or shared ready).
+    SignalTreeBase& readyTreeFor(const ContractSlot& slot) {
+        if (slot.executionType == ExecutionType::MainThread) return *_mainThreadContracts;
+        if (slot.executionType == ExecutionType::PinnedThread && slot.pinnedLane < _pinnedLanes.size())
+            return *_pinnedLanes[slot.pinnedLane];
+        return *_readyContracts;
+    }
+
+    /// Claims one background-class contract (AnyThread or PinnedThread) from `tree`,
+    /// verifying post-claim that the slot really belongs to that queue
+    /// (expectedType/expectedLane); reverts and re-asserts the slot's own queue
+    /// bit on a stale-bit mismatch. Updates the background counters (pinned work
+    /// is counted with background work; the trees themselves answer per-lane
+    /// questions).
+    WorkContractHandle claimBackgroundContract(SignalTreeBase& tree, ExecutionType expectedType, uint32_t expectedLane,
+                                               uint64_t& bias);
 
     /**
      * @brief Releases all remaining contracts in the group

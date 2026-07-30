@@ -233,11 +233,11 @@ private:
     /**
      * @brief Cancels a specific timer (called by Timer::invalidate)
      *
-     * Thread-safe. Safe to call on already-cancelled timers.
+     * Thread-safe. Safe to call on already-cancelled or completed timers.
      *
-     * @param node The WorkGraph node handle for the timer
+     * @param timerId The TimerService-assigned id for the timer
      */
-    void cancelTimer(Concurrency::WorkGraph::NodeHandle node);
+    void cancelTimer(uint64_t timerId);
 
     /**
      * @brief Restarts the pump contract if not already running
@@ -248,7 +248,7 @@ private:
     void restartPumpContract();
 
     /**
-     * @brief Internal timer data tracked per node
+     * @brief Internal timer data tracked per timer
      */
     struct TimerData
     {
@@ -259,13 +259,27 @@ private:
         std::atomic<bool> cancelled{false};  ///< Cancellation flag
     };
 
+    /**
+     * @brief Per-timer state: one small WorkGraph per timer
+     *
+     * Each timer owns its own single-node graph, executed once at creation;
+     * the yieldable node does the waiting via yieldUntil. This keeps graphs
+     * strictly build-once-execute-many (no node addition to running graphs)
+     * instead of one perpetual shared graph mutated forever.
+     */
+    struct TimerEntry
+    {
+        std::unique_ptr<Concurrency::WorkGraph> graph;  ///< Single-node graph for this timer
+        std::shared_ptr<TimerData> data;                ///< Shared with the node's lambda
+    };
+
     Config _config;
     Concurrency::WorkContractGroup* _workContractGroup = nullptr;
-    std::unique_ptr<Concurrency::WorkGraph> _workGraph;
 
-    // Timer data storage - protected by mutex
+    // Timer storage - protected by mutex
     mutable std::mutex _timersMutex;
-    std::unordered_map<uint32_t, std::shared_ptr<TimerData>> _timers;  // node index -> timer data
+    std::unordered_map<uint64_t, TimerEntry> _timers;  // timer id -> entry
+    uint64_t _nextTimerId = 1;                         // protected by _timersMutex
 
     // WorkService reference (set during load)
     Concurrency::WorkService* _workService = nullptr;

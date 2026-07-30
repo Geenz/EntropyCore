@@ -39,8 +39,8 @@ void TimerService::load() {
     // Note: Initial refcount=1 is set by EntropyObject base class (see EntropyObject.h:56)
     _workContractGroup = new Concurrency::WorkContractGroup(_config.workContractGroupSize);
 
-    // Create WorkGraph using the WorkContractGroup
-    _workGraph = std::make_unique<Concurrency::WorkGraph>(_workContractGroup);
+    // Timer graphs are created per-timer in scheduleTimer(); graphs are
+    // build-once-execute-many, so a shared perpetual graph is not an option.
 }
 
 void TimerService::start() {
@@ -78,14 +78,9 @@ void TimerService::stop() {
     // Cancel all active timers
     {
         std::lock_guard<std::mutex> lock(_timersMutex);
-        for (auto& [index, timerData] : _timers) {
-            timerData->cancelled.store(true, std::memory_order_release);
+        for (auto& [id, entry] : _timers) {
+            entry.data->cancelled.store(true, std::memory_order_release);
         }
-    }
-
-    // Suspend the WorkGraph to prevent rescheduling
-    if (_workGraph) {
-        _workGraph->suspend();
     }
 
     // Unregister WorkContractGroup from WorkService
@@ -95,14 +90,14 @@ void TimerService::stop() {
 }
 
 void TimerService::unload() {
-    // Clear all timer data
+    // Destroy all timer entries. Graphs with pending (cancelled-but-unfired)
+    // nodes drain themselves in ~WorkGraph; that is the ordinary shutdown path
+    // for any timer that has not reached its fire time. The group must still be
+    // alive here because each graph destructor unregisters its callbacks from it.
     {
         std::lock_guard<std::mutex> lock(_timersMutex);
         _timers.clear();
     }
-
-    // Clean up WorkGraph and WorkContractGroup
-    _workGraph.reset();
 
     // Release our reference to the WorkContractGroup
     // Object will be deleted when all references are released (including WorkService snapshots)
@@ -124,11 +119,6 @@ void TimerService::setWorkService(Concurrency::WorkService* workService) {
             throw std::runtime_error("Failed to register TimerService WorkContractGroup with WorkService");
         }
 
-        // Start the WorkGraph execution
-        if (_workGraph) {
-            _workGraph->execute();
-        }
-
         // Start the background pump contract
         // Runs on AnyThread to avoid monopolizing main thread queue
         // Main thread timers will still execute on main thread when ready
@@ -138,7 +128,7 @@ void TimerService::setWorkService(Concurrency::WorkService* workService) {
 
 Timer TimerService::scheduleTimer(std::chrono::steady_clock::duration interval, Timer::WorkFunction work,
                                   bool repeating, Concurrency::ExecutionType executionType) {
-    if (!_workGraph) {
+    if (!_workContractGroup) {
         throw std::runtime_error("TimerService not loaded");
     }
 
@@ -153,8 +143,16 @@ Timer TimerService::scheduleTimer(std::chrono::steady_clock::duration interval, 
     timerData->work = std::move(work);
     timerData->repeating = repeating;
 
+    // One small graph per timer: a single yieldable node that does the waiting
+    // via yieldUntil. Graphs are build-once-execute-many; the old design of one
+    // perpetual graph gaining nodes forever mutated a running graph.
+    Concurrency::WorkGraphConfig graphConfig;
+    graphConfig.enableEvents = false;
+    graphConfig.enableDebugRegistration = false;
+    auto graph = std::make_unique<Concurrency::WorkGraph>(_workContractGroup, graphConfig);
+
     // Create yieldable node that checks elapsed time
-    auto node = _workGraph->addYieldableNode(
+    graph->addYieldableNode(
         [timerData]() -> Concurrency::WorkResultContext {
             // Check if cancelled
             if (timerData->cancelled.load(std::memory_order_acquire)) {
@@ -192,32 +190,38 @@ Timer TimerService::scheduleTimer(std::chrono::steady_clock::duration interval, 
         std::nullopt  // No max reschedules for timers
     );
 
-    // Store timer data
+    // Start the timer's graph; the node runs once immediately and yields until
+    // its fire time.
+    graph->execute();
+
+    // Store the entry
+    uint64_t timerId;
     {
         std::lock_guard<std::mutex> lock(_timersMutex);
-        _timers[node.handleIndex()] = timerData;
+        timerId = _nextTimerId++;
+        _timers[timerId] = TimerEntry{std::move(graph), timerData};
     }
 
     // Ensure pump contract is running (thread-safe)
     restartPumpContract();
 
     // Return Timer handle
-    return Timer(this, node, interval, repeating);
+    return Timer(this, timerId, interval, repeating);
 }
 
-void TimerService::cancelTimer(Concurrency::WorkGraph::NodeHandle node) {
+void TimerService::cancelTimer(uint64_t timerId) {
     std::lock_guard<std::mutex> lock(_timersMutex);
-    auto it = _timers.find(node.handleIndex());
+    auto it = _timers.find(timerId);
     if (it != _timers.end()) {
-        it->second->cancelled.store(true, std::memory_order_release);
+        it->second.data->cancelled.store(true, std::memory_order_release);
     }
 }
 
 size_t TimerService::getActiveTimerCount() const {
     std::lock_guard<std::mutex> lock(_timersMutex);
     size_t activeCount = 0;
-    for (const auto& [index, timerData] : _timers) {
-        if (!timerData->cancelled.load(std::memory_order_acquire)) {
+    for (const auto& [id, entry] : _timers) {
+        if (!entry.data->cancelled.load(std::memory_order_acquire) && entry.graph && !entry.graph->isComplete()) {
             ++activeCount;
         }
     }
@@ -278,10 +282,25 @@ void TimerService::restartPumpContract() {
 }
 
 size_t TimerService::processReadyTimers() {
-    if (_workGraph) {
-        return _workGraph->checkTimedDeferrals();
+    // Wake any timers whose fire time has arrived, and reap graphs whose
+    // one-shot (or cancelled) timer has completed. checkTimedDeferrals() is
+    // also invoked per-graph by WorkService idle workers via the group's
+    // timed-deferral callback list; this pump guarantees progress even when
+    // workers are busy, and is the only place completed entries are erased.
+    std::lock_guard<std::mutex> lock(_timersMutex);
+    size_t scheduled = 0;
+    for (auto it = _timers.begin(); it != _timers.end();) {
+        auto& entry = it->second;
+        if (entry.graph && entry.graph->isComplete()) {
+            it = _timers.erase(it);  // Timer fired its last (or was cancelled and drained)
+            continue;
+        }
+        if (entry.graph) {
+            scheduled += entry.graph->checkTimedDeferrals();
+        }
+        ++it;
     }
-    return 0;
+    return scheduled;
 }
 
 }  // namespace Core

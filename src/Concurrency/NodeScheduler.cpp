@@ -32,6 +32,10 @@ bool NodeScheduler::scheduleNode(const NodeHandle& node) {
     if (_config.enableDebugLogging) {
         ENTROPY_LOG_DEBUG_CAT("NodeScheduler", "scheduleNode() called");
     }
+
+    // No lock: graph structure is frozen while a run is in flight (WorkGraph
+    // mutators throw between execute() and reset()), so node storage is stable
+    // and per-node state is atomic.
     auto* dag = node.handleOwnerAs<Graph::DirectedAcyclicGraph<WorkGraphNode>>();
     auto* nodeData = dag ? dag->getNodeData(node) : nullptr;
     if (!nodeData) {
@@ -57,8 +61,8 @@ bool NodeScheduler::scheduleNode(const NodeHandle& node) {
     // Create work wrapper
     auto work = createWorkWrapper(node);
 
-    // Create contract with the node's execution type
-    auto handle = _contractGroup->createContract(std::move(work), nodeData->executionType);
+    // Create contract with the node's execution type and pinned lane
+    auto handle = _contractGroup->createContract(std::move(work), nodeData->executionType, nodeData->pinnedLane);
     if (!handle.valid()) {
         // Contract group refused - try to defer
         return deferNode(node);
@@ -90,16 +94,32 @@ bool NodeScheduler::scheduleNode(const NodeHandle& node) {
 }
 
 bool NodeScheduler::deferNode(const NodeHandle& node) {
-    std::lock_guard<std::shared_mutex> lock(_deferredMutex);  // Exclusive lock for modifying queue
+    // Only the queue mutation happens under _deferredMutex. Stats, events, and
+    // callbacks run after it is released: the drop callback cancels dependents
+    // (which takes _graphMutex) and updateStats takes _statsMutex, so invoking
+    // either under _deferredMutex creates lock-order inversions with getStats()
+    // (statsMutex -> deferredMutex) and with any graph-locked caller.
+    bool dropped = false;
+    size_t queueSize = 0;
+    {
+        std::lock_guard<std::shared_mutex> lock(_deferredMutex);  // Exclusive lock for modifying queue
 
-    if (_config.enableDebugLogging) {
-        ENTROPY_LOG_DEBUG_CAT("NodeScheduler", "Deferring node, queue size: " + std::to_string(_deferredQueue.size()) +
-                                                   ", max: " + std::to_string(_config.maxDeferredNodes));
+        if (_config.enableDebugLogging) {
+            ENTROPY_LOG_DEBUG_CAT("NodeScheduler",
+                                  "Deferring node, queue size: " + std::to_string(_deferredQueue.size()) +
+                                      ", max: " + std::to_string(_config.maxDeferredNodes));
+        }
+
+        // Check queue capacity (0 = unlimited)
+        if (_config.maxDeferredNodes > 0 && _deferredQueue.size() >= _config.maxDeferredNodes) {
+            dropped = true;
+        } else {
+            _deferredQueue.push_back(node);
+            queueSize = _deferredQueue.size();
+        }
     }
 
-    // Check queue capacity (0 = unlimited)
-    if (_config.maxDeferredNodes > 0 && _deferredQueue.size() >= _config.maxDeferredNodes) {
-        // Queue full - drop the node
+    if (dropped) {
         auto msg = std::format("NodeScheduler dropping node - deferred queue full (max: {})", _config.maxDeferredNodes);
         ENTROPY_LOG_ERROR_CAT("NodeScheduler", msg);
         updateStats(false, false, true);
@@ -112,20 +132,19 @@ bool NodeScheduler::deferNode(const NodeHandle& node) {
         return false;
     }
 
-    // Add to deferred queue
-    _deferredQueue.push_back(node);
-
     // Update statistics
     updateStats(false, true, false);
 
     // Track peak deferred count
     {
         std::lock_guard<std::mutex> statsLock(_statsMutex);
-        _stats.peakDeferred = std::max(_stats.peakDeferred, _deferredQueue.size());
+        _stats.peakDeferred = std::max(_stats.peakDeferred, queueSize);
     }
 
     // Publish event
-    publishDeferredEvent(node);
+    if (_eventBus) {
+        _eventBus->publish(NodeDeferredEvent(_graph, node, queueSize));
+    }
 
     // Notify callback
     if (_callbacks.onNodeDeferred) {
@@ -133,8 +152,7 @@ bool NodeScheduler::deferNode(const NodeHandle& node) {
     }
 
     if (_config.enableDebugLogging) {
-        ENTROPY_LOG_DEBUG_CAT("NodeScheduler",
-                              "Node deferred successfully, queue size now: " + std::to_string(_deferredQueue.size()));
+        ENTROPY_LOG_DEBUG_CAT("NodeScheduler", "Node deferred successfully, queue size now: " + std::to_string(queueSize));
     }
 
     return true;
@@ -167,12 +185,22 @@ size_t NodeScheduler::processDeferredNodes(size_t maxToSchedule) {
 
     // Schedule the nodes
     size_t scheduled = 0;
-    for (const auto& node : nodesToSchedule) {
-        if (scheduleNode(node)) {
+    for (size_t i = 0; i < nodesToSchedule.size(); ++i) {
+        if (scheduleNode(nodesToSchedule[i])) {
             scheduled++;
         } else {
-            // Scheduling failed - node was re-deferred or dropped
-            break;  // Stop if we hit capacity
+            // scheduleNode returning false means the node was dropped (it
+            // re-defers internally on capacity failure). Push the remaining
+            // extracted nodes BACK onto the deferred queue - abandoning them
+            // here removes them from the scheduling system entirely and
+            // strands WorkGraph::wait() forever. push_front in reverse to
+            // preserve FIFO order; this may transiently exceed
+            // maxDeferredNodes, which beats losing the nodes.
+            std::lock_guard<std::shared_mutex> lock(_deferredMutex);
+            for (size_t j = nodesToSchedule.size(); j > i + 1; --j) {
+                _deferredQueue.push_front(nodesToSchedule[j - 1]);
+            }
+            break;
         }
     }
 
@@ -224,12 +252,24 @@ std::function<void()> NodeScheduler::createWorkWrapper(const NodeHandle& node) {
             return;  // Scheduler is gone, do nothing
         }
 
-        // Lock the graph mutex for reading while accessing DAG structure
-        std::shared_lock<std::shared_mutex> graphLock(*_graphMutex);
-
+        // No graph lock: structure is frozen while a run is in flight
+        // (WorkGraph mutators throw between execute() and reset()), so node
+        // storage is stable and per-node state is atomic. Holding a shared
+        // lock across the work + completion callbacks acquired _graphMutex
+        // recursively in onNodeComplete/cancelDependents (UB on shared_mutex,
+        // and a deterministic deadlock once a writer queued between the two
+        // acquisitions), and self-deadlocked any node work that touched the
+        // graph.
         auto* dag = node.handleOwnerAs<Graph::DirectedAcyclicGraph<WorkGraphNode>>();
         auto* nodeData = dag ? dag->getNodeData(node) : nullptr;
         if (!nodeData) {
+            return;
+        }
+
+        // Cancelled while sitting scheduled or deferred (e.g. a parent failed):
+        // skip the work entirely - the cancellation path already accounted for
+        // this node in the graph's counters.
+        if (nodeData->state.load(std::memory_order_acquire) == NodeState::Cancelled) {
             return;
         }
 
@@ -330,15 +370,6 @@ void NodeScheduler::updateStats(bool scheduled, bool deferred, bool dropped) {
 void NodeScheduler::publishScheduledEvent(const NodeHandle& node) {
     if (_eventBus) {
         _eventBus->publish(NodeScheduledEvent(_graph, node));
-    }
-}
-
-void NodeScheduler::publishDeferredEvent(const NodeHandle& node) {
-    if (_eventBus) {
-        // Note: This is called from deferNode() which already holds an exclusive lock
-        // We can safely read the queue size here without additional locking
-        size_t queueSize = _deferredQueue.size();
-        _eventBus->publish(NodeDeferredEvent(_graph, node, queueSize));
     }
 }
 

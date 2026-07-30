@@ -108,8 +108,11 @@ struct WorkGraphNode
     /// User data pointer for custom context
     void* userData = nullptr;
 
-    /// Execution type for this node (main thread or any thread)
+    /// Execution type for this node (main thread, any thread, or pinned)
     ExecutionType executionType = ExecutionType::AnyThread;
+
+    /// Target lane when executionType == PinnedThread
+    uint32_t pinnedLane = 0;
 
     /// Reschedule tracking for yieldable nodes
     std::atomic<uint32_t> rescheduleCount{0};
@@ -141,6 +144,7 @@ struct WorkGraphNode
           name(std::move(other.name)),
           userData(other.userData),
           executionType(other.executionType),
+          pinnedLane(other.pinnedLane),
           rescheduleCount(other.rescheduleCount.load()),
           maxReschedules(other.maxReschedules),
           isYieldable(other.isYieldable) {
@@ -159,6 +163,7 @@ struct WorkGraphNode
             name = std::move(other.name);
             userData = other.userData;
             executionType = other.executionType;
+            pinnedLane = other.pinnedLane;
             rescheduleCount.store(other.rescheduleCount.load());
             maxReschedules = other.maxReschedules;
             isYieldable = other.isYieldable;
@@ -269,7 +274,8 @@ private:
 
     WorkContractGroup* _workContractGroup;  ///< External work executor
 
-    WorkContractGroup::CapacityCallback _capacityCallbackIt;  ///< Capacity callback handle
+    WorkContractGroup::CapacityCallback _capacityCallbackIt;             ///< Capacity callback handle
+    WorkContractGroup::TimedDeferralCallback _timedDeferralCallbackIt;   ///< Timed deferral callback handle
 
     WorkGraphConfig _config;  ///< Graph configuration
 
@@ -430,7 +436,7 @@ public:
      */
     NodeHandle addYieldableNode(YieldableWorkFunction work, const std::string& name = "", void* userData = nullptr,
                                 ExecutionType executionType = ExecutionType::AnyThread,
-                                std::optional<uint32_t> maxReschedules = std::nullopt);
+                                std::optional<uint32_t> maxReschedules = std::nullopt, uint32_t pinnedLane = 0);
 
     /**
      * @brief Adds a task to your workflow - it won't run until its time comes
@@ -472,7 +478,7 @@ public:
      * @endcode
      */
     NodeHandle addNode(std::function<void()> work, const std::string& name = "", void* userData = nullptr,
-                       ExecutionType executionType = ExecutionType::AnyThread);
+                       ExecutionType executionType = ExecutionType::AnyThread, uint32_t pinnedLane = 0);
 
     /**
      * @brief Wire up your workflow - tell nodes who they're waiting for
@@ -890,7 +896,8 @@ public:
      * @endcode
      */
     NodeHandle addContinuation(const std::vector<NodeHandle>& parents, std::function<void()> work,
-                               const std::string& name = "", ExecutionType executionType = ExecutionType::AnyThread);
+                               const std::string& name = "", ExecutionType executionType = ExecutionType::AnyThread,
+                               uint32_t pinnedLane = 0);
 
     /**
      * @brief Test if a node handle still points to a real node
@@ -964,7 +971,23 @@ private:
      *
      * @return How many root nodes were found and scheduled
      */
-    size_t scheduleRootsLocked();
+    /// Transitions dependency-free Pending nodes to Scheduled and returns them.
+    /// Caller must hold _graphMutex and must schedule the returned nodes AFTER
+    /// dropping it (scheduleNode can synchronously invoke the drop callback,
+    /// which re-enters _graphMutex via cancelDependents).
+    std::vector<NodeHandle> collectReadyRootsLocked();
+
+    /// Throws std::logic_error if the graph structure is frozen (execute()
+    /// called, reset() not yet). Caller must hold _graphMutex.
+    void throwIfFrozenLocked(const char* operation) const;
+
+    /// Creates and registers a node (with pinned-lane validation). Caller must
+    /// hold _graphMutex exclusively and have passed the freeze check.
+    NodeHandle addNodeLocked(WorkGraphNode&& node, void* userData, uint32_t pinnedLane);
+
+    /// Adds an edge and bumps the dependency count. Caller must hold _graphMutex
+    /// exclusively and have passed the freeze check.
+    void addDependencyLocked(NodeHandle from, const NodeHandle& to);
 
     /**
      * @brief Propagates failure through the graph - if parent fails, children can't run

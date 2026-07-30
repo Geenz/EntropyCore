@@ -170,8 +170,12 @@ public:
         if (!_freeList.empty()) {
             index = _freeList.front();
             _freeList.pop();
-            _nodes[index] = std::move(Node<T>{std::move(data), true});
-            // Generation already incremented during removal
+            // Assign fields individually: whole-Node assignment copies the
+            // temporary's default generation (1) over the slot's counter that
+            // removeNode() bumped, which would let stale handles from the
+            // previous occupant validate against this new node.
+            _nodes[index].data = std::move(data);
+            _nodes[index].occupied = true;
         } else {
             index = static_cast<uint32_t>(_nodes.size());
             _nodes.emplace_back(Node<T>{std::move(data), true});

@@ -48,7 +48,9 @@ WorkService::~WorkService() {
 }
 
 void WorkService::start() {
-    if (_running) {
+    // exchange, not check-then-set: two concurrent start() calls would both see
+    // false and spawn a double set of worker threads.
+    if (_running.exchange(true)) {
         return;  // Already running
     }
 
@@ -58,8 +60,6 @@ void WorkService::start() {
             executeWork(stoken);
         });
     }
-
-    _running = true;
 }
 
 void WorkService::requestStop() {
@@ -217,10 +217,18 @@ void WorkService::executeWork(const std::stop_token& token) {
 
     while (!token.stop_requested()) {
         WorkContractGroup* selectedGroup = nullptr;
+        WorkContractHandle contract;
 
-        // Hold shared_lock while reading from _workContractGroups
-        // Multiple workers can hold shared_lock concurrently
-        // removeWorkContractGroup() with unique_lock will wait for all readers
+        // Hold the shared_lock across BOTH the scheduler pick AND the claim
+        // (selectForExecution). The claim registers this thread in the group's
+        // own counters (selecting, then executing) before the lock is dropped,
+        // so from the instant the pointer can outlive this scope the group's
+        // destruction protocol (stop + wait on those counters) can see us.
+        // Claiming after releasing the lock reopens the window where a worker
+        // holds a raw group pointer protected by nothing, and
+        // removeWorkContractGroup()/~WorkContractGroup can free the group under
+        // it. The unique_lock side (add/remove/notifyGroupDestroyed) is the
+        // quiescence barrier that makes this sound.
         {
             std::shared_lock<std::shared_mutex> lock(_workContractGroupsMutex);
 
@@ -231,10 +239,20 @@ void WorkService::executeWork(const std::stop_token& token) {
                 // Select group if valid and not stopping
                 if (scheduleResult.group && !scheduleResult.group->isStopping()) {
                     selectedGroup = scheduleResult.group;
+                    // Drain this worker's pinned lane first (lane == worker id),
+                    // then the shared queue. hasPinnedWork is a single atomic
+                    // read, so unpinned workloads pay nothing measurable.
+                    if (selectedGroup->hasPinnedWork(stThreadId)) {
+                        contract = selectedGroup->selectForPinnedExecution(stThreadId);
+                    }
+                    if (!contract.valid()) {
+                        contract = selectedGroup->selectForExecution();
+                    }
                 }
             }
         }
-        // Shared lock released here
+        // Shared lock released here; a claimed contract keeps the group alive
+        // via its executing count until executeContract()'s final decrement.
 
         if (!selectedGroup) {
             // No work found - check for ready timers before sleeping
@@ -249,8 +267,6 @@ void WorkService::executeWork(const std::stop_token& token) {
             continue;
         }
 
-        // Try to get work from selected group
-        auto contract = selectedGroup->selectForExecution();
         if (contract.valid()) {
             // Check stop token again before executing work to prevent deadlocks during shutdown
             if (token.stop_requested()) {
@@ -346,34 +362,49 @@ WorkService::MainThreadWorkResult WorkService::executeMainThreadWork(size_t maxC
     ::EntropyEngine::Core::Debug::CpuZoneScope _cpuz("WorkService::executeMainThreadWork");
     MainThreadWorkResult result{0, 0, false};
 
-    // Get current snapshot of groups
-    std::vector<WorkContractGroup*> groups;
-    {
-        std::shared_lock<std::shared_mutex> lock(_workContractGroupsMutex);
-        groups = _workContractGroups;
-    }
-
+    // Claim under the registry shared_lock, execute outside it. An unlocked
+    // snapshot of raw group pointers would dangle if a group is removed and
+    // destroyed mid-loop; claiming under the lock hands protection to the
+    // group's own main-thread executing count before the pointer escapes
+    // (same protocol as executeWork()).
     size_t remaining = maxContracts;
+    std::vector<WorkContractGroup*> countedGroups;  // distinct groups drained (registry is small)
 
-    // Execute work from each group that has main thread work
-    for (auto* group : groups) {
-        if (group && group->hasMainThreadWork()) {
-            result.groupsWithWork++;
-            size_t executed = group->executeMainThreadWork(remaining);
-            result.contractsExecuted += executed;
-            remaining -= executed;
-
-            // Stop if we've hit our limit
-            if (remaining == 0) {
-                result.moreWorkAvailable = true;
-                break;
+    while (remaining > 0) {
+        WorkContractGroup* group = nullptr;
+        WorkContractHandle handle;
+        {
+            std::shared_lock<std::shared_mutex> lock(_workContractGroupsMutex);
+            for (auto* candidate : _workContractGroups) {
+                if (candidate && candidate->hasMainThreadWork()) {
+                    handle = candidate->selectForMainThreadExecution();
+                    if (handle.valid()) {
+                        group = candidate;
+                        break;
+                    }
+                }
             }
         }
+
+        if (!group) {
+            break;  // No claimable main thread work anywhere
+        }
+
+        if (std::find(countedGroups.begin(), countedGroups.end(), group) == countedGroups.end()) {
+            countedGroups.push_back(group);
+            result.groupsWithWork++;
+        }
+
+        // Outside the lock: the claim's executing count keeps the group alive.
+        group->executeContract(handle);
+        result.contractsExecuted++;
+        remaining--;
     }
 
     // Check if there's more work available
-    if (remaining > 0) {
-        for (auto* group : groups) {
+    {
+        std::shared_lock<std::shared_mutex> lock(_workContractGroupsMutex);
+        for (auto* group : _workContractGroups) {
             if (group && group->hasMainThreadWork()) {
                 result.moreWorkAvailable = true;
                 break;

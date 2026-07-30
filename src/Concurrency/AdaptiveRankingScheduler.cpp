@@ -28,8 +28,15 @@ AdaptiveRankingScheduler::AdaptiveRankingScheduler(const Config& config) : _conf
 
 IWorkScheduler::ScheduleResult AdaptiveRankingScheduler::selectNextGroup(
     const std::vector<WorkContractGroup*>& groups) {
-    // Phase 1: Try to execute from the current sticky group for cache locality
-    if (stThreadState.consecutiveExecutionCount < _config.maxConsecutiveExecutionCount) {
+    // Phase 1: Try to execute from the current sticky group for cache locality.
+    // The thread-local cache survives group removal, so validate before
+    // dereferencing: rankings were built from the list at lastSeenGeneration,
+    // and notifyGroupsChanged bumps the generation under the registry's unique
+    // lock, so an unchanged generation (read under the caller's shared lock)
+    // proves every cached pointer is still registered and therefore alive.
+    // On mismatch fall through to Phase 2, which rebuilds the rankings anyway.
+    if (stThreadState.consecutiveExecutionCount < _config.maxConsecutiveExecutionCount &&
+        stThreadState.lastSeenGeneration == _groupsGeneration.load(std::memory_order_relaxed)) {
         WorkContractGroup* stickyGroup = getCurrentGroupIfValid();
         if (stickyGroup && stickyGroup->scheduledCount() > 0) {
             return {stickyGroup, false};

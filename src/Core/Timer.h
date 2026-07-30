@@ -187,14 +187,14 @@ private:
      * @brief Internal constructor used by TimerService
      *
      * @param service The service managing this timer (must outlive timer)
-     * @param node WorkGraph node handle for this timer
+     * @param id TimerService-assigned identifier for this timer
      * @param interval Timer interval (for repeating timers)
      * @param repeating Whether this timer repeats
      */
-    Timer(TimerService* service, Concurrency::WorkGraph::NodeHandle node, Duration interval, bool repeating);
+    Timer(TimerService* service, uint64_t id, Duration interval, bool repeating);
 
     TimerService* _service = nullptr;
-    Concurrency::WorkGraph::NodeHandle _node;
+    uint64_t _id = 0;  ///< TimerService-assigned identifier
     Duration _interval{};
     bool _repeating = false;
     std::atomic<bool> _valid{false};

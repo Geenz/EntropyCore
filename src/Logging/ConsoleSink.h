@@ -106,10 +106,14 @@ public:
         _showLocation = show;
     }
 
-private:
+protected:
+    // protected, not private: subclasses legitimately reuse the formatting while
+    // replacing the destination - a TUI sink formats into a string buffer instead
+    // of a stream, and would otherwise have to duplicate the entire format to stay
+    // visually consistent with the plain console.
     /// Get ANSI color code for a log level
     const char* getColorForLevel(LogLevel level) const;
-    /// Format and write a log entry to the appropriate stream
+    /// Format and write a log entry to the given stream
     void formatAndWrite(std::ostream& stream, const LogEntry& entry);
 };
 

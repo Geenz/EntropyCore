@@ -61,7 +61,7 @@ WorkGraph::WorkGraph(WorkContractGroup* workContractGroup, const WorkGraphConfig
     schedulerConfig.maxDeferredNodes = _config.maxDeferredNodes;
     schedulerConfig.enableBatchScheduling = _config.enableAdvancedScheduling;
     schedulerConfig.enableDebugLogging = _config.enableDebugLogging;
-    _scheduler = std::make_unique<NodeScheduler>(_workContractGroup, this, &_graphMutex,
+    _scheduler = std::make_unique<NodeScheduler>(_workContractGroup, this,
                                                  _config.enableEvents ? getEventBus() : nullptr, schedulerConfig);
 
     // Set up safe scheduler callbacks with proper lifetime tracking
@@ -115,8 +115,12 @@ WorkGraph::WorkGraph(WorkContractGroup* workContractGroup, const WorkGraphConfig
                 // Prevent double-processing
                 bool expected = false;
                 if (nodeData->completionProcessed.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
-                    // Transition to failed state
-                    _stateManager->transitionState(node, nodeData->state.load(), NodeState::Failed);
+                    // Cancelled, not Failed: dropped nodes are Scheduled at drop
+                    // time and Scheduled->Failed is not a legal transition (the
+                    // attempt silently failed and left the node in Scheduled, a
+                    // non-terminal state, forever). The drop is still reported
+                    // via _droppedNodes below.
+                    _stateManager->transitionState(node, nodeData->state.load(), NodeState::Cancelled);
 
                     // Increment dropped count and decrement pending count
                     _droppedNodes.fetch_add(1, std::memory_order_relaxed);
@@ -161,6 +165,9 @@ WorkGraph::WorkGraph(WorkContractGroup* workContractGroup, const WorkGraphConfig
     // We process multiple rounds to keep the pipeline full
     _capacityCallbackIt = _workContractGroup->addOnCapacityAvailable([this]() {
         CallbackGuard guard(this);
+        if (_suspended.load(std::memory_order_acquire)) {
+            return;  // Suspended: deferred nodes stay deferred until resume()
+        }
         if (!_destroyed.load(std::memory_order_acquire) && _scheduler) {
             if (_config.enableDebugLogging) {
                 ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph: Capacity available callback triggered");
@@ -186,8 +193,8 @@ WorkGraph::WorkGraph(WorkContractGroup* workContractGroup, const WorkGraphConfig
         }
     });
 
-    // Set up timed deferral callback to avoid dynamic_cast in WorkService
-    _workContractGroup->setTimedDeferralCallback([this]() { return checkTimedDeferrals(); });
+    // Register timed deferral callback to avoid dynamic_cast in WorkService
+    _timedDeferralCallbackIt = _workContractGroup->addTimedDeferralCallback([this]() { return checkTimedDeferrals(); });
 
     // Register with debug system (can be disabled via config)
     if (_config.enableDebugRegistration) {
@@ -211,7 +218,34 @@ WorkGraph::~WorkGraph() {
         // This prevents new callbacks from being scheduled
         if (_workContractGroup) {
             _workContractGroup->removeOnCapacityAvailable(_capacityCallbackIt);
-            _workContractGroup->setTimedDeferralCallback(nullptr);  // Clear timed deferral callback
+            _workContractGroup->removeTimedDeferralCallback(_timedDeferralCallbackIt);
+        }
+
+        // Drain any in-flight run before tearing down. Wrapper lambdas live in
+        // the contract group's slots and reference this graph and its
+        // scheduler; destroying the graph while contracts are scheduled or
+        // executing leaves them pointing at freed memory. Use the group's own
+        // protocol: stop() blocks new selection, wait() (stopping mode) blocks
+        // until executing wrappers finish, then release our remaining
+        // contracts so nothing referencing this graph can run later, and
+        // resume the group for its other users.
+        if (_workContractGroup && _pendingNodes.load(std::memory_order_acquire) > 0) {
+            ENTROPY_LOG_WARNING_CAT(
+                "WorkGraph", "WorkGraph destroyed with pending nodes; draining in-flight work (wait() first to avoid "
+                             "this stall)");
+            _workContractGroup->stop();
+            _workContractGroup->wait();
+            {
+                std::unique_lock<std::shared_mutex> lock(_graphMutex);
+                for (auto& handle : _nodeHandles) {
+                    auto* nodeData = _graph.getNodeData(handle);
+                    if (nodeData && nodeData->handle.valid()) {
+                        nodeData->handle.unschedule();
+                        nodeData->handle.release();
+                    }
+                }
+            }
+            _workContractGroup->resume();
         }
 
         // Wait for all active callbacks to complete
@@ -236,13 +270,30 @@ WorkGraph::~WorkGraph() {
     }
 }
 
-WorkGraph::NodeHandle WorkGraph::addNode(std::function<void()> work, const std::string& name, void* userData,
-                                         ExecutionType executionType) {
-    std::unique_lock<std::shared_mutex> lock(_graphMutex);
+void WorkGraph::throwIfFrozenLocked(const char* operation) const {
+    // Build once, execute many: graph structure is frozen from execute() until
+    // reset(). The execution paths (work wrappers, completion cascade,
+    // deferred scheduling) walk node storage WITHOUT _graphMutex on the
+    // strength of this guarantee - mutation mid-run would let the node vector
+    // reallocate under them.
+    if (_executionStarted.load(std::memory_order_acquire)) {
+        throw std::logic_error(std::format(
+            "WorkGraph::{}: structure is frozen while a run is in flight; wait() for completion and reset() first",
+            operation));
+    }
+}
 
-    // Create node with the work and execution type
-    WorkGraphNode node(std::move(work), name, executionType);
+WorkGraph::NodeHandle WorkGraph::addNodeLocked(WorkGraphNode&& node, void* userData, uint32_t pinnedLane) {
+    // Caller holds _graphMutex exclusively and has passed the freeze check.
+    if (node.executionType == ExecutionType::PinnedThread &&
+        pinnedLane >= _workContractGroup->maxPinnedLanes()) {
+        // Loud and early: a node pinned to a lane nothing pumps would strand
+        // wait() at execution time, far from the mistake.
+        throw std::invalid_argument(std::format("WorkGraph::addNode: pinned lane {} out of range (maxPinnedLanes={})",
+                                                pinnedLane, _workContractGroup->maxPinnedLanes()));
+    }
     node.userData = userData;
+    node.pinnedLane = pinnedLane;
 
     // Add to graph and track as pending
     auto handle = _graph.addNode(std::move(node));
@@ -257,48 +308,29 @@ WorkGraph::NodeHandle WorkGraph::addNode(std::function<void()> work, const std::
     // Publish event if enabled
     if (auto* eventBus = getEventBus()) {
         eventBus->publish(NodeAddedEvent(this, handle));
-    }
-
-    // If execution has already started, check if this node can execute immediately
-    if (_executionStarted.load(std::memory_order_acquire)) {
-        auto* nodeData = _graph.getNodeData(handle);
-        if (nodeData && nodeData->pendingDependencies.load() == 0) {
-            // Try to transition to ready state
-            if (_stateManager->transitionState(handle, NodeState::Pending, NodeState::Ready)) {
-                // Transition to scheduled before actually scheduling
-                if (_stateManager->transitionState(handle, NodeState::Ready, NodeState::Scheduled)) {
-                    // Schedule the node
-                    _scheduler->scheduleNode(handle);
-                }
-            }
-        }
     }
 
     return handle;
 }
 
-WorkGraph::NodeHandle WorkGraph::addYieldableNode(YieldableWorkFunction work, const std::string& name, void* userData,
-                                                  ExecutionType executionType, std::optional<uint32_t> maxReschedules) {
+WorkGraph::NodeHandle WorkGraph::addNode(std::function<void()> work, const std::string& name, void* userData,
+                                         ExecutionType executionType, uint32_t pinnedLane) {
     std::unique_lock<std::shared_mutex> lock(_graphMutex);
+    throwIfFrozenLocked("addNode");
+    return addNodeLocked(WorkGraphNode(std::move(work), name, executionType), userData, pinnedLane);
+}
 
-    // Create node with yieldable work function
-    WorkGraphNode node(std::move(work), name, executionType);
-    node.userData = userData;
-    node.maxReschedules = maxReschedules;
+WorkGraph::NodeHandle WorkGraph::addYieldableNode(YieldableWorkFunction work, const std::string& name, void* userData,
+                                                  ExecutionType executionType, std::optional<uint32_t> maxReschedules,
+                                                  uint32_t pinnedLane) {
+    NodeHandle handle;
+    {
+        std::unique_lock<std::shared_mutex> lock(_graphMutex);
+        throwIfFrozenLocked("addYieldableNode");
 
-    // Add to graph and track as pending
-    auto handle = _graph.addNode(std::move(node));
-    _pendingNodes.fetch_add(1, std::memory_order_relaxed);
-
-    // Cache the handle for access later
-    _nodeHandles.push_back(handle);
-
-    // Register with state manager
-    _stateManager->registerNode(handle, NodeState::Pending);
-
-    // Publish event if enabled
-    if (auto* eventBus = getEventBus()) {
-        eventBus->publish(NodeAddedEvent(this, handle));
+        WorkGraphNode node(std::move(work), name, executionType);
+        node.maxReschedules = maxReschedules;
+        handle = addNodeLocked(std::move(node), userData, pinnedLane);
     }
 
     if (_config.enableDebugLogging) {
@@ -307,42 +339,32 @@ WorkGraph::NodeHandle WorkGraph::addYieldableNode(YieldableWorkFunction work, co
         ENTROPY_LOG_DEBUG_CAT("WorkGraph", msg);
     }
 
-    // If execution has already started, check if this node can execute immediately
-    if (_executionStarted.load(std::memory_order_acquire)) {
-        auto* nodeData = _graph.getNodeData(handle);
-        if (nodeData && nodeData->pendingDependencies.load() == 0) {
-            // Try to transition to ready state
-            if (_stateManager->transitionState(handle, NodeState::Pending, NodeState::Ready)) {
-                // Transition to scheduled before actually scheduling
-                if (_stateManager->transitionState(handle, NodeState::Ready, NodeState::Scheduled)) {
-                    // Schedule the node
-                    _scheduler->scheduleNode(handle);
-                }
-            }
-        }
-    }
-
     return handle;
 }
 
 void WorkGraph::addDependency(NodeHandle from, const NodeHandle& to) {
     std::unique_lock<std::shared_mutex> lock(_graphMutex);
+    throwIfFrozenLocked("addDependency");
+    addDependencyLocked(std::move(from), to);
+}
 
+void WorkGraph::addDependencyLocked(NodeHandle from, const NodeHandle& to) {
+    // Caller holds _graphMutex exclusively and has passed the freeze check.
     // Add edge in the DAG (this checks for cycles)
     _graph.addEdge(std::move(from), to);
 
     // Increment dependency count for the target node
     incrementDependencies(to);
-
-    // auto* toData = to.getData();
-    // if (toData) {
-    //     std::cout << "Added dependency: " << from.getData()->name << " -> " << toData->name
-    //               << " (deps now: " << toData->pendingDependencies.load() << ")" << std::endl;
-    // }
 }
 
 void WorkGraph::reset() {
     std::unique_lock<std::shared_mutex> lock(_graphMutex);
+
+    // reset() re-arms a COMPLETED graph for another run; resetting node state
+    // while wrappers are still executing would corrupt the run in flight.
+    if (_executionStarted.load(std::memory_order_acquire) && _pendingNodes.load(std::memory_order_acquire) > 0) {
+        throw std::logic_error("WorkGraph::reset: cannot reset while a run is in flight; wait() first");
+    }
 
     if (_config.enableDebugLogging) {
         ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph::reset() - resetting execution state for " +
@@ -397,6 +419,11 @@ void WorkGraph::reset() {
 void WorkGraph::clear() {
     std::unique_lock<std::shared_mutex> lock(_graphMutex);
 
+    // Destroying node storage while wrappers are executing is a use-after-free.
+    if (_executionStarted.load(std::memory_order_acquire) && _pendingNodes.load(std::memory_order_acquire) > 0) {
+        throw std::logic_error("WorkGraph::clear: cannot clear while a run is in flight; wait() first");
+    }
+
     if (_config.enableDebugLogging) {
         ENTROPY_LOG_DEBUG_CAT("Concurrency",
                               "WorkGraph::clear() - removing all " + std::to_string(_nodeHandles.size()) + " nodes");
@@ -435,57 +462,19 @@ void WorkGraph::incrementDependencies(const NodeHandle& node) {
 }
 
 size_t WorkGraph::scheduleRoots() {
-    std::shared_lock<std::shared_mutex> lock(_graphMutex);
-    return scheduleRootsLocked();
-}
-
-size_t WorkGraph::scheduleRootsLocked() {
-    // Assumes caller already holds a lock on _graphMutex
-    size_t rootCount = 0;
-
-    if (_config.enableDebugLogging) {
-        ENTROPY_LOG_DEBUG_CAT("Concurrency",
-                              "WorkGraph: Checking " + std::to_string(_nodeHandles.size()) + " nodes for roots");
+    std::vector<NodeHandle> toSchedule;
+    {
+        std::shared_lock<std::shared_mutex> lock(_graphMutex);
+        toSchedule = collectReadyRootsLocked();
     }
 
-    // Check all cached handles to find roots (nodes ready to execute)
-    size_t nodeIndex = 0;
-    for (auto& handle : _nodeHandles) {
-        if (_config.enableDebugLogging) {
-            ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph: Checking node " + std::to_string(nodeIndex++));
-        }
-        if (isHandleValid(handle)) {
-            auto* nodeData = _graph.getNodeData(handle);
-
-            // Check if this node is ready to execute (no pending dependencies)
-            if (nodeData && nodeData->pendingDependencies.load() == 0) {
-                if (_config.enableDebugLogging) {
-                    ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph: Found root node with 0 dependencies");
-                }
-                // Try to transition to ready state through state manager
-                if (_stateManager->transitionState(handle, NodeState::Pending, NodeState::Ready)) {
-                    // Now transition to scheduled before actually scheduling
-                    if (_stateManager->transitionState(handle, NodeState::Ready, NodeState::Scheduled)) {
-                        if (_config.enableDebugLogging) {
-                            ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph: About to call scheduler->scheduleNode");
-                        }
-                        // Schedule the root node
-                        bool scheduled = _scheduler->scheduleNode(handle);
-                        if (scheduled) {
-                            rootCount++;
-                            if (_config.enableDebugLogging) {
-                                ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph: Root node scheduled or deferred");
-                            }
-                        } else {
-                            if (_config.enableDebugLogging) {
-                                ENTROPY_LOG_WARNING_CAT("Concurrency", "WorkGraph: Failed to schedule root node");
-                            }
-                        }
-                    }
-                } else if (_config.enableDebugLogging) {
-                    ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph: Failed to transition root node to Ready state");
-                }
-            }
+    // Schedule outside the lock: see collectReadyRootsLocked().
+    size_t rootCount = 0;
+    for (auto& handle : toSchedule) {
+        if (_scheduler->scheduleNode(handle)) {
+            rootCount++;
+        } else if (_config.enableDebugLogging) {
+            ENTROPY_LOG_WARNING_CAT("Concurrency", "WorkGraph: Failed to schedule root node");
         }
     }
 
@@ -495,6 +484,41 @@ size_t WorkGraph::scheduleRootsLocked() {
     }
 
     return rootCount;
+}
+
+std::vector<WorkGraph::NodeHandle> WorkGraph::collectReadyRootsLocked() {
+    std::vector<NodeHandle> toSchedule;
+
+    if (_config.enableDebugLogging) {
+        ENTROPY_LOG_DEBUG_CAT("Concurrency",
+                              "WorkGraph: Checking " + std::to_string(_nodeHandles.size()) + " nodes for roots");
+    }
+
+    bool suspended = _suspended.load(std::memory_order_acquire);
+
+    // Check all cached handles to find roots (nodes ready to execute)
+    for (auto& handle : _nodeHandles) {
+        if (!isHandleValid(handle)) continue;
+
+        auto* nodeData = _graph.getNodeData(handle);
+        if (!nodeData || nodeData->pendingDependencies.load() != 0) continue;
+
+        // Try to transition to ready state through state manager
+        if (_stateManager->transitionState(handle, NodeState::Pending, NodeState::Ready)) {
+            if (suspended) {
+                // Leave in Ready; resume() schedules it
+                continue;
+            }
+            // Now transition to scheduled before actually scheduling
+            if (_stateManager->transitionState(handle, NodeState::Ready, NodeState::Scheduled)) {
+                toSchedule.push_back(handle);
+            }
+        } else if (_config.enableDebugLogging) {
+            ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph: Failed to transition root node to Ready state");
+        }
+    }
+
+    return toSchedule;
 }
 
 void WorkGraph::suspend() {
@@ -522,16 +546,24 @@ void WorkGraph::resume() {
             }
         }
 
-        // Check if any nodes became ready while we were suspended and schedule them
-        std::shared_lock<std::shared_mutex> lock(_graphMutex);
-        for (const auto& handle : _nodeHandles) {
-            auto* nodeData = _graph.getNodeData(handle);
-            if (nodeData && nodeData->state.load() == NodeState::Ready) {
-                // Try to transition to scheduled
-                if (_stateManager->transitionState(handle, NodeState::Ready, NodeState::Scheduled)) {
-                    _scheduler->scheduleNode(handle);
+        // Check if any nodes became ready while we were suspended, then
+        // schedule them AFTER dropping the lock: scheduleNode's drop callback
+        // re-enters _graphMutex via cancelDependents.
+        std::vector<NodeHandle> toSchedule;
+        {
+            std::shared_lock<std::shared_mutex> lock(_graphMutex);
+            for (const auto& handle : _nodeHandles) {
+                auto* nodeData = _graph.getNodeData(handle);
+                if (nodeData && nodeData->state.load() == NodeState::Ready) {
+                    // Try to transition to scheduled
+                    if (_stateManager->transitionState(handle, NodeState::Ready, NodeState::Scheduled)) {
+                        toSchedule.push_back(handle);
+                    }
                 }
             }
+        }
+        for (auto& handle : toSchedule) {
+            _scheduler->scheduleNode(handle);
         }
     }
 }
@@ -541,31 +573,42 @@ void WorkGraph::execute() {
         ENTROPY_LOG_INFO_CAT("Concurrency", "WorkGraph::execute() starting");
     }
 
-    // Need exclusive lock to prevent nodes being added during execution startup
-    std::unique_lock<std::shared_mutex> lock(_graphMutex);
+    std::vector<NodeHandle> toSchedule;
+    {
+        // Exclusive lock: freezes the structure (mutators throw once
+        // _executionStarted is set) and collects the roots atomically with it.
+        std::unique_lock<std::shared_mutex> lock(_graphMutex);
 
-    bool expected = false;
-    if (!_executionStarted.compare_exchange_strong(expected, true)) {
-        throw std::runtime_error("WorkGraph execution already started");
+        bool expected = false;
+        if (!_executionStarted.compare_exchange_strong(expected, true)) {
+            throw std::runtime_error("WorkGraph execution already started");
+        }
+
+        toSchedule = collectReadyRootsLocked();
     }
 
-    // Schedule all root nodes to start execution while holding the lock
-    // This eliminates the race window between setting _executionStarted and scheduling roots
-    size_t roots = scheduleRootsLocked();
+    // Cycle check before scheduling: pending nodes but no schedulable root
+    // (and not suspended, which legitimately leaves roots in Ready).
+    if (toSchedule.empty() && !_suspended.load(std::memory_order_acquire) && getPendingCount() > 0) {
+        auto msg = std::format("ERROR: No roots found. Pending count: {}, node count: {}", getPendingCount(),
+                               _nodeHandles.size());
+        ENTROPY_LOG_ERROR_CAT("WorkGraph", msg);
+        throw std::runtime_error("WorkGraph has no root nodes but has pending work - possible cycle?");
+    }
 
-    if (_config.enableDebugLogging) {
-        ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph::execute() scheduled " + std::to_string(roots) + " root nodes");
-        if (_scheduler) {
-            size_t deferred = _scheduler->getDeferredCount();
-            if (deferred > 0) {
-                ENTROPY_LOG_WARNING_CAT("Concurrency", "WorkGraph::execute() deferred " + std::to_string(deferred) +
-                                                           " nodes during startup");
-            }
+    // Schedule outside the lock: scheduleNode can synchronously invoke the drop
+    // callback (cancelDependents re-enters _graphMutex), and scheduled work can
+    // start completing on worker threads immediately.
+    size_t roots = 0;
+    for (auto& handle : toSchedule) {
+        if (_scheduler->scheduleNode(handle)) {
+            roots++;
         }
     }
 
-    // Now safe to unlock
-    lock.unlock();
+    if (_config.enableDebugLogging) {
+        ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph::execute() scheduled " + std::to_string(roots) + " root nodes");
+    }
 
     // After unlocking, process any deferred nodes
     if (_scheduler) {
@@ -584,13 +627,6 @@ void WorkGraph::execute() {
                     "Concurrency", "WorkGraph::execute() processDeferredNodes returned " + std::to_string(processed));
             }
         }
-    }
-
-    if (roots == 0 && getPendingCount() > 0) {
-        auto msg = std::format("ERROR: No roots found. Pending count: {}, node count: {}", getPendingCount(),
-                               _nodeHandles.size());
-        ENTROPY_LOG_ERROR_CAT("WorkGraph", msg);
-        throw std::runtime_error("WorkGraph has no root nodes but has pending work - possible cycle?");
     }
 
     if (_config.enableDebugLogging) {
@@ -620,20 +656,64 @@ bool WorkGraph::scheduleNode(const NodeHandle& node) {
 }
 
 void WorkGraph::onNodeComplete(const NodeHandle& node) {
-    auto* nodeData = _graph.getNodeData(node);
-    if (!nodeData) return;
+    std::vector<NodeHandle> toSchedule;
+    {
+        // ONE shared scope covers the completion transition AND the child
+        // dependency decrements. This is load-bearing for two reasons:
+        // 1. Node storage can reallocate under addNode's exclusive lock, so
+        //    every nodeData/childData dereference must sit inside a scope.
+        // 2. addDependencyLocked's terminal-parent check relies on its
+        //    exclusive section ordering entirely before this scope (edge seen
+        //    here, its increment matched by our decrement) or entirely after
+        //    (parent observed Completed, increment skipped). Splitting the
+        //    transition and the decrements into separate scopes lets an edge
+        //    slip between them and the child's count underflows.
+        std::shared_lock<std::shared_mutex> lock(_graphMutex);
 
-    // Prevent double-processing using atomic flag
-    bool expected = false;
-    if (!nodeData->completionProcessed.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
-        if (_config.enableDebugLogging) {
-            ENTROPY_LOG_WARNING_CAT("Concurrency", "WorkGraph: Node already processed completion");
+        auto* nodeData = _graph.getNodeData(node);
+        if (!nodeData) return;
+
+        // Prevent double-processing using atomic flag
+        bool expected = false;
+        if (!nodeData->completionProcessed.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+            if (_config.enableDebugLogging) {
+                ENTROPY_LOG_WARNING_CAT("Concurrency", "WorkGraph: Node already processed completion");
+            }
+            return;  // Already processed
         }
-        return;  // Already processed
-    }
 
-    // Transition state through state manager
-    _stateManager->transitionState(node, NodeState::Executing, NodeState::Completed);
+        // Transition state through state manager
+        _stateManager->transitionState(node, NodeState::Executing, NodeState::Completed);
+
+        // Decrement child dependency counts; collect newly-ready children
+        auto children = this->getChildren(node);
+        bool suspended = _suspended.load(std::memory_order_acquire);
+        for (auto& child : children) {
+            auto* childData = _graph.getNodeData(child);
+            if (!childData) continue;
+
+            // Skip if child is cancelled
+            if (childData->state.load(std::memory_order_acquire) == NodeState::Cancelled) {
+                continue;
+            }
+
+            uint32_t remaining = childData->pendingDependencies.fetch_sub(1, std::memory_order_acq_rel) - 1;
+
+            if (remaining == 0 && childData->failedParentCount.load(std::memory_order_acquire) == 0) {
+                if (_stateManager->transitionState(child, NodeState::Pending, NodeState::Ready)) {
+                    if (suspended) {
+                        // Leave the child in Ready; resume() schedules it.
+                        // (Previously the completion cascade ignored suspension
+                        // and kept scheduling behind suspend()'s back.)
+                        continue;
+                    }
+                    if (_stateManager->transitionState(child, NodeState::Ready, NodeState::Scheduled)) {
+                        toSchedule.push_back(child);
+                    }
+                }
+            }
+        }
+    }
 
     // Update counters
     _completedNodes.fetch_add(1, std::memory_order_relaxed);
@@ -645,58 +725,15 @@ void WorkGraph::onNodeComplete(const NodeHandle& node) {
         _waitCondition.notify_all();
     }
 
-    // Call completion callback if set
+    // Call completion callback if set (no locks held)
     if (_onNodeComplete) {
         _onNodeComplete(node);
     }
 
-    // Schedule children whose dependencies are now satisfied
-    // First, copy the children list while holding the lock (minimize critical section)
-    std::vector<NodeHandle> children;
-    {
-        std::shared_lock<std::shared_mutex> lock(_graphMutex);
-        children = this->getChildren(node);
-    }  // Release lock immediately
-
-    // Process children outside the lock to minimize contention
-    for (auto& child : children) {
-        auto* childData = _graph.getNodeData(child);
-        if (!childData) continue;
-
-        // Skip if child is cancelled
-        if (childData->state.load(std::memory_order_acquire) == NodeState::Cancelled) {
-            if (_config.enableDebugLogging) {
-                ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph: Skipping cancelled child node");
-            }
-            continue;
-        }
-
-        // Decrement dependency count
-        uint32_t remaining = childData->pendingDependencies.fetch_sub(1, std::memory_order_acq_rel) - 1;
-        if (_config.enableDebugLogging) {
-            ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph: Child node dependencies decremented");
-        }
-
-        // If all dependencies satisfied, try to transition to ready and schedule
-        if (remaining == 0 && childData->failedParentCount.load(std::memory_order_acquire) == 0) {
-            if (_config.enableDebugLogging) {
-                ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph: Child node is ready - all dependencies satisfied");
-            }
-            if (_stateManager->transitionState(child, NodeState::Pending, NodeState::Ready)) {
-                // Transition to scheduled before actually scheduling
-                if (_stateManager->transitionState(child, NodeState::Ready, NodeState::Scheduled)) {
-                    // Schedule the child immediately
-                    _scheduler->scheduleNode(child);
-                }
-                if (_config.enableDebugLogging) {
-                    ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph: Scheduled child node");
-                }
-            } else if (_config.enableDebugLogging) {
-                ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph: Failed to transition child node to Ready state");
-            }
-        } else if (_config.enableDebugLogging && remaining > 0) {
-            ENTROPY_LOG_DEBUG_CAT("Concurrency", "WorkGraph: Child node still has dependencies");
-        }
+    // Schedule children outside the lock: scheduleNode's drop callback
+    // re-enters _graphMutex via cancelDependents.
+    for (auto& child : toSchedule) {
+        _scheduler->scheduleNode(child);
     }
 
     // Note: Processing of deferred nodes is now handled via the
@@ -785,30 +822,41 @@ size_t WorkGraph::checkTimedDeferrals() {
 }
 
 WorkGraph::NodeHandle WorkGraph::addContinuation(const std::vector<NodeHandle>& parents, std::function<void()> work,
-                                                 const std::string& name, ExecutionType executionType) {
-    // Create the continuation node with specified execution type
-    auto continuation = addNode(std::move(work), name, nullptr, executionType);
+                                                 const std::string& name, ExecutionType executionType,
+                                                 uint32_t pinnedLane) {
+    // Node and edges under ONE exclusive section: a concurrent execute() between
+    // separate addNode/addDependency acquisitions could freeze the graph and
+    // schedule the still-edgeless continuation as a root, running it before its
+    // parents.
+    std::unique_lock<std::shared_mutex> lock(_graphMutex);
+    throwIfFrozenLocked("addContinuation");
 
-    // Add dependencies from all parents
+    auto continuation = addNodeLocked(WorkGraphNode(std::move(work), name, executionType), nullptr, pinnedLane);
     for (const auto& parent : parents) {
-        addDependency(parent, continuation);
+        addDependencyLocked(parent, continuation);
     }
 
     return continuation;
 }
 
 void WorkGraph::onNodeFailed(const NodeHandle& node) {
-    auto* nodeData = _graph.getNodeData(node);
-    if (!nodeData) return;
+    {
+        // Shared scope for the nodeData dereference (storage can reallocate
+        // under addNode's exclusive lock) and to order the terminal transition
+        // against addDependencyLocked's terminal-parent check.
+        std::shared_lock<std::shared_mutex> lock(_graphMutex);
+        auto* nodeData = _graph.getNodeData(node);
+        if (!nodeData) return;
 
-    // Prevent double-processing
-    bool expected = false;
-    if (!nodeData->completionProcessed.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
-        return;  // Already processed
+        // Prevent double-processing
+        bool expected = false;
+        if (!nodeData->completionProcessed.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+            return;  // Already processed
+        }
+
+        // Transition state through state manager
+        _stateManager->transitionState(node, NodeState::Executing, NodeState::Failed);
     }
-
-    // Transition state through state manager
-    _stateManager->transitionState(node, NodeState::Executing, NodeState::Failed);
 
     // Update counters
     _failedNodes.fetch_add(1, std::memory_order_relaxed);
@@ -820,7 +868,7 @@ void WorkGraph::onNodeFailed(const NodeHandle& node) {
         _waitCondition.notify_all();
     }
 
-    // Cancel all dependent nodes
+    // Cancel all dependent nodes (takes its own lock scopes)
     cancelDependents(node);
 }
 

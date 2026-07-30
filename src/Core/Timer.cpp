@@ -16,16 +16,17 @@ namespace EntropyEngine
 namespace Core
 {
 
-Timer::Timer(TimerService* service, Concurrency::WorkGraph::NodeHandle node, Duration interval, bool repeating)
-    : _service(service), _node(std::move(node)), _interval(interval), _repeating(repeating), _valid(true) {}
+Timer::Timer(TimerService* service, uint64_t id, Duration interval, bool repeating)
+    : _service(service), _id(id), _interval(interval), _repeating(repeating), _valid(true) {}
 
 Timer::Timer(Timer&& other) noexcept
     : _service(other._service),
-      _node(std::move(other._node)),
+      _id(other._id),
       _interval(other._interval),
       _repeating(other._repeating),
       _valid(other._valid.load(std::memory_order_acquire)) {
     other._service = nullptr;
+    other._id = 0;
     other._valid.store(false, std::memory_order_release);
 }
 
@@ -36,13 +37,14 @@ Timer& Timer::operator=(Timer&& other) noexcept {
 
         // Transfer ownership
         _service = other._service;
-        _node = std::move(other._node);
+        _id = other._id;
         _interval = other._interval;
         _repeating = other._repeating;
         _valid.store(other._valid.load(std::memory_order_acquire), std::memory_order_release);
 
         // Invalidate source
         other._service = nullptr;
+        other._id = 0;
         other._valid.store(false, std::memory_order_release);
     }
     return *this;
@@ -57,7 +59,7 @@ void Timer::invalidate() {
     bool expected = true;
     if (_valid.compare_exchange_strong(expected, false, std::memory_order_acq_rel)) {
         if (_service) {
-            _service->cancelTimer(_node);
+            _service->cancelTimer(_id);
         }
     }
 }

@@ -64,6 +64,7 @@ class FileSink : public ILogSink
 private:
     mutable std::mutex _mutex;
     std::ofstream _file;
+    std::string _path;
     LogLevel _minLevel = LogLevel::Trace;
     bool _showThreadId = true;
     bool _showLocation = true;
@@ -95,6 +96,18 @@ public:
      * @return true if the file is open and writable
      */
     bool isOpen() const;
+
+    /**
+     * @brief The path this sink was constructed with
+     *
+     * Returned whether or not the open succeeded, so a caller can report the
+     * path it failed on. Immutable after construction, hence no lock.
+     *
+     * @return The log file path
+     */
+    const std::string& path() const {
+        return _path;
+    }
 
     /**
      * @brief Enable/disable thread ID in output

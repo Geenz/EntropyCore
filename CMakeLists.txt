@@ -441,6 +441,7 @@ if(ENTROPY_BUILD_TESTS)
             Tests/Concurrency/WorkContractGroupLifetimeTests.cpp
             Tests/Concurrency/WorkContractGroupReentranceTests.cpp
             Tests/Concurrency/WorkContractHighContentionTests.cpp
+            Tests/Concurrency/ThreadPinningTests.cpp
             Tests/Concurrency/MainThreadWorkTests.cpp
             Tests/Concurrency/WorkServiceTests.cpp
     )

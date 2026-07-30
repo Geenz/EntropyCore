@@ -20,7 +20,7 @@ namespace Logging
 {
 
 FileSink::FileSink(const std::string& path, bool append, bool showThreadId)
-    : _showThreadId(showThreadId) {
+    : _path(path), _showThreadId(showThreadId) {
     const auto mode = append ? (std::ios::out | std::ios::app) : (std::ios::out | std::ios::trunc);
     _file.open(path, mode);
     // Deliberately no throw and no diagnostic here: a sink that cannot open its
