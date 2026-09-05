@@ -103,7 +103,8 @@ bool AdaptiveRankingScheduler::needsRankingUpdate(const std::vector<WorkContract
 }
 
 void AdaptiveRankingScheduler::updateRankings(const std::vector<WorkContractGroup*>& groups) {
-    std::vector<GroupRank> rankings;
+    std::vector<GroupRank>& rankings = stThreadState.rankScratch;
+    rankings.clear();
 
     // Calculate rankings for each group
     for (auto* group : groups) {

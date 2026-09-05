@@ -17,12 +17,12 @@
 
 #include "../Core/EntropyObject.h"
 #include "FileOperationHandle.h"
+#include "FileStream.h"
 
 namespace EntropyEngine::Core::IO
 {
 
-// Forward declarations
-class FileStream;
+// Forward declaration; VirtualFileSystem.h includes this header, so only fwd-declare here
 class VirtualFileSystem;
 }  // namespace EntropyEngine::Core::IO
 

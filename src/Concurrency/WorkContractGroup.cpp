@@ -271,7 +271,11 @@ ScheduleResult WorkContractGroup::scheduleContract(const WorkContractHandle& han
     {
         std::shared_lock<std::shared_mutex> lock(_concurrencyProviderMutex);
         if (_concurrencyProvider) {
-            _concurrencyProvider->notifyWorkAvailable(this);
+            if (slot.executionType == ExecutionType::MainThread) {
+                _concurrencyProvider->notifyMainThreadWorkAvailable(this);
+            } else {
+                _concurrencyProvider->notifyWorkAvailableFor(this, slot.executionType, slot.pinnedLane);
+            }
         }
     }
 
@@ -436,6 +440,12 @@ bool WorkContractGroup::isValidHandle(const WorkContractHandle& handle) const no
 }
 
 WorkContractHandle WorkContractGroup::selectForExecution(std::optional<std::reference_wrapper<uint64_t>> bias) {
+    // Empty-queue skip: one atomic load instead of the guard's _waitMutex round trip.
+    // A stale read is possible right after a setter returns; safe since callers re-poll within a bounded park timeout.
+    if (_readyContracts->isEmpty()) {
+        return WorkContractHandle();
+    }
+
     // RAII guard to track threads in selection
     struct SelectionGuard
     {
@@ -542,7 +552,7 @@ WorkContractHandle WorkContractGroup::claimBackgroundContract(SignalTreeBase& tr
 
 WorkContractHandle WorkContractGroup::selectForPinnedExecution(size_t lane,
                                                                std::optional<std::reference_wrapper<uint64_t>> bias) {
-    if (lane >= _pinnedLanes.size()) {
+    if (lane >= _pinnedLanes.size() || _pinnedLanes[lane]->isEmpty()) {
         return WorkContractHandle();
     }
 
@@ -609,6 +619,11 @@ bool WorkContractGroup::hasPinnedWork(size_t lane) const noexcept {
 
 WorkContractHandle WorkContractGroup::selectForMainThreadExecution(
     std::optional<std::reference_wrapper<uint64_t>> bias) {
+    // See selectForExecution: skip registration entirely on an empty queue.
+    if (_mainThreadContracts->isEmpty()) {
+        return WorkContractHandle();
+    }
+
     // RAII guard to track threads in selection
     struct SelectionGuard
     {

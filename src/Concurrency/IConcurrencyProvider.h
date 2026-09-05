@@ -19,6 +19,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 namespace EntropyEngine
 {
 namespace Core
@@ -27,6 +29,7 @@ namespace Concurrency
 {
 
 class WorkContractGroup;
+enum class ExecutionType : uint8_t;  // WorkGraphTypes.h; forward-declared to keep this header dependency-free
 
 /**
  * @brief Interface for concurrency providers that execute work from WorkContractGroups
@@ -86,6 +89,14 @@ public:
      * @param group The group that has new work available (optional, for routing)
      */
     virtual void notifyWorkAvailable(WorkContractGroup* group = nullptr) = 0;
+
+    /// Classifies the wake by @p type/@p lane so a provider can skip unreachable threads.
+    /// Never called for ExecutionType::MainThread; see notifyMainThreadWorkAvailable().
+    virtual void notifyWorkAvailableFor(WorkContractGroup* group, ExecutionType type, uint32_t lane) {
+        (void)type;
+        (void)lane;
+        notifyWorkAvailable(group);
+    }
 
     /**
      * @brief Called when a group is being destroyed

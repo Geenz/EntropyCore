@@ -86,12 +86,25 @@ private:
      * between threads. This variance helps prevent thundering herd effects during
      * work distribution.
      */
+    /**
+     * @brief Group ranking data for sorting.
+     *
+     * Simple struct used when computing rankings. We calculate a rank score
+     * for each group and sort by it. Higher rank = higher priority.
+     */
+    struct GroupRank
+    {
+        WorkContractGroup* group;
+        double rank;
+    };
+
     struct ThreadState
     {
         size_t currentGroupIndex = 0;                  ///< Current position in rankedGroups (thread affinity position)
         size_t consecutiveExecutionCount = 0;          ///< Number of consecutive executions on current group
         size_t rankingUpdateCounter = 0;               ///< Counts work done since last ranking update
         std::vector<WorkContractGroup*> rankedGroups;  ///< Thread-local group priority ordering
+        std::vector<GroupRank> rankScratch;            ///< Reused by updateRankings; never allocates in steady state
         uint64_t lastSeenGeneration = 0;               ///< Generation counter for detecting group list changes
 
         void reset() {
@@ -99,6 +112,7 @@ private:
             consecutiveExecutionCount = 0;
             rankingUpdateCounter = 0;
             rankedGroups.clear();
+            rankScratch.clear();
             lastSeenGeneration = 0;
         }
     };
@@ -113,18 +127,6 @@ private:
 
     // Generation counter for detecting group list changes
     std::atomic<uint64_t> _groupsGeneration{0};
-
-    /**
-     * @brief Group ranking data for sorting.
-     *
-     * Simple struct used when computing rankings. We calculate a rank score
-     * for each group and sort by it. Higher rank = higher priority.
-     */
-    struct GroupRank
-    {
-        WorkContractGroup* group;
-        double rank;
-    };
 
 public:
     /**

@@ -170,7 +170,7 @@ std::optional<std::string> getAppDataPath(const std::string& appName) {
     return result;
 
 #elif defined(_WIN32)
-    // Windows: %APPDATA%\{appName}\
+    // Windows: %APPDATA%/{appName}
     PWSTR appDataPath = nullptr;
     if (FAILED(SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, nullptr, &appDataPath))) {
         return std::nullopt;
@@ -250,7 +250,7 @@ std::optional<std::string> getAppCachePath(const std::string& appName) {
     return result;
 
 #elif defined(_WIN32)
-    // Windows: %LOCALAPPDATA%\{appName}\
+    // Windows: %LOCALAPPDATA%/{appName}
     PWSTR localAppDataPath = nullptr;
     if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &localAppDataPath))) {
         return std::nullopt;

@@ -19,6 +19,7 @@
 
 #pragma once
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <limits>
 #include <memory>
@@ -103,6 +104,20 @@ class WorkService : public IConcurrencyProvider, public ::EntropyEngine::Core::E
     std::condition_variable _workAvailableCV;
     std::mutex _workAvailableMutex;
     std::atomic<bool> _workAvailable{false};
+
+    /// Per-lane wake channel: seq must be bumped after the ready bit (park predicate order);
+    /// parked lets a notifier skip lanes that are not sleeping.
+    struct alignas(64) LaneWake
+    {
+        std::atomic<uint64_t> seq{0};
+        std::atomic<uint32_t> parked{0};
+    };
+    std::vector<LaneWake> _laneWake;  ///< Sized in the ctor, never resized: notifiers index it lock-free
+
+    /// One bit per parked worker. Read only to SKIP a wake, so a stale set bit is
+    /// harmless and a stale clear is not: bits are never shared between lanes.
+    std::atomic<uint64_t> _parkedMask{0};
+    bool _parkedMaskCoversPool = false;  ///< False past 64 lanes; the mask is then unused
 
 public:
     /**
@@ -358,7 +373,14 @@ public:
 
     // IConcurrencyProvider interface implementation
     void notifyWorkAvailable(WorkContractGroup* group = nullptr) override;
+    void notifyWorkAvailableFor(WorkContractGroup* group, ExecutionType type, uint32_t lane) override;
     void notifyGroupDestroyed(WorkContractGroup* group) override;
+
+    /// No-op: worker threads can never claim main-thread contracts, so waking one
+    /// to discover that is pure loss. The caller pumps via executeMainThreadWork().
+    void notifyMainThreadWorkAvailable(WorkContractGroup* group = nullptr) override {
+        (void)group;
+    }
 
     /**
      * @brief Execute main thread targeted work from all registered groups
@@ -468,8 +490,17 @@ private:
      * Users interact with the system through WorkContractGroup and handles.
      *
      * @param token Stop token for cooperative thread cancellation
+     * @param wake This worker's wake channel; read via this reference, never through _laneWake directly.
      */
-    void executeWork(const std::stop_token& token);
+    void executeWork(const std::stop_token& token, LaneWake& wake);
+
+    /// wakeSnapshot must be read before the poll that just failed; the predicate consumes
+    /// wake.seq (never clears it) so a notify between poll and wait is not lost.
+    void parkUntilWork(const std::stop_token& token, LaneWake& wake, uint64_t wakeSnapshot,
+                       std::chrono::nanoseconds timeout);
+
+    /// Lane-targeted half of notifyWorkAvailableFor(); see its definition.
+    void notifyPinnedWorkAvailable(WorkContractGroup* group, uint32_t lane);
 
     /**
      * @brief Checks all work graphs for ready timed deferrals (timers)
@@ -496,6 +527,10 @@ private:
     /// Provides a stable thread ID (0 to threadCount-1) for the lifetime of each worker thread.
     /// Thread-local because each thread needs its own unique, persistent identifier.
     static thread_local size_t stThreadId;
+
+    /// The service whose worker loop is running on this thread, null on every other
+    /// thread. stThreadId alone cannot say that: it reads 0 on non-workers too.
+    static thread_local WorkService* stOwner;
 };
 
 }  // namespace Concurrency
