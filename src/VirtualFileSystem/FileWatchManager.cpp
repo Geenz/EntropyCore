@@ -77,7 +77,7 @@ public:
     explicit FileWatchListener(FileWatchManager* manager) : _manager(manager) {}
 
     void handleFileAction(efsw::WatchID watchId, const std::string& dir, const std::string& filename,
-                          efsw::Action action, std::string oldFilename) override {
+                          efsw::Action action, const std::string& oldFilename) override {
         // Find which slot this watch belongs to
         uint32_t slotIndex = _manager->findSlotByEfswId(watchId);
         if (slotIndex == UINT32_MAX) {

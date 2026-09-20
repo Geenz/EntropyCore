@@ -3,6 +3,7 @@
 //
 
 #pragma once
+#include <cstddef>
 #include <functional>
 #include <type_traits>
 #include <utility>
@@ -256,6 +257,13 @@ public:
     template <class U, class = std::enable_if_t<std::is_base_of_v<T, U>>>
     WeakRef& operator=(const RefObject<U>& ref) noexcept {
         return operator=(RefObject<T>(ref));
+    }
+
+    /// Clear the reference. Needed so `weak = {}` resolves unambiguously to this
+    /// overload instead of tying between the copy/move/RefObject<T> conversions.
+    WeakRef& operator=(std::nullptr_t) noexcept {
+        reset();
+        return *this;
     }
 
     /**
