@@ -9,11 +9,14 @@
 
 #include "WorkContractGroup.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <format>
 #include <iostream>
 #include <limits>
+#include <thread>
+#include <type_traits>
 
 #include <tracy/Tracy.hpp>  // main-thread work-queue profiling (per-frame "gap")
 
@@ -29,6 +32,75 @@ namespace Core
 {
 namespace Concurrency
 {
+static_assert(sizeof(std::chrono::steady_clock::rep) == sizeof(int64_t) &&
+                  std::is_signed_v<std::chrono::steady_clock::rep>,
+              "ContractSlot::dueNs stores steady_clock ticks in an int64_t");
+
+static int64_t toTicks(std::chrono::steady_clock::time_point t) noexcept {
+    return static_cast<int64_t>(t.time_since_epoch().count());
+}
+
+static std::chrono::steady_clock::time_point fromTicks(int64_t ticks) noexcept {
+    return std::chrono::steady_clock::time_point(std::chrono::steady_clock::duration(ticks));
+}
+
+/// Packs a slot generation (high 32 bits) and state (low 32 bits) into one word.
+static constexpr uint64_t packSlot(uint32_t generation, ContractState state) noexcept {
+    return (static_cast<uint64_t>(generation) << 32) | static_cast<uint32_t>(state);
+}
+
+/// Generation half of a packed slot word.
+static constexpr uint32_t slotGeneration(uint64_t word) noexcept {
+    return static_cast<uint32_t>(word >> 32);
+}
+
+/// State half of a packed slot word.
+static constexpr ContractState slotState(uint64_t word) noexcept {
+    return static_cast<ContractState>(static_cast<uint32_t>(word));
+}
+
+/// True if a contract with due time @p dueNs (0: none) may run. Reads the clock at most
+/// once per @p nowNs, which caches it for one selection pass (0 until first read).
+static bool isDue(int64_t dueNs, int64_t& nowNs) noexcept {
+    if (dueNs == 0) return true;
+    if (nowNs == 0) nowNs = toTicks(std::chrono::steady_clock::now());
+    return dueNs <= nowNs;
+}
+
+/// Peeking or one of its handoff states: the peeking worker owns the next transition.
+static bool isPeekState(ContractState state) noexcept {
+    return state == ContractState::Peeking || state == ContractState::PeekReleased ||
+           state == ContractState::PeekUnscheduled;
+}
+
+/// Result of a schedule whose CAS from (@p generation, Allocated) found @p word instead.
+static ScheduleResult scheduleFailure(uint64_t word, uint32_t generation) noexcept {
+    if (slotGeneration(word) != generation) {
+        return ScheduleResult::Invalid;  // the handle's contract is gone
+    }
+    switch (slotState(word)) {
+        case ContractState::Scheduled:
+        case ContractState::Peeking:
+            return ScheduleResult::AlreadyScheduled;
+        case ContractState::Executing:
+            return ScheduleResult::Executing;
+        case ContractState::PeekUnscheduled:
+            return ScheduleResult::TryAgainLater;  // the peeking worker has not returned it to Allocated yet
+        default:
+            return ScheduleResult::Invalid;
+    }
+}
+
+/// Reads a packed slot word, yielding while a worker holds the slot in a peek state.
+static uint64_t loadSettledWord(const std::atomic<uint64_t>& word) {
+    uint64_t current = word.load(std::memory_order_acquire);
+    while (isPeekState(slotState(current))) {
+        std::this_thread::yield();
+        current = word.load(std::memory_order_acquire);
+    }
+    return current;
+}
+
 static size_t roundUpToPowerOf2(size_t n) {
     if (n <= 1) return 1;
     return static_cast<size_t>(std::pow(2, std::ceil(std::log2(n))));
@@ -58,6 +130,11 @@ WorkContractGroup::WorkContractGroup(size_t capacity, std::string name, size_t m
         _pinnedLanes.push_back(createSignalTree(capacity));
     }
 
+    // Every slot starts Free at generation 1
+    for (auto& slot : _contracts) {
+        slot.word.store(packSlot(1, ContractState::Free), std::memory_order_relaxed);
+    }
+
     // Initialize the lock-free free list
     // Build a linked list through all slots
     for (size_t i = 0; i < _capacity - 1; ++i) {
@@ -75,13 +152,15 @@ void WorkContractGroup::releaseAllContracts() {
     for (uint32_t i = 0; i < _capacity; ++i) {
         auto& slot = _contracts[i];
 
-        // Check if this slot is occupied (not free)
-        ContractState currentState = slot.state.load(std::memory_order_acquire);
+        // Check if this slot is occupied (not free). After stop() and wait() no worker is
+        // peeking; a caller pumping the group outside a provider may still be.
+        uint64_t word = loadSettledWord(slot.word);
+        const ContractState currentState = slotState(word);
+
         if (currentState != ContractState::Free) {
-            // Try to transition directly to Free state
-            ContractState expected = currentState;
-            if (slot.state.compare_exchange_strong(expected, ContractState::Free, std::memory_order_acq_rel)) {
-                // Successfully transitioned, now clean up
+            // Free it with a new generation in one step
+            if (slot.word.compare_exchange_strong(word, packSlot(slotGeneration(word) + 1, ContractState::Free),
+                                                  std::memory_order_acq_rel)) {
                 bool isMainThread = (slot.executionType == ExecutionType::MainThread);
                 returnSlotToFreeList(i, currentState, isMainThread);
             }
@@ -96,15 +175,17 @@ void WorkContractGroup::unscheduleAllContracts() {
     for (uint32_t i = 0; i < _capacity; ++i) {
         auto& slot = _contracts[i];
 
-        // Check if this slot is scheduled
-        ContractState currentState = slot.state.load(std::memory_order_acquire);
-        if (currentState == ContractState::Scheduled) {
+        // Check if this slot is scheduled; see releaseAllContracts() for the peek wait
+        uint64_t word = loadSettledWord(slot.word);
+
+        if (slotState(word) == ContractState::Scheduled) {
             // Try to transition from Scheduled to Allocated
-            ContractState expected = ContractState::Scheduled;
-            if (slot.state.compare_exchange_strong(expected, ContractState::Allocated, std::memory_order_acq_rel)) {
+            if (slot.word.compare_exchange_strong(word, packSlot(slotGeneration(word), ContractState::Allocated),
+                                                  std::memory_order_acq_rel)) {
                 // Remove from the slot's own ready queue
                 bool isMainThread = (slot.executionType == ExecutionType::MainThread);
                 readyTreeFor(slot).clear(i);
+                clearDue(slot);
 
                 // Decrement under _waitMutex and notify while holding it so a
                 // waiter can only observe the zero once we are done with the group.
@@ -139,19 +220,6 @@ WorkContractGroup::~WorkContractGroup() {
     // This ensures no contracts are left hanging when the group is destroyed
     releaseAllContracts();
 
-    // Validate that all contracts have been properly cleaned up
-    ENTROPY_DEBUG_BLOCK(
-        size_t activeCount = _activeCount.load(std::memory_order_acquire);
-        ENTROPY_ASSERT(activeCount == 0, "WorkContractGroup destroyed with active contracts still allocated");
-
-        // Double-check that no threads are still selecting
-        size_t selectingCount = _selectingCount.load(std::memory_order_acquire);
-        ENTROPY_ASSERT(selectingCount == 0, "WorkContractGroup destroyed with threads still in selectForExecution");
-
-        size_t mainThreadSelectingCount = _mainThreadSelectingCount.load(std::memory_order_acquire);
-        ENTROPY_ASSERT(mainThreadSelectingCount == 0,
-                       "WorkContractGroup destroyed with threads still in selectForMainThreadExecution"););
-
     // Then notify the concurrency provider to remove us from active groups
     // CRITICAL: Read provider without holding lock to avoid ABBA deadlock
     IConcurrencyProvider* provider = nullptr;
@@ -163,6 +231,21 @@ WorkContractGroup::~WorkContractGroup() {
     if (provider) {
         provider->notifyGroupDestroyed(this);
     }
+
+    // Validate that all contracts have been properly cleaned up. After
+    // notifyGroupDestroyed() no provider thread can reach the group; before it, a
+    // registered worker may still enter selection and return on the stop check.
+    ENTROPY_DEBUG_BLOCK(
+        size_t activeCount = _activeCount.load(std::memory_order_acquire);
+        ENTROPY_ASSERT(activeCount == 0, "WorkContractGroup destroyed with active contracts still allocated");
+
+        // Double-check that no threads are still selecting
+        size_t selectingCount = _selectingCount.load(std::memory_order_acquire);
+        ENTROPY_ASSERT(selectingCount == 0, "WorkContractGroup destroyed with threads still in selectForExecution");
+
+        size_t mainThreadSelectingCount = _mainThreadSelectingCount.load(std::memory_order_acquire);
+        ENTROPY_ASSERT(mainThreadSelectingCount == 0,
+                       "WorkContractGroup destroyed with threads still in selectForMainThreadExecution"););
 }
 
 WorkContractHandle WorkContractGroup::createContract(std::function<void()> work, ExecutionType executionType,
@@ -197,8 +280,8 @@ WorkContractHandle WorkContractGroup::createContract(std::function<void()> work,
 
             auto& slot = _contracts[index];
 
-            // Get current generation for handle before any modifications
-            uint32_t generation = slot.generation.load(std::memory_order_acquire);
+            // The popped slot is Free and exclusively ours; its generation stamps the handle
+            const uint32_t generation = slotGeneration(slot.word.load(std::memory_order_acquire));
 
             // Assign work with noexcept wrapper to ensure termination on exceptions
             slot.work = [fn = std::move(work)]() noexcept {
@@ -206,14 +289,15 @@ WorkContractHandle WorkContractGroup::createContract(std::function<void()> work,
             };
             slot.executionType = executionType;
             slot.pinnedLane = (executionType == ExecutionType::PinnedThread) ? pinnedLane : INVALID_INDEX;
+            slot.dueNs.store(0, std::memory_order_relaxed);
 
             // Increment active count BEFORE making the slot visible as allocated.
             // This ensures that any thread that successfully observes the Allocated state
             // (via acquire) also observes the increased activeCount due to release/acquire
-            // synchronization on slot.state.
+            // synchronization on slot.word.
             _activeCount.fetch_add(1, std::memory_order_acq_rel);
             // Transition state to allocated
-            slot.state.store(ContractState::Allocated, std::memory_order_release);
+            slot.word.store(packSlot(generation, ContractState::Allocated), std::memory_order_release);
 
             return WorkContractHandle(this, static_cast<uint32_t>(index), generation);
         }
@@ -226,32 +310,20 @@ ScheduleResult WorkContractGroup::scheduleContract(const WorkContractHandle& han
 
     uint32_t index = handle.handleIndex();
     auto& slot = _contracts[index];
+    const uint32_t generation = handle.handleGeneration();
 
-    // Try to transition from Allocated to Scheduled
-    ContractState expected = ContractState::Allocated;
-    if (!slot.state.compare_exchange_strong(expected, ContractState::Scheduled, std::memory_order_acq_rel)) {
-        // Check why it failed
-        ContractState current = slot.state.load(std::memory_order_acquire);
-        if (current == ContractState::Scheduled) {
-            return ScheduleResult::AlreadyScheduled;
-        } else if (current == ContractState::Executing) {
-            return ScheduleResult::Executing;
-        }
-        return ScheduleResult::Invalid;
+    // One CAS on generation and state: a stale handle cannot schedule another contract.
+    uint64_t expected = packSlot(generation, ContractState::Allocated);
+    if (!slot.word.compare_exchange_strong(expected, packSlot(generation, ContractState::Scheduled),
+                                           std::memory_order_acq_rel)) {
+        return scheduleFailure(expected, generation);
     }
 
-    // Re-validate the generation now that we own the transition: between the
-    // entry validation and the CAS the slot may have been freed and reallocated
-    // (same Allocated state, different contract). The recycler bumps the
-    // generation before the slot can be reused, so a matching generation proves
-    // the claimed contract is ours; on mismatch, undo the claim. (Same pattern
-    // as releaseContract; the new owner's own schedule() can spuriously observe
-    // AlreadyScheduled during the nanosecond revert window, which is benign.)
-    if (slot.generation.load(std::memory_order_acquire) != handle.handleGeneration()) {
-        slot.state.store(ContractState::Allocated, std::memory_order_release);
-        return ScheduleResult::Invalid;
-    }
+    publishScheduled(index, slot);
+    return ScheduleResult::Scheduled;
+}
 
+void WorkContractGroup::publishScheduled(uint32_t index, ContractSlot& slot) {
     // Add to appropriate ready set based on execution type.
     // Count BEFORE bit: a worker can select the instant the bit is visible, and
     // its decrement must never be able to precede this increment (the counter is
@@ -268,18 +340,128 @@ ScheduleResult WorkContractGroup::scheduleContract(const WorkContractHandle& han
     }
 
     // Notify concurrency provider if set
-    {
-        std::shared_lock<std::shared_mutex> lock(_concurrencyProviderMutex);
-        if (_concurrencyProvider) {
-            if (slot.executionType == ExecutionType::MainThread) {
-                _concurrencyProvider->notifyMainThreadWorkAvailable(this);
-            } else {
-                _concurrencyProvider->notifyWorkAvailableFor(this, slot.executionType, slot.pinnedLane);
-            }
+    std::shared_lock<std::shared_mutex> lock(_concurrencyProviderMutex);
+    if (_concurrencyProvider) {
+        if (slot.executionType == ExecutionType::MainThread) {
+            _concurrencyProvider->notifyMainThreadWorkAvailable(this);
+        } else {
+            _concurrencyProvider->notifyWorkAvailableFor(this, slot.executionType, slot.pinnedLane);
         }
     }
+}
 
+ScheduleResult WorkContractGroup::scheduleContractAt(const WorkContractHandle& handle,
+                                                     std::chrono::steady_clock::time_point due) {
+    if (due <= std::chrono::steady_clock::now()) {
+        return scheduleContract(handle);
+    }
+    if (!validateHandle(handle)) return ScheduleResult::Invalid;
+
+    uint32_t index = handle.handleIndex();
+    auto& slot = _contracts[index];
+    const uint32_t generation = handle.handleGeneration();
+
+    // Allocated -> Executing while the due time is written: no selector or scheduler
+    // can take the slot until the Scheduled store below publishes it.
+    uint64_t expected = packSlot(generation, ContractState::Allocated);
+    if (!slot.word.compare_exchange_strong(expected, packSlot(generation, ContractState::Executing),
+                                           std::memory_order_acq_rel)) {
+        return scheduleFailure(expected, generation);
+    }
+
+    slot.dueNs.store(toTicks(due), std::memory_order_relaxed);  // published by the Scheduled store
+    _timedCount.fetch_add(1, std::memory_order_acq_rel);        // count before bit, as publishScheduled
+    slot.word.store(packSlot(generation, ContractState::Scheduled), std::memory_order_release);
+    publishScheduled(index, slot);
     return ScheduleResult::Scheduled;
+}
+
+SignalTreeBase& WorkContractGroup::treeFor(ExecutionType type, uint32_t lane) {
+    if (type == ExecutionType::MainThread) return *_mainThreadContracts;
+    if (type == ExecutionType::PinnedThread && lane < _pinnedLanes.size()) return *_pinnedLanes[lane];
+    return *_readyContracts;
+}
+
+SignalTreeBase& WorkContractGroup::readyTreeFor(const ContractSlot& slot) {
+    return treeFor(slot.executionType, slot.pinnedLane);
+}
+
+bool WorkContractGroup::hasMainThreadWork() const noexcept {
+    if (_mainThreadScheduledCount.load(std::memory_order_acquire) == 0) {
+        return false;
+    }
+    // Peek for a due contract; the first untimed one answers at once.
+    int64_t nowNs = 0;
+    for (size_t index = _mainThreadContracts->peek(0); index != SignalTreeBase::S_INVALID_SIGNAL_INDEX && index < _capacity;
+         index = _mainThreadContracts->peek(index + 1)) {
+        const ContractSlot& slot = _contracts[index];
+        const ContractState state = slotState(slot.word.load(std::memory_order_acquire));
+        if ((state == ContractState::Scheduled || state == ContractState::Peeking) &&
+            isDue(slot.dueNs.load(std::memory_order_relaxed), nowNs)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool WorkContractGroup::clearDue(ContractSlot& slot) noexcept {
+    if (slot.dueNs.exchange(0, std::memory_order_relaxed) == 0) return false;
+    _timedCount.fetch_sub(1, std::memory_order_acq_rel);
+    return true;
+}
+
+bool WorkContractGroup::resolvePeek(uint32_t index, ContractSlot& slot, uint32_t generation, ContractState target) {
+    const bool isMainThread = slot.executionType == ExecutionType::MainThread;
+    uint64_t expected = packSlot(generation, ContractState::Peeking);
+    if (slot.word.compare_exchange_strong(expected, packSlot(generation, target), std::memory_order_acq_rel)) {
+        return true;
+    }
+
+    // Only this worker moves the slot out of Peeking or a handoff state, and the owner
+    // can only hand over a release or an unschedule.
+    if (slotState(expected) == ContractState::PeekUnscheduled) {
+        // The owner's unschedule, completed here; Allocated last so a reschedule counts after this.
+        readyTreeFor(slot).clear(index);
+        clearDue(slot);
+        {
+            std::lock_guard<std::mutex> lock(_waitMutex);
+            size_t newScheduledCount = isMainThread ? _mainThreadScheduledCount.fetch_sub(1, std::memory_order_acq_rel) - 1
+                                                    : _scheduledCount.fetch_sub(1, std::memory_order_acq_rel) - 1;
+            if (newScheduledCount == 0) {
+                _waitCondition.notify_all();
+            }
+        }
+        expected = packSlot(generation, ContractState::PeekUnscheduled);
+        if (slot.word.compare_exchange_strong(expected, packSlot(generation, ContractState::Allocated),
+                                              std::memory_order_acq_rel)) {
+            return false;
+        }
+        // Released after the unschedule: the contract is already out of the queue and the
+        // counts, so what remains is the release of an Allocated contract.
+        ENTROPY_ASSERT(slotState(expected) == ContractState::PeekReleased,
+                       "resolvePeek: unexpected unschedule handoff state");
+        slot.word.store(packSlot(generation + 1, ContractState::Free), std::memory_order_release);
+        returnSlotToFreeList(index, ContractState::Allocated, isMainThread);
+        return false;
+    }
+
+    // The owner's release, completed here: nothing else can touch the slot until it is free.
+    ENTROPY_ASSERT(slotState(expected) == ContractState::PeekReleased, "resolvePeek: unexpected peek handoff state");
+    slot.word.store(packSlot(generation + 1, ContractState::Free), std::memory_order_release);
+    returnSlotToFreeList(index, ContractState::Scheduled, isMainThread);
+    return false;
+}
+
+void WorkContractGroup::clearStaleBit(ExecutionType type, uint32_t lane, uint32_t index, const ContractSlot& slot) {
+    SignalTreeBase& tree = treeFor(type, lane);
+    tree.clear(index);
+    // Pairs with the release of a set() the clear may have read, so a schedule whose bit
+    // was just cleared is visible below.
+    std::atomic_thread_fence(std::memory_order_acquire);
+    const ContractState state = slotState(slot.word.load(std::memory_order_acquire));
+    if ((state == ContractState::Scheduled || state == ContractState::Peeking) && &readyTreeFor(slot) == &tree) {
+        tree.set(index);
+    }
 }
 
 ScheduleResult WorkContractGroup::unscheduleContract(const WorkContractHandle& handle) {
@@ -295,72 +477,72 @@ ScheduleResult WorkContractGroup::unscheduleContract(const WorkContractHandle& h
     }
 
     auto& slot = _contracts[index];
-    uint32_t currentGen = slot.generation.load(std::memory_order_acquire);
-    if (currentGen != handle.handleGeneration()) {
-        // Slot was freed/reused. It may be due to execution having started (unified flow).
-        ContractState st = slot.state.load(std::memory_order_acquire);
-        if (st == ContractState::Executing) {
-            return ScheduleResult::Executing;
-        }
-        // In unified flow, we set state to Free while the task is still running.
-        if (st == ContractState::Free) {
-            size_t exec = _executingCount.load(std::memory_order_acquire) +
-                          _mainThreadExecutingCount.load(std::memory_order_acquire);
-            if (exec > 0) {
+    const uint32_t generation = handle.handleGeneration();
+
+    uint64_t word = slot.word.load(std::memory_order_acquire);
+    for (;;) {
+        if (slotGeneration(word) != generation) {
+            // Slot was freed/reused. It may be due to execution having started (unified flow).
+            const ContractState st = slotState(word);
+            if (st == ContractState::Executing) {
                 return ScheduleResult::Executing;
             }
-        }
-        return ScheduleResult::Invalid;
-    }
-
-    // Generation matches: proceed with normal unschedule logic
-    // Check current state
-    ContractState currentState = slot.state.load(std::memory_order_acquire);
-
-    if (currentState == ContractState::Scheduled) {
-        // Try to transition back to Allocated
-        ContractState expected = ContractState::Scheduled;
-        if (slot.state.compare_exchange_strong(expected, ContractState::Allocated, std::memory_order_acq_rel)) {
-            // Re-validate the generation now that we own the transition (same
-            // pattern as releaseContract/scheduleContract): a mismatch means we
-            // just un-scheduled a freshly-scheduled unrelated contract. Undo
-            // the claim and re-assert its queue bit in case its rightful
-            // selector consumed the bit and gave up against our transient
-            // Allocated state.
-            if (slot.generation.load(std::memory_order_acquire) != handle.handleGeneration()) {
-                slot.state.store(ContractState::Scheduled, std::memory_order_release);
-                readyTreeFor(slot).set(index);
-                return ScheduleResult::Invalid;
-            }
-
-            // Remove from the slot's own ready queue
-            bool isMainThread = (slot.executionType == ExecutionType::MainThread);
-            readyTreeFor(slot).clear(index);
-
-            // Decrement under _waitMutex and notify while holding it: this
-            // decrement can make wait()'s predicate true, so the waiter must not
-            // be able to observe it before we are done touching the group.
-            {
-                std::lock_guard<std::mutex> lock(_waitMutex);
-                size_t newScheduledCount = isMainThread
-                                               ? _mainThreadScheduledCount.fetch_sub(1, std::memory_order_acq_rel) - 1
-                                               : _scheduledCount.fetch_sub(1, std::memory_order_acq_rel) - 1;
-                if (newScheduledCount == 0) {
-                    _waitCondition.notify_all();
+            // In unified flow, we set state to Free while the task is still running.
+            if (st == ContractState::Free) {
+                size_t exec = _executingCount.load(std::memory_order_acquire) +
+                              _mainThreadExecutingCount.load(std::memory_order_acquire);
+                if (exec > 0) {
+                    return ScheduleResult::Executing;
                 }
             }
-
-            return ScheduleResult::NotScheduled;
+            return ScheduleResult::Invalid;
         }
-        // State changed while we were checking - likely now executing
-        return ScheduleResult::Executing;
-    } else if (currentState == ContractState::Executing) {
-        return ScheduleResult::Executing;
-    } else if (currentState == ContractState::Allocated) {
-        return ScheduleResult::NotScheduled;
-    }
 
-    return ScheduleResult::Invalid;
+        switch (slotState(word)) {
+            case ContractState::Scheduled:
+                if (!slot.word.compare_exchange_weak(word, packSlot(generation, ContractState::Allocated),
+                                                     std::memory_order_acq_rel, std::memory_order_acquire)) {
+                    continue;  // a worker peeked or claimed it; re-read
+                }
+                {
+                    // Remove from the slot's own ready queue
+                    bool isMainThread = (slot.executionType == ExecutionType::MainThread);
+                    readyTreeFor(slot).clear(index);
+                    clearDue(slot);
+
+                    // Decrement under _waitMutex and notify while holding it: this
+                    // decrement can make wait()'s predicate true, so the waiter must not
+                    // be able to observe it before we are done touching the group.
+                    std::lock_guard<std::mutex> lock(_waitMutex);
+                    size_t newScheduledCount =
+                        isMainThread ? _mainThreadScheduledCount.fetch_sub(1, std::memory_order_acq_rel) - 1
+                                     : _scheduledCount.fetch_sub(1, std::memory_order_acq_rel) - 1;
+                    if (newScheduledCount == 0) {
+                        _waitCondition.notify_all();
+                    }
+                }
+                return ScheduleResult::NotScheduled;
+
+            case ContractState::Peeking:
+                // A worker is peeking it: hand the unschedule to that worker, which returns
+                // the slot to Allocated instead of running it.
+                if (!slot.word.compare_exchange_weak(word, packSlot(generation, ContractState::PeekUnscheduled),
+                                                     std::memory_order_acq_rel, std::memory_order_acquire)) {
+                    continue;
+                }
+                return ScheduleResult::NotScheduled;
+
+            case ContractState::Allocated:
+            case ContractState::PeekUnscheduled:
+                return ScheduleResult::NotScheduled;
+
+            case ContractState::Executing:
+                return ScheduleResult::Executing;
+
+            default:
+                return ScheduleResult::Invalid;  // Free, or released during a peek
+        }
+    }
 }
 
 void WorkContractGroup::releaseContract(const WorkContractHandle& handle) {
@@ -372,66 +554,38 @@ void WorkContractGroup::releaseContract(const WorkContractHandle& handle) {
     if (index >= _capacity) return;
 
     auto& slot = _contracts[index];
+    const uint32_t generation = handle.handleGeneration();
+    const bool isMainThread = (slot.executionType == ExecutionType::MainThread);
 
-    // Atomically try to transition from Allocated or Scheduled to Free.
-    // This is the core of handling the race with selectForExecution.
-    ContractState currentState = slot.state.load(std::memory_order_acquire);
-
-    while (true) {
-        if (currentState == ContractState::Allocated) {
-            // Try to transition from Allocated -> Free
-            ContractState expected = ContractState::Allocated;
-            if (slot.state.compare_exchange_weak(expected, ContractState::Free, std::memory_order_acq_rel,
-                                                 std::memory_order_acquire)) {
-                // Re-validate the generation now that we own the transition. Between
-                // the entry validation and this CAS the slot may have been freed and
-                // reallocated (same state, new contract). The recycler bumps the
-                // generation before the slot can be reused, so a matching generation
-                // proves the claimed contract is ours; on mismatch, undo the claim.
-                // (The new owner's schedule() can spuriously fail during this
-                // nanosecond revert window; it reports Invalid, which is the same
-                // result a fully-released handle already produces.)
-                if (slot.generation.load(std::memory_order_acquire) != handle.handleGeneration()) {
-                    slot.state.store(ContractState::Allocated, std::memory_order_release);
+    // Every CAS carries the handle's generation, so a stale handle never frees another contract.
+    uint64_t word = slot.word.load(std::memory_order_acquire);
+    while (slotGeneration(word) == generation) {
+        const ContractState state = slotState(word);
+        switch (state) {
+            case ContractState::Allocated:
+            case ContractState::Scheduled:
+                // Free it with a new generation in one step; this is the race with selection
+                if (slot.word.compare_exchange_weak(word, packSlot(generation + 1, ContractState::Free),
+                                                    std::memory_order_acq_rel, std::memory_order_acquire)) {
+                    returnSlotToFreeList(index, state, isMainThread);
                     return;
                 }
-                // Success, we are responsible for cleanup
-                bool isMainThread = (slot.executionType == ExecutionType::MainThread);
-                returnSlotToFreeList(index, ContractState::Allocated, isMainThread);
-                return;
-            }
-            // CAS failed, currentState is updated, loop again
-            currentState = expected;
-            continue;
-        }
+                continue;
 
-        if (currentState == ContractState::Scheduled) {
-            // Try to transition from Scheduled -> Free
-            ContractState expected = ContractState::Scheduled;
-            if (slot.state.compare_exchange_weak(expected, ContractState::Free, std::memory_order_acq_rel,
-                                                 std::memory_order_acquire)) {
-                // Same post-CAS generation re-validation as the Allocated path above.
-                // Also re-assert the new contract's queue bit: a selector may have
-                // consumed it and given up against our transient Free state, and a
-                // scheduled contract with no bit is stranded.
-                if (slot.generation.load(std::memory_order_acquire) != handle.handleGeneration()) {
-                    slot.state.store(ContractState::Scheduled, std::memory_order_release);
-                    readyTreeFor(slot).set(index);
+            case ContractState::Peeking:
+            case ContractState::PeekUnscheduled:
+                // A worker is peeking it: hand the release to that worker, which frees the
+                // slot instead of running it. The slot cannot be reused before then.
+                if (slot.word.compare_exchange_weak(word, packSlot(generation, ContractState::PeekReleased),
+                                                    std::memory_order_acq_rel, std::memory_order_acquire)) {
                     return;
                 }
-                // Success, we are responsible for cleanup
-                bool isMainThread = (slot.executionType == ExecutionType::MainThread);
-                returnSlotToFreeList(index, ContractState::Scheduled, isMainThread);
-                return;
-            }
-            // CAS failed, currentState is updated. It might have become Executing. Loop again.
-            currentState = expected;
-            continue;
-        }
+                continue;
 
-        // If we are here, the state is either Free, Executing, or invalid.
-        // In any of these cases, this thread can no longer act.
-        return;
+            default:
+                // Executing, Free, or already handed over: this thread can no longer act.
+                return;
+        }
     }
 }
 
@@ -439,9 +593,10 @@ bool WorkContractGroup::isValidHandle(const WorkContractHandle& handle) const no
     return validateHandle(handle);
 }
 
-WorkContractHandle WorkContractGroup::selectForExecution(std::optional<std::reference_wrapper<uint64_t>> bias) {
+WorkContractHandle WorkContractGroup::selectForExecution(std::optional<std::reference_wrapper<uint64_t>> bias,
+                                                         std::chrono::steady_clock::time_point* nextDue) {
     // Empty-queue skip: one atomic load instead of the guard's _waitMutex round trip.
-    // A stale read is possible right after a setter returns; safe since callers re-poll within a bounded park timeout.
+    // A stale read is possible right after a setter returns; the setter notifies after set(), so a worker that misses the bit is woken or finds a wake token when it parks.
     if (_readyContracts->isEmpty()) {
         return WorkContractHandle();
     }
@@ -493,65 +648,120 @@ WorkContractHandle WorkContractGroup::selectForExecution(std::optional<std::refe
         return WorkContractHandle();
     }
 
-    return claimBackgroundContract(*_readyContracts, ExecutionType::AnyThread, INVALID_INDEX, biasRef);
+    return claimFrom(ExecutionType::AnyThread, INVALID_INDEX, biasRef, nextDue);
 }
 
-WorkContractHandle WorkContractGroup::claimBackgroundContract(SignalTreeBase& tree, ExecutionType expectedType,
-                                                              uint32_t expectedLane, uint64_t& bias) {
-    auto [index, _] = tree.select(bias);
+WorkContractHandle WorkContractGroup::claimFrom(ExecutionType expectedType, uint32_t expectedLane, uint64_t& bias,
+                                                std::chrono::steady_clock::time_point* nextDue) {
+    SignalTreeBase& tree = treeFor(expectedType, expectedLane);
+    const size_t signals = tree.getCapacity();
+    const size_t start = static_cast<size_t>(bias % signals);
+    const bool mainThread = expectedType == ExecutionType::MainThread;
+    int64_t nowNs = 0;
+    WorkContractHandle claimed;
 
-    if (index == SignalTreeBase::S_INVALID_SIGNAL_INDEX) {
-        return WorkContractHandle();
+    // Peek start -> end, then wrap once 0 -> start. Peeking takes no bit, so every other
+    // worker keeps seeing the whole queue.
+    size_t from = start;
+    bool wrapped = false;
+    for (;;) {
+        const size_t index = tree.peek(from);
+        if (!wrapped && index == SignalTreeBase::S_INVALID_SIGNAL_INDEX) {
+            if (start == 0) break;
+            wrapped = true;
+            from = 0;
+            continue;
+        }
+        if (wrapped && (index == SignalTreeBase::S_INVALID_SIGNAL_INDEX || index >= start)) {
+            break;
+        }
+        from = index + 1;
+        if (index >= _capacity) {
+            continue;
+        }
+
+        const auto slotIndex = static_cast<uint32_t>(index);
+        auto& slot = _contracts[index];
+
+        uint64_t word = slot.word.load(std::memory_order_acquire);
+        const ContractState state = slotState(word);
+        if (state == ContractState::Free || state == ContractState::Allocated) {
+            clearStaleBit(expectedType, expectedLane, slotIndex, slot);
+            continue;
+        }
+        if (state != ContractState::Scheduled) {
+            continue;  // an executing claim or another worker's peek owns the bit
+        }
+
+        const uint32_t generation = slotGeneration(word);
+        if (!slot.word.compare_exchange_strong(word, packSlot(generation, ContractState::Peeking),
+                                               std::memory_order_acq_rel)) {
+            continue;
+        }
+
+        // Peeking: the owner can only hand a release or an unschedule to this worker, so
+        // the queue and due time read below belong to the contract that would run.
+        if (slot.executionType != expectedType ||
+            (expectedType == ExecutionType::PinnedThread && slot.pinnedLane != expectedLane)) {
+            // Stale bit from a previous occupant; the contract belongs to another queue.
+            if (resolvePeek(slotIndex, slot, generation, ContractState::Scheduled)) {
+                readyTreeFor(slot).set(index);
+            }
+            clearStaleBit(expectedType, expectedLane, slotIndex, slot);
+            continue;
+        }
+
+        const int64_t due = slot.dueNs.load(std::memory_order_relaxed);
+        if (!isDue(due, nowNs)) {
+            if (resolvePeek(slotIndex, slot, generation, ContractState::Scheduled)) {
+                if (nextDue) *nextDue = std::min(*nextDue, fromTicks(due));
+            }
+            continue;
+        }
+
+        if (!resolvePeek(slotIndex, slot, generation, ContractState::Executing)) {
+            continue;  // released or unscheduled during the peek; the handoff is complete
+        }
+
+        // Clear from this queue immediately upon successful selection to avoid stale ready bits.
+        // CRITICAL: This clear is part of a triple-redundancy strategy to ensure no stale bits remain
+        // in the signal tree under any thread interleaving. See returnSlotToFreeList() for defensive
+        // clear that handles the race where this thread is preempted before clearing.
+        tree.clear(index);
+
+        // Update counters: increment executing BEFORE decrementing scheduled, so
+        // wait()'s conjunction (scheduled==0 && executing==0) can never observe the
+        // claimed contract in neither counter mid-handoff and return early.
+        // Pinned work shares the background counters.
+        if (mainThread) {
+            _mainThreadExecutingCount.fetch_add(1, std::memory_order_acq_rel);
+            _mainThreadScheduledCount.fetch_sub(1, std::memory_order_acq_rel);
+        } else {
+            _executingCount.fetch_add(1, std::memory_order_acq_rel);
+            _scheduledCount.fetch_sub(1, std::memory_order_acq_rel);
+        }
+
+        // A due contract was claimed and others are still timed: wake one more worker
+        // to pull them. Pinned and main-thread timed work have a single drainer.
+        if (clearDue(slot) && expectedType == ExecutionType::AnyThread &&
+            _timedCount.load(std::memory_order_acquire) > 0) {
+            std::shared_lock<std::shared_mutex> lock(_concurrencyProviderMutex);
+            if (_concurrencyProvider) {
+                _concurrencyProvider->notifyWorkAvailable(this);
+            }
+        }
+
+        claimed = WorkContractHandle(this, slotIndex, generation);
+        bias = index + 1;
+        break;
     }
 
-    auto& slot = _contracts[index];
-
-    // Try to transition from Scheduled to Executing
-    ContractState expected = ContractState::Scheduled;
-    if (!slot.state.compare_exchange_strong(expected, ContractState::Executing, std::memory_order_acq_rel)) {
-        // Someone else got it first or state changed
-        return WorkContractHandle();
-    }
-
-    // Re-check queue membership now that we own the slot. The bit we consumed
-    // may be stale from a previous occupant (freed and reallocated between the
-    // tree select and our CAS), and the slot may now belong to a different
-    // queue (main thread, another pinned lane, or the shared queue). Undo the
-    // claim and re-assert the slot's OWN queue bit: that queue's rightful
-    // selector may have consumed its bit and given up against our transient
-    // Executing state, and a scheduled contract with no bit is stranded (an
-    // extra stale bit is tolerated by design; a missing one is not). A
-    // releaseContract racing the transient Executing state no-ops,
-    // indistinguishable from racing a genuine execution start.
-    if (slot.executionType != expectedType ||
-        (expectedType == ExecutionType::PinnedThread && slot.pinnedLane != expectedLane)) {
-        slot.state.store(ContractState::Scheduled, std::memory_order_release);
-        readyTreeFor(slot).set(index);
-        return WorkContractHandle();
-    }
-
-    // Clear from this queue immediately upon successful selection to avoid stale ready bits.
-    // CRITICAL: This clear is part of a triple-redundancy strategy to ensure no stale bits remain
-    // in the signal tree under any thread interleaving. See returnSlotToFreeList() for defensive
-    // clear that handles the race where this thread is preempted before clearing.
-    tree.clear(index);
-
-    // Get current generation for handle
-    uint32_t generation = slot.generation.load(std::memory_order_acquire);
-
-    // Update counters: increment executing BEFORE decrementing scheduled, so
-    // wait()'s conjunction (scheduled==0 && executing==0) can never observe the
-    // claimed contract in neither counter mid-handoff and return early.
-    // Pinned work shares the background counters.
-    _executingCount.fetch_add(1, std::memory_order_acq_rel);
-    _scheduledCount.fetch_sub(1, std::memory_order_acq_rel);
-
-    // Return valid handle
-    return WorkContractHandle(this, static_cast<uint32_t>(index), generation);
+    return claimed;
 }
 
 WorkContractHandle WorkContractGroup::selectForPinnedExecution(size_t lane,
-                                                               std::optional<std::reference_wrapper<uint64_t>> bias) {
+                                                               std::optional<std::reference_wrapper<uint64_t>> bias,
+                                                               std::chrono::steady_clock::time_point* nextDue) {
     if (lane >= _pinnedLanes.size() || _pinnedLanes[lane]->isEmpty()) {
         return WorkContractHandle();
     }
@@ -589,8 +799,7 @@ WorkContractHandle WorkContractGroup::selectForPinnedExecution(size_t lane,
         return WorkContractHandle();
     }
 
-    return claimBackgroundContract(*_pinnedLanes[lane], ExecutionType::PinnedThread, static_cast<uint32_t>(lane),
-                                   biasRef);
+    return claimFrom(ExecutionType::PinnedThread, static_cast<uint32_t>(lane), biasRef, nextDue);
 }
 
 size_t WorkContractGroup::executePinnedWork(size_t lane, size_t maxContracts) {
@@ -618,7 +827,7 @@ bool WorkContractGroup::hasPinnedWork(size_t lane) const noexcept {
 }
 
 WorkContractHandle WorkContractGroup::selectForMainThreadExecution(
-    std::optional<std::reference_wrapper<uint64_t>> bias) {
+    std::optional<std::reference_wrapper<uint64_t>> bias, std::chrono::steady_clock::time_point* nextDue) {
     // See selectForExecution: skip registration entirely on an empty queue.
     if (_mainThreadContracts->isEmpty()) {
         return WorkContractHandle();
@@ -666,48 +875,7 @@ WorkContractHandle WorkContractGroup::selectForMainThreadExecution(
         return WorkContractHandle();
     }
 
-    auto [index, _] = _mainThreadContracts->select(biasRef);
-
-    if (index == SignalTreeBase::S_INVALID_SIGNAL_INDEX) {
-        return WorkContractHandle();
-    }
-
-    auto& slot = _contracts[index];
-
-    // Try to transition from Scheduled to Executing
-    ContractState expected = ContractState::Scheduled;
-    if (!slot.state.compare_exchange_strong(expected, ContractState::Executing, std::memory_order_acq_rel)) {
-        // Someone else got it first or state changed
-        return WorkContractHandle();
-    }
-
-    // Re-check the execution type now that we own the slot; the main-thread bit
-    // we consumed may be stale and the slot reallocated to a background or
-    // pinned contract. Undo the claim and re-assert the slot's own queue bit in
-    // case its rightful selector consumed it and gave up against our transient
-    // state.
-    if (slot.executionType != ExecutionType::MainThread) {
-        slot.state.store(ContractState::Scheduled, std::memory_order_release);
-        readyTreeFor(slot).set(index);
-        return WorkContractHandle();
-    }
-
-    // Clear from main-thread ready set immediately upon successful selection.
-    // CRITICAL: This clear is part of a triple-redundancy strategy to ensure no stale bits remain
-    // in the signal tree under any thread interleaving. See returnSlotToFreeList() for defensive
-    // clear that handles the race where this thread is preempted before clearing.
-    _mainThreadContracts->clear(index);
-
-    // Get current generation for handle
-    uint32_t generation = slot.generation.load(std::memory_order_acquire);
-
-    // Update counters: increment executing BEFORE decrementing scheduled so
-    // wait() can never observe the claimed contract in neither counter.
-    _mainThreadExecutingCount.fetch_add(1, std::memory_order_acq_rel);
-    _mainThreadScheduledCount.fetch_sub(1, std::memory_order_acq_rel);
-
-    // Return valid handle
-    return WorkContractHandle(this, static_cast<uint32_t>(index), generation);
+    return claimFrom(ExecutionType::MainThread, INVALID_INDEX, biasRef, nextDue);
 }
 
 void WorkContractGroup::executeContract(const WorkContractHandle& handle) {
@@ -734,9 +902,8 @@ void WorkContractGroup::executeContract(const WorkContractHandle& handle) {
     auto& ownQueue = readyTreeFor(slot);
 
     // Free the slot BEFORE executing to allow re-entrance
-    // Invalidate handles and transition to Free
-    slot.generation.fetch_add(1, std::memory_order_acq_rel);
-    slot.state.store(ContractState::Free, std::memory_order_release);
+    // Invalidate handles and transition to Free in one store; the claim made the slot ours
+    slot.word.store(packSlot(handle.handleGeneration() + 1, ContractState::Free), std::memory_order_release);
 
     ownQueue.clear(index);
 
@@ -801,9 +968,8 @@ void WorkContractGroup::abortExecution(const WorkContractHandle& handle) {
     // Defensive clear target, resolved before the slot is freed
     auto& ownQueue = readyTreeFor(slot);
 
-    // Invalidate handles and free the slot
-    slot.generation.fetch_add(1, std::memory_order_acq_rel);
-    slot.state.store(ContractState::Free, std::memory_order_release);
+    // Invalidate handles and free the slot in one store; the claim made the slot ours
+    slot.word.store(packSlot(handle.handleGeneration() + 1, ContractState::Free), std::memory_order_release);
 
     // Defensive clear to keep signal tree clean
     ownQueue.clear(index);
@@ -952,15 +1118,16 @@ bool WorkContractGroup::validateHandle(const WorkContractHandle& handle) const n
     if (index >= _capacity) return false;
 
     // Check generation
-    uint32_t currentGen = _contracts[index].generation.load(std::memory_order_acquire);
-    return currentGen == handle.handleGeneration();
+    return slotGeneration(_contracts[index].word.load(std::memory_order_acquire)) == handle.handleGeneration();
 }
 
 ContractState WorkContractGroup::getContractState(const WorkContractHandle& handle) const noexcept {
-    if (!validateHandle(handle)) return ContractState::Free;
-
-    uint32_t index = handle.handleIndex();
-    return _contracts[index].state.load(std::memory_order_acquire);
+    if (handle.handleOwner() != static_cast<const void*>(this) || handle.handleIndex() >= _capacity) {
+        return ContractState::Free;
+    }
+    // One load: generation and state belong to the same occupancy.
+    const uint64_t word = _contracts[handle.handleIndex()].word.load(std::memory_order_acquire);
+    return slotGeneration(word) == handle.handleGeneration() ? slotState(word) : ContractState::Free;
 }
 
 size_t WorkContractGroup::executingCount() const noexcept {
@@ -969,9 +1136,6 @@ size_t WorkContractGroup::executingCount() const noexcept {
 
 void WorkContractGroup::returnSlotToFreeList(uint32_t index, ContractState previousState, bool isMainThread) {
     auto& slot = _contracts[index];
-
-    // Increment generation to invalidate all handles
-    slot.generation.fetch_add(1, std::memory_order_acq_rel);
 
     // Clear the work function to release resources
     slot.work = nullptr;
@@ -991,6 +1155,10 @@ void WorkContractGroup::returnSlotToFreeList(uint32_t index, ContractState previ
     //   4. Without this clear: signal tree still has stale bit N set
     if (previousState == ContractState::Scheduled || previousState == ContractState::Executing) {
         readyTreeFor(slot).clear(index);
+    }
+
+    if (previousState == ContractState::Scheduled) {
+        clearDue(slot);
     }
 
     // Always decrement active count BEFORE exposing slot to free list to avoid transient
@@ -1082,12 +1250,14 @@ std::string WorkContractGroup::debugString() const {
     const auto mainSched = _mainThreadScheduledCount.load(std::memory_order_relaxed);
     const auto mainExec = _mainThreadExecutingCount.load(std::memory_order_relaxed);
     const auto mainSel = _mainThreadSelectingCount.load(std::memory_order_relaxed);
+    const auto timed = _timedCount.load(std::memory_order_relaxed);
     const bool stopping = _stopDepth.load(std::memory_order_relaxed) > 0;
     const bool hasProvider = (_concurrencyProvider != nullptr);
 
     return std::format(
-        "{} [refs:{} active:{} sched:{} exec:{} sel:{} mainSched:{} mainExec:{} mainSel:{} stopping:{} provider:{}]",
-        toString(), refCount(), active, sched, exec, sel, mainSched, mainExec, mainSel, stopping, hasProvider);
+        "{} [refs:{} active:{} sched:{} exec:{} sel:{} mainSched:{} mainExec:{} mainSel:{} timed:{} stopping:{} "
+        "provider:{}]",
+        toString(), refCount(), active, sched, exec, sel, mainSched, mainExec, mainSel, timed, stopping, hasProvider);
 }
 
 std::string WorkContractGroup::description() const {
@@ -1096,8 +1266,8 @@ std::string WorkContractGroup::description() const {
 }
 
 size_t WorkContractGroup::checkTimedDeferrals() {
-    std::lock_guard<std::mutex> lock(_timedDeferralCallbackMutex);
     size_t scheduled = 0;
+    std::lock_guard<std::mutex> lock(_timedDeferralCallbackMutex);
     for (const auto& callback : _timedDeferralCallbacks) {
         if (callback) {
             scheduled += callback();

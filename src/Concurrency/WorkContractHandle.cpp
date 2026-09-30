@@ -27,6 +27,20 @@ ScheduleResult WorkContractHandle::schedule() {
     return group->scheduleContract(*this);
 }
 
+ScheduleResult WorkContractHandle::scheduleAt(std::chrono::steady_clock::time_point due) {
+    auto* group = handleOwnerAs<WorkContractGroup>();
+    if (!group) return ScheduleResult::Invalid;
+    return group->scheduleContractAt(*this, due);
+}
+
+ScheduleResult WorkContractHandle::scheduleAfter(std::chrono::steady_clock::duration delay) {
+    using Clock = std::chrono::steady_clock;
+    const auto now = Clock::now();
+    if (delay <= Clock::duration::zero()) return scheduleAt(now);
+    const auto headroom = Clock::time_point::max() - now;
+    return scheduleAt(delay >= headroom ? Clock::time_point::max() : now + delay);
+}
+
 ScheduleResult WorkContractHandle::unschedule() {
     auto* group = handleOwnerAs<WorkContractGroup>();
     if (!group) return ScheduleResult::Invalid;
@@ -49,7 +63,8 @@ void WorkContractHandle::release() {
 bool WorkContractHandle::isScheduled() const {
     auto* group = handleOwnerAs<WorkContractGroup>();
     if (!group) return false;
-    return group->getContractState(*this) == ContractState::Scheduled;
+    const ContractState state = group->getContractState(*this);
+    return state == ContractState::Scheduled || state == ContractState::Peeking;
 }
 
 bool WorkContractHandle::isExecuting() const {

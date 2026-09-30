@@ -18,9 +18,11 @@
 
 #pragma once
 
+#include <chrono>
 #include <deque>
 #include <functional>
 #include <mutex>
+#include <optional>
 #include <queue>
 #include <shared_mutex>
 
@@ -262,22 +264,22 @@ public:
     size_t processDeferredNodes(size_t maxToSchedule = 0);
 
     /**
-     * @brief Checks timed deferrals and schedules nodes whose wake time has passed
+     * @brief Re-arms yield-until nodes that waited for contract capacity
      *
-     * Examines the timed deferred queue and moves all nodes whose scheduled wake
-     * time has arrived into execution. This is called opportunistically during
-     * capacity callbacks and main thread pumping - no dedicated timer thread.
+     * The timed queue holds only nodes that could not get a contract slot when
+     * they yielded. Every entry is popped regardless of wake time and armed as a
+     * timed work contract with its original wake time (a past time schedules
+     * immediately). Entries that still find no capacity go back on the queue.
+     * Called from capacity callbacks and WorkGraph::checkTimedDeferrals().
      *
-     * @param maxToSchedule Maximum nodes to schedule (0 = all ready nodes)
-     * @return Number of timed nodes actually scheduled
+     * @param maxToSchedule Maximum entries to pop (0 = all)
+     * @return Number of nodes armed as contracts
      *
      * @code
-     * // Called during capacity callbacks
      * void onCapacityAvailable() {
-     *     // Check if any timers are ready
-     *     size_t scheduled = scheduler.processTimedDeferredNodes();
-     *     if (scheduled > 0) {
-     *         LOG_DEBUG("Woke {} timed nodes", scheduled);
+     *     size_t armed = scheduler.processTimedDeferredNodes();
+     *     if (armed > 0) {
+     *         LOG_DEBUG("Armed {} waiting timed nodes", armed);
      *     }
      * }
      * @endcode
@@ -287,19 +289,21 @@ public:
     /**
      * @brief Defers a node until a specific time point
      *
-     * Instead of immediate rescheduling, the node sleeps in a priority queue
-     * until the specified wake time. No CPU usage, no thread blocking - just
-     * passive waiting. Used by timers and delayed work.
+     * Creates the node's contract and arms it with WorkContractHandle::scheduleAt().
+     * The node waits as a timed work contract, holds one contract slot while it
+     * waits, and runs on the WorkService once due. No thread blocks and no heap is
+     * polled. When no slot is available the node waits on the timed queue until
+     * capacity frees (see processTimedDeferredNodes()).
      *
      * @param node The node to defer
-     * @param wakeTime When the node should be reconsidered for scheduling
-     * @return true if successfully queued
+     * @param wakeTime When the node becomes due to run
+     * @return true if armed or queued; false if the node has no data
      *
      * @code
      * // Timer that fires in 5 seconds
      * auto wakeTime = std::chrono::steady_clock::now() + std::chrono::seconds(5);
      * scheduler.deferNodeUntil(timerNode, wakeTime);
-     * // Node sits in queue consuming zero CPU until wakeTime arrives
+     * // The node's contract becomes runnable when wakeTime elapses
      * @endcode
      */
     bool deferNodeUntil(const NodeHandle& node, std::chrono::steady_clock::time_point wakeTime);
@@ -486,7 +490,7 @@ private:
     mutable std::shared_mutex _deferredMutex;  ///< Reader-writer lock for deferred queue (mutable for const methods)
     std::deque<NodeHandle> _deferredQueue;     ///< FIFO queue of nodes waiting for capacity
 
-    // Timed deferred queue for nodes waiting until specific time (e.g., timers)
+    // Timed deferred queue: yield-until nodes that found no contract slot (capacity fallback)
     struct TimedNode
     {
         NodeHandle node;
@@ -503,6 +507,20 @@ private:
     // Statistics
     mutable std::mutex _statsMutex;  ///< Protects statistics (separate to reduce contention)
     Stats _stats;                    ///< Accumulated statistics
+
+    /**
+     * @brief Schedules a node now, or as a timed contract when @p due is set
+     *
+     * Untimed: scheduleNode() behaviour, deferring to the capacity queue when
+     * full. Timed: creates the contract and arms it with scheduleAt(); on any
+     * failure returns false without queueing (the caller owns the fallback).
+     * Leaves the node's NodeState unchanged.
+     *
+     * @param node The node to schedule
+     * @param due Time the contract becomes due, or nullopt for immediate
+     * @return true if scheduled (timed: armed); false otherwise
+     */
+    bool scheduleNodeImpl(const NodeHandle& node, std::optional<std::chrono::steady_clock::time_point> due);
 
     /**
      * @brief Creates the lambda that will be executed by workers

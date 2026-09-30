@@ -161,8 +161,9 @@ struct WorkResultContext
     /**
      * @brief Creates a timed yield result (reschedule at specific time)
      *
-     * Defers node execution until the specified wake time without consuming CPU resources.
-     * The node will be rescheduled for execution when the wake time is reached.
+     * Defers node execution until the specified wake time without blocking a thread.
+     * The node waits as a timed work contract, holds one contract slot while it waits,
+     * and runs on the WorkService once the wake time has elapsed.
      *
      * @param when The time point when the node should be rescheduled
      *

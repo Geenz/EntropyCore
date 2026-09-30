@@ -11,11 +11,15 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
+#include <memory>
 #include <thread>
+#include <vector>
 
 #include "Concurrency/WorkService.h"
 #include "Core/RefObject.h"
 #include "Core/TimerService.h"
+#include "ThreadCpuHelpers.h"
 
 using namespace EntropyEngine::Core;
 using namespace EntropyEngine::Core::Concurrency;
@@ -125,11 +129,6 @@ protected:
                 // Suppress secondary exceptions during cleanup
             }
         }
-    }
-
-    // Helper to pump timer system - checks for ready timers
-    void pumpTimers() {
-        timerService->processReadyTimers();
     }
 
     RefObject<WorkService> workService;
@@ -469,4 +468,271 @@ TEST_F(TimerServiceTest, VeryShortInterval_StillWorks) {
         workService->executeMainThreadWork(10);
         std::this_thread::sleep_for(1ms);
     }
+}
+
+TEST_F(TimerServiceTest, IdleTimerServiceDoesNotSpin) {
+    // Worker tids are captured before the timer is armed so the barrier contracts do not overlap the measurement.
+    std::vector<TestSupport::ThreadId> tids;
+#if defined(__linux__)
+    WorkContractGroup captureGroup(64, "TimerIdleTidCapture");
+    ASSERT_EQ(workService->addWorkContractGroup(&captureGroup), WorkService::GroupOperationStatus::Added);
+    tids = TestSupport::captureWorkerTids(*workService, captureGroup);
+    ASSERT_EQ(workService->removeWorkContractGroup(&captureGroup), WorkService::GroupOperationStatus::Removed);
+    ASSERT_EQ(tids.size(), workService->getThreadCount());
+#endif
+
+    auto timer = timerService->scheduleTimer(30s, []() {}, true);
+    EXPECT_TRUE(timer.isValid());
+
+    std::this_thread::sleep_for(200ms);  // settle
+
+    const auto before = TestSupport::poolCpuTime(tids);
+    std::this_thread::sleep_for(500ms);
+    const auto after = TestSupport::poolCpuTime(tids);
+    ASSERT_GE(before.count(), 0);
+    ASSERT_GE(after.count(), 0);
+    const double used = std::chrono::duration<double, std::milli>(after - before).count();
+
+    EXPECT_LT(used, 25.0) << "idle pool used " << used << " ms CPU over 500 ms with one armed 30 s timer";
+
+    timer.invalidate();
+}
+
+TEST_F(TimerServiceTest, TimerFiresWithoutPumpOnIdlePool) {
+    auto oneShotFiredAt = std::make_shared<std::atomic<int64_t>>(-1);
+    auto repeatCount = std::make_shared<std::atomic<int>>(0);
+    const auto t0 = std::chrono::steady_clock::now();
+
+    auto oneShot = timerService->scheduleTimer(
+        50ms,
+        [oneShotFiredAt, t0]() {
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0);
+            oneShotFiredAt->store(elapsed.count(), std::memory_order_release);
+        },
+        false);
+    auto repeating = timerService->scheduleTimer(
+        10ms, [repeatCount]() { repeatCount->fetch_add(1, std::memory_order_relaxed); }, true);
+
+    // No executeMainThreadWork(): AnyThread timers fire on the idle pool.
+    const auto bound = std::chrono::steady_clock::now() + 5s;
+    while ((oneShotFiredAt->load(std::memory_order_acquire) < 0 || repeatCount->load(std::memory_order_acquire) < 2) &&
+           std::chrono::steady_clock::now() < bound) {
+        std::this_thread::sleep_for(1ms);
+    }
+
+    EXPECT_GE(oneShotFiredAt->load(std::memory_order_acquire), 50);  // fired, and never early
+    EXPECT_GE(repeatCount->load(std::memory_order_acquire), 2);      // repeats without a pump
+
+    oneShot.invalidate();
+    repeating.invalidate();
+    std::this_thread::sleep_for(50ms);  // drain in-flight bodies
+}
+
+TEST_F(TimerServiceTest, MainThreadTimerWakesWaitingMainThread) {
+    std::atomic<bool> stopLoop{false};
+    std::atomic<bool> fired{false};
+    std::atomic<std::thread::id> firedOn{};
+    std::atomic<std::thread::id> loopId{};
+
+    std::thread loop([&]() {
+        loopId.store(std::this_thread::get_id(), std::memory_order_release);
+        while (!stopLoop.load(std::memory_order_acquire)) {
+            const uint64_t snap = workService->mainThreadWorkSnapshot();
+            const auto result = workService->executeMainThreadWork();
+            if (stopLoop.load(std::memory_order_acquire)) break;
+            workService->waitForMainThreadWork(snap, result.nextDue);
+        }
+    });
+
+    // Make sure the loop is running before the timer is armed.
+    while (loopId.load(std::memory_order_acquire) == std::thread::id{}) {
+        std::this_thread::sleep_for(1ms);
+    }
+    const auto t0 = std::chrono::steady_clock::now();
+    auto timer = timerService->scheduleTimer(
+        50ms,
+        [&]() {
+            firedOn.store(std::this_thread::get_id(), std::memory_order_release);
+            fired.store(true, std::memory_order_release);
+        },
+        false, ExecutionType::MainThread);
+
+    while (!fired.load(std::memory_order_acquire) && std::chrono::steady_clock::now() - t0 < 2s) {
+        std::this_thread::sleep_for(1ms);
+    }
+
+    stopLoop.store(true, std::memory_order_release);
+    workService->notifyMainThreadWorkAvailable();
+    loop.join();
+
+    EXPECT_TRUE(fired.load(std::memory_order_acquire));
+    EXPECT_EQ(firedOn.load(std::memory_order_acquire), loopId.load(std::memory_order_acquire));
+}
+
+
+namespace
+{
+/// A WorkService and a TimerService built the way EntropyApplication builds them, with a custom timer config.
+struct IsolatedTimerEnv
+{
+    explicit IsolatedTimerEnv(uint32_t workerCount, TimerService::Config timerConfig = {}) {
+        WorkService::Config workConfig;
+        workConfig.threadCount = workerCount;
+        workService = makeRef<WorkService>(workConfig);
+        timerService = makeRef<TimerService>(timerConfig);
+        workService->load();
+        timerService->load();
+        workService->start();
+    }
+
+    void attach() {
+        timerService->setWorkService(workService.get());
+        timerService->start();
+    }
+
+    ~IsolatedTimerEnv() {
+        timerService->stop();
+        timerService->unload();
+        workService->stop();
+        workService->unload();
+    }
+
+    RefObject<WorkService> workService;
+    RefObject<TimerService> timerService;
+};
+}  // namespace
+
+TEST(TimerServiceIsolated, TimerServiceAddsNoThreads) {
+#ifndef __linux__
+    GTEST_SKIP() << "thread count is read from /proc/self/task";
+#else
+    IsolatedTimerEnv env(2);
+    const size_t before = TestSupport::processThreadCount();
+
+    env.attach();
+    auto fired = std::make_shared<std::atomic<int>>(0);
+    std::vector<Timer> timers;
+    for (int i = 0; i < 10; ++i) {
+        timers.push_back(env.timerService->scheduleTimer(
+            5ms * (i + 1), [fired]() { fired->fetch_add(1, std::memory_order_relaxed); }, false));
+    }
+
+    const auto start = std::chrono::steady_clock::now();
+    while (fired->load(std::memory_order_acquire) < 10 && std::chrono::steady_clock::now() - start < 2s) {
+        std::this_thread::sleep_for(5ms);
+    }
+    EXPECT_EQ(fired->load(std::memory_order_acquire), 10);
+    EXPECT_EQ(TestSupport::processThreadCount(), before) << "TimerService must run on the WorkService's threads";
+#endif
+}
+
+TEST(TimerServiceIsolated, CancelledTimerFreesItsSlot) {
+    // One slot: a pending timer occupies exactly it, cancelling frees it well before the fire time.
+    IsolatedTimerEnv env(2, TimerService::Config{1});
+    env.attach();
+
+    auto first = env.timerService->scheduleTimer(30s, []() {}, false);
+    ASSERT_TRUE(first.isValid());
+
+    auto refused = env.timerService->scheduleTimer(30s, []() {}, false);
+    EXPECT_FALSE(refused.isValid()) << "an armed timer must hold exactly one slot";
+
+    first.invalidate();
+
+    auto second = env.timerService->scheduleTimer(30s, []() {}, false);
+    EXPECT_TRUE(second.isValid()) << "cancelling must free the slot before the fire time";
+}
+
+TEST(TimerServiceIsolated, StopWithArmedTimerIsPrompt) {
+    IsolatedTimerEnv env(2);
+    env.attach();
+
+    auto oneShot = env.timerService->scheduleTimer(30s, []() {}, false);
+    auto repeating = env.timerService->scheduleTimer(30s, []() {}, true);
+    ASSERT_TRUE(oneShot.isValid());
+    ASSERT_TRUE(repeating.isValid());
+
+    const auto start = std::chrono::steady_clock::now();
+    env.timerService->stop();
+
+    // The timers are 30 s away; stopping must not wait for them.
+    EXPECT_LT(std::chrono::steady_clock::now() - start, 10s) << "stop() must not wait for armed fire times";
+    EXPECT_EQ(env.timerService->getActiveTimerCount(), 0u);
+}
+
+TEST(TimerServiceIsolated, TimerNeverFiresEarly) {
+    IsolatedTimerEnv env(2);
+    env.attach();
+
+    constexpr int TIMER_COUNT = 100;
+    struct Probe
+    {
+        std::chrono::steady_clock::time_point due;
+        std::atomic<int64_t> firedNs{0};
+    };
+    std::vector<std::unique_ptr<Probe>> probes;
+    std::vector<Timer> timers;
+    probes.reserve(TIMER_COUNT);
+    timers.reserve(TIMER_COUNT);
+
+    for (int i = 0; i < TIMER_COUNT; ++i) {
+        const auto delay = std::chrono::milliseconds(1 + (i * 7) % 50);
+        auto probe = std::make_unique<Probe>();
+        Probe* raw = probe.get();
+        raw->due = std::chrono::steady_clock::now() + delay;
+        timers.push_back(env.timerService->scheduleTimer(
+            delay,
+            [raw]() {
+                raw->firedNs.store(std::chrono::steady_clock::now().time_since_epoch().count(),
+                                   std::memory_order_release);
+            },
+            false));
+        probes.push_back(std::move(probe));
+    }
+
+    const auto start = std::chrono::steady_clock::now();
+    auto allFired = [&]() {
+        for (const auto& probe : probes) {
+            if (probe->firedNs.load(std::memory_order_acquire) == 0) return false;
+        }
+        return true;
+    };
+    while (!allFired() && std::chrono::steady_clock::now() - start < 3s) {
+        std::this_thread::sleep_for(5ms);
+    }
+    ASSERT_TRUE(allFired());
+
+    for (const auto& probe : probes) {
+        EXPECT_GE(probe->firedNs.load(std::memory_order_acquire), probe->due.time_since_epoch().count());
+    }
+}
+
+TEST(TimerServiceIsolated, FullGroupReturnsInvalidTimer) {
+    IsolatedTimerEnv env(2, TimerService::Config{2});
+    env.attach();
+
+    auto first = env.timerService->scheduleTimer(30s, []() {}, false);
+    auto second = env.timerService->scheduleTimer(30s, []() {}, true);
+    auto third = env.timerService->scheduleTimer(30s, []() {}, false);
+
+    EXPECT_TRUE(first.isValid());
+    EXPECT_TRUE(second.isValid());
+    EXPECT_FALSE(third.isValid()) << "a full contract group must yield an invalid Timer";
+    EXPECT_EQ(env.timerService->getActiveTimerCount(), 2u);
+}
+
+TEST(TimerServiceIsolated, ScheduleAfterStopThrows) {
+    IsolatedTimerEnv env(2);
+    env.attach();
+    env.timerService->stop();
+    EXPECT_THROW(env.timerService->scheduleTimer(10ms, []() {}, false), std::runtime_error)
+        << "a stopped TimerService must not hand out timers that never fire";
+}
+
+TEST(TimerServiceIsolated, RepeatingTimerNeedsPositiveInterval) {
+    IsolatedTimerEnv env(2);
+    env.attach();
+    EXPECT_FALSE(env.timerService->scheduleTimer(0ms, []() {}, true).isValid());
+    EXPECT_FALSE(env.timerService->scheduleTimer(-5ms, []() {}, true).isValid());
+    EXPECT_TRUE(env.timerService->scheduleTimer(0ms, []() {}, false).isValid()) << "a one-shot may fire at once";
 }

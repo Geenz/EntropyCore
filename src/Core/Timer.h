@@ -12,8 +12,9 @@
  * @brief NSTimer-style timer system for scheduling delayed work
  *
  * This file contains the Timer class, which provides a high-level interface
- * for scheduling one-shot and repeating timers. Timers are backed by WorkGraph
- * nodes and integrate seamlessly with the concurrency system.
+ * for scheduling one-shot and repeating timers. Each fire is a timed work
+ * contract that becomes due at its fire time and runs on the WorkService
+ * (MainThread timers on the main-thread pump).
  */
 
 #pragma once
@@ -23,7 +24,6 @@
 #include <functional>
 #include <memory>
 
-#include "../Concurrency/WorkGraph.h"
 #include "../Concurrency/WorkGraphTypes.h"
 
 namespace EntropyEngine
@@ -39,8 +39,9 @@ class TimerService;
  *
  * Timer provides an NSTimer-style interface for scheduling work with delays.
  * Timers can be one-shot (fire once) or repeating (fire at intervals). All
- * timing is handled automatically by the TimerService using yieldable WorkGraph
- * nodes.
+ * timing is handled automatically by TimerService: each fire is a timed work
+ * contract that becomes due at its fire time and runs on the WorkService. A
+ * repeating timer arms its next fire from the body of the previous one.
  *
  * Key features:
  * - One-shot and repeating timers

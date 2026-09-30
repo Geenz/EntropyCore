@@ -48,6 +48,7 @@ public:
 
     virtual void set(size_t leafIndex) = 0;
     virtual std::pair<size_t, bool> select(uint64_t& biasFlags) = 0;
+    virtual size_t peek(size_t from) const = 0;
     virtual void clear(size_t leafIndex) = 0;
     virtual bool isEmpty() const = 0;
     virtual size_t getCapacity() const = 0;
@@ -133,6 +134,38 @@ private:
 
     static constexpr uint64_t S_BIAS_BIT_START = 1ULL;  ///< Starting bit for bias traversal
     static constexpr size_t S_BIAS_SHIFT_AMOUNT = 1;    ///< Bit shift for bias progression
+
+    /**
+     * @brief peek() over the subtree rooted at @p node
+     *
+     * Depth-first, left before right, so the first hit is the lowest set index >= from.
+     * Counters lag their leaves during set()/clear(), so a nonzero counter over empty
+     * leaves falls through to the next subtree.
+     *
+     * @param node Node index to search
+     * @param lo First signal index covered by @p node
+     * @param span Number of signals covered by @p node (64 at a leaf)
+     * @param from First signal index to consider
+     * @return Lowest set index >= from in the subtree, or S_INVALID_SIGNAL_INDEX
+     */
+    size_t peekFrom(size_t node, size_t lo, size_t span, size_t from) const {
+        if (lo + span <= from) {
+            return S_INVALID_SIGNAL_INDEX;
+        }
+        if (node >= _totalNodes - _leafCapacity) {
+            uint64_t bits = _nodes[node].load(std::memory_order_acquire);
+            if (from > lo) {
+                bits &= ~uint64_t{0} << (from - lo);
+            }
+            return bits ? lo + static_cast<size_t>(std::countr_zero(bits)) : S_INVALID_SIGNAL_INDEX;
+        }
+        if (_nodes[node].load(std::memory_order_relaxed) == 0) {
+            return S_INVALID_SIGNAL_INDEX;
+        }
+        const size_t half = span / 2;
+        const size_t left = peekFrom(2 * node + 1, lo, half, from);
+        return left != S_INVALID_SIGNAL_INDEX ? left : peekFrom(2 * node + 2, lo + half, half, from);
+    }
 
 public:
     static constexpr size_t S_INVALID_SIGNAL_INDEX = ~0ULL;  ///< Returned when no signal is available
@@ -394,6 +427,30 @@ public:
         }
         bool treeIsEmpty = (_nodes[0].load(std::memory_order_acquire) == 0);
         return {globalLeafIndex, treeIsEmpty};
+    }
+
+    /**
+     * @brief Finds the first active signal at or after an index without clearing it
+     *
+     * Read-only: other threads keep seeing the signal. Use to inspect a candidate
+     * before deciding to take it; select() and clear() are the only ways to remove
+     * it. Lock-free, O(log n); subtrees with a zero counter are skipped.
+     *
+     * @param from First signal index to consider (0 to LeafCapacity*64-1)
+     * @return Index of the first set signal >= from, or S_INVALID_SIGNAL_INDEX if none
+     *
+     * @code
+     * for (size_t i = tree.peek(0); i != SignalTree::S_INVALID_SIGNAL_INDEX; i = tree.peek(i + 1)) {
+     *     if (acceptable(i)) { tree.clear(i); break; }
+     * }
+     * @endcode
+     */
+    size_t peek(size_t from) const override {
+        const size_t capacity = _leafCapacity * S_BITS_PER_LEAF_NODE;
+        if (from >= capacity) {
+            return S_INVALID_SIGNAL_INDEX;
+        }
+        return peekFrom(0, 0, capacity, from);
     }
 
     /**

@@ -12,7 +12,9 @@
 #include <algorithm>
 #include <chrono>
 #include <format>
+#include <optional>
 #include <thread>
+#include <utility>
 
 #include "NodeScheduler.h"
 #include "NodeStateManager.h"
@@ -193,8 +195,15 @@ WorkGraph::WorkGraph(WorkContractGroup* workContractGroup, const WorkGraphConfig
         }
     });
 
-    // Register timed deferral callback to avoid dynamic_cast in WorkService
-    _timedDeferralCallbackIt = _workContractGroup->addTimedDeferralCallback([this]() { return checkTimedDeferrals(); });
+    // Register timed deferral callback to avoid dynamic_cast in WorkService.
+    // Re-arms yield-until nodes that waited for capacity.
+    _timedDeferralCallbackIt = _workContractGroup->addTimedDeferralCallback([this]() -> size_t {
+        CallbackGuard guard(this);
+        if (_destroyed.load(std::memory_order_acquire) || !_scheduler) {
+            return 0;
+        }
+        return _scheduler->processTimedDeferredNodes();
+    });
 
     // Register with debug system (can be disabled via config)
     if (_config.enableDebugRegistration) {
@@ -549,7 +558,9 @@ void WorkGraph::resume() {
         // Check if any nodes became ready while we were suspended, then
         // schedule them AFTER dropping the lock: scheduleNode's drop callback
         // re-enters _graphMutex via cancelDependents.
-        std::vector<NodeHandle> toSchedule;
+        // A yield-until node that yielded while suspended carries its wake time; it is taken
+        // here, under the lock, by the thread that moves the node to Scheduled.
+        std::vector<std::pair<NodeHandle, std::optional<std::chrono::steady_clock::time_point>>> toSchedule;
         {
             std::shared_lock<std::shared_mutex> lock(_graphMutex);
             for (const auto& handle : _nodeHandles) {
@@ -557,13 +568,13 @@ void WorkGraph::resume() {
                 if (nodeData && nodeData->state.load() == NodeState::Ready) {
                     // Try to transition to scheduled
                     if (_stateManager->transitionState(handle, NodeState::Ready, NodeState::Scheduled)) {
-                        toSchedule.push_back(handle);
+                        toSchedule.emplace_back(handle, std::exchange(nodeData->wakeTime, std::nullopt));
                     }
                 }
             }
         }
-        for (auto& handle : toSchedule) {
-            _scheduler->scheduleNode(handle);
+        for (auto& [handle, wakeTime] : toSchedule) {
+            armScheduledNode(handle, wakeTime);
         }
     }
 }
@@ -814,7 +825,7 @@ size_t WorkGraph::processDeferredNodes() {
 }
 
 size_t WorkGraph::checkTimedDeferrals() {
-    // Delegate to scheduler to process timed deferred nodes
+    // Re-arm yield-until nodes that waited for capacity
     if (_scheduler) {
         return _scheduler->processTimedDeferredNodes();
     }
@@ -939,9 +950,35 @@ void WorkGraph::onNodeYieldedUntil(const NodeHandle& node, std::chrono::steady_c
         _stateManager->transitionState(node, NodeState::Executing, NodeState::Yielded);
     }
 
-    // Defer until wake time (not immediate reschedule!)
-    if (_scheduler) {
-        _scheduler->deferNodeUntil(node, wakeTime);
+    // Same path back to Scheduled as a plain yield, but armed for the wake time. The wake
+    // time is stored before the node becomes Ready, so a resume() that finds it Ready arms it
+    // for that time instead of running it early.
+    nodeData->completionProcessed.store(false, std::memory_order_release);
+    nodeData->wakeTime = wakeTime;
+    if (!_stateManager || !_stateManager->transitionState(node, NodeState::Yielded, NodeState::Ready)) {
+        return;
+    }
+    // Suspended: leave it Ready; resume() arms it (see resume()).
+    if (_suspended.load(std::memory_order_acquire)) {
+        if (_config.enableDebugLogging) {
+            ENTROPY_LOG_DEBUG_CAT("WorkGraph", "Graph suspended - yield-until node left in Ready state");
+        }
+        return;
+    }
+    if (_stateManager->transitionState(node, NodeState::Ready, NodeState::Scheduled)) {
+        armScheduledNode(node, std::exchange(nodeData->wakeTime, std::nullopt));
+    }
+}
+
+void WorkGraph::armScheduledNode(const NodeHandle& node, std::optional<std::chrono::steady_clock::time_point> wakeTime) {
+    if (!_scheduler) return;
+    if (wakeTime) {
+        // Defer until wake time (not immediate reschedule!)
+        _scheduler->deferNodeUntil(node, *wakeTime);
+    } else if (!_scheduler->scheduleNode(node)) {
+        if (_config.enableDebugLogging) {
+            ENTROPY_LOG_WARNING_CAT("WorkGraph", "Failed to schedule resumed node");
+        }
     }
 }
 

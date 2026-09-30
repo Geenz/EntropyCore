@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <optional>
+#include <utility>
 
 #include <tracy/Tracy.hpp>  // main-thread work-queue profiling (the per-frame "gap")
 
@@ -24,6 +26,12 @@ namespace Concurrency
 thread_local size_t WorkService::stSoftFailureCount = 0;
 thread_local size_t WorkService::stThreadId = 0;
 thread_local WorkService* WorkService::stOwner = nullptr;
+
+/// Park deadline of a worker with no timed work to wait for.
+static constexpr auto NO_DEADLINE = std::chrono::steady_clock::time_point::max();
+
+/// _parkDeadlineNs while no parked worker waits for a shared due time.
+static constexpr int64_t NO_PARK_DEADLINE = std::numeric_limits<int64_t>::max();
 
 WorkService::WorkService(Config config, std::unique_ptr<IWorkScheduler> scheduler) : _config(config) {
     // Always clamp to a range of 1 to hardware concurrency.
@@ -76,10 +84,13 @@ void WorkService::requestStop() {
     }
 
     // The empty critical section cannot complete while a worker holds the mutex on its
-    // way into wait_for, so the notify below cannot precede that worker's registration.
-    _workAvailable = true;
+    // way into wait, so the notify below cannot precede that worker's registration.
+    // The park predicate reads the stop token.
     { std::lock_guard<std::mutex> handshake(_workAvailableMutex); }
     _workAvailableCV.notify_all();
+
+    // Releases a waitForMainThreadWork() caller.
+    notifyMainThreadWorkAvailable();
 }
 
 void WorkService::waitForStop() {
@@ -127,30 +138,54 @@ void WorkService::clear() {
 }
 
 WorkService::GroupOperationStatus WorkService::addWorkContractGroup(WorkContractGroup* contractGroup) {
-    // This is generally MUCH simpler than the old atomic stuff.
-    // Old atomic tracking of the contract group had a bunch of epoch-based tracking that was very complex.
-    // Also required reclamation of vectors that honestly just isn't worth it on a cold path like this.
-    std::unique_lock<std::shared_mutex> lock(_workContractGroupsMutex);
+    // Work scheduled while the group had no provider sent no notify; it is counted
+    // before the provider read in scheduleContract(), so the counts below include it.
+    size_t sharedWork = 0;
+    bool mainThreadWork = false;
+    std::vector<uint32_t> pinnedLanes;
+    {
+        std::unique_lock<std::shared_mutex> lock(_workContractGroupsMutex);
 
-    // Check for existence to prevent duplicates
-    if (std::find(_workContractGroups.begin(), _workContractGroups.end(), contractGroup) != _workContractGroups.end()) {
-        return GroupOperationStatus::Exists;
+        // Check for existence to prevent duplicates
+        if (std::find(_workContractGroups.begin(), _workContractGroups.end(), contractGroup) !=
+            _workContractGroups.end()) {
+            return GroupOperationStatus::Exists;
+        }
+
+        // Add the group
+        _workContractGroups.push_back(contractGroup);
+        _workContractGroupCount++;
+
+        // Retain the group while registered with the service (ref-counted semantics)
+        if (contractGroup) {
+            contractGroup->retain();
+        }
+
+        // Notify scheduler of group change
+        _scheduler->notifyGroupsChanged(_workContractGroups);
+
+        // Set ourselves as the concurrency provider for this group
+        contractGroup->setConcurrencyProvider(this);
+
+        sharedWork = std::min<size_t>(contractGroup->scheduledCount(), _config.threadCount);
+        mainThreadWork = contractGroup->mainThreadScheduledCount() > 0;
+        for (uint32_t lane = 0; lane < _laneWake.size(); ++lane) {
+            if (contractGroup->hasPinnedWork(lane)) {
+                pinnedLanes.push_back(lane);
+            }
+        }
     }
 
-    // Add the group
-    _workContractGroups.push_back(contractGroup);
-    _workContractGroupCount++;
-
-    // Retain the group while registered with the service (ref-counted semantics)
-    if (contractGroup) {
-        contractGroup->retain();
+    // Outside the lock: woken workers take it shared to select.
+    for (size_t i = 0; i < sharedWork; ++i) {
+        notifyWorkAvailable(contractGroup);
     }
-
-    // Notify scheduler of group change
-    _scheduler->notifyGroupsChanged(_workContractGroups);
-
-    // Set ourselves as the concurrency provider for this group
-    contractGroup->setConcurrencyProvider(this);
+    for (uint32_t lane : pinnedLanes) {
+        notifyPinnedWorkAvailable(contractGroup, lane);
+    }
+    if (mainThreadWork) {
+        notifyMainThreadWorkAvailable(contractGroup);
+    }
 
     return GroupOperationStatus::Added;
 }
@@ -224,6 +259,15 @@ size_t WorkService::setFailureSleepTime(size_t failureSleepTime) {
 
 void WorkService::executeWork(const std::stop_token& token, LaneWake& wake) {
     WorkContractGroup* lastExecutedGroup = nullptr;
+    // Earliest due time among contracts this worker skipped as not due since it last parked.
+    auto pinnedDue = NO_DEADLINE;
+    auto sharedDue = NO_DEADLINE;
+    // Woken before a shared due time it was watching; handed off once it claims work.
+    bool leftSharedDeadline = false;
+    // Per-worker selection cursor. Seeded by worker id (golden-ratio spread) so workers start
+    // their scans in different parts of a queue; each claim advances it past the claimed slot.
+    uint64_t sharedCursor = static_cast<uint64_t>(stThreadId) * 0x9E3779B97F4A7C15ull;
+    uint64_t pinnedCursor = 0;
 
     while (!token.stop_requested()) {
         WorkContractGroup* selectedGroup = nullptr;
@@ -246,20 +290,35 @@ void WorkService::executeWork(const std::stop_token& token, LaneWake& wake) {
             std::shared_lock<std::shared_mutex> lock(_workContractGroupsMutex);
 
             if (!_workContractGroups.empty()) {
+                // Drain this worker's pinned lane first (lane == worker id), then the
+                // shared queue. hasPinnedWork is a single atomic read, so unpinned
+                // workloads pay nothing measurable.
+                auto claimFrom = [&](WorkContractGroup* group) {
+                    WorkContractHandle claimed;
+                    if (group->hasPinnedWork(stThreadId)) {
+                        claimed = group->selectForPinnedExecution(stThreadId, std::ref(pinnedCursor), &pinnedDue);
+                    }
+                    if (!claimed.valid()) {
+                        claimed = group->selectForExecution(std::ref(sharedCursor), &sharedDue);
+                    }
+                    return claimed;
+                };
+
                 // Ask scheduler for next group - reads directly from _workContractGroups
                 auto scheduleResult = _scheduler->selectNextGroup(_workContractGroups);
 
                 // Select group if valid and not stopping
                 if (scheduleResult.group && !scheduleResult.group->isStopping()) {
                     selectedGroup = scheduleResult.group;
-                    // Drain this worker's pinned lane first (lane == worker id),
-                    // then the shared queue. hasPinnedWork is a single atomic
-                    // read, so unpinned workloads pay nothing measurable.
-                    if (selectedGroup->hasPinnedWork(stThreadId)) {
-                        contract = selectedGroup->selectForPinnedExecution(stThreadId);
-                    }
-                    if (!contract.valid()) {
-                        contract = selectedGroup->selectForExecution();
+                    contract = claimFrom(selectedGroup);
+
+                    // Nothing claimable there (its scheduled contracts may not be due yet):
+                    // move on to the other groups before counting a soft failure.
+                    for (auto* group : _workContractGroups) {
+                        if (contract.valid()) break;
+                        if (!group || group == scheduleResult.group || group->isStopping()) continue;
+                        contract = claimFrom(group);
+                        if (contract.valid()) selectedGroup = group;
                     }
                 }
             }
@@ -271,8 +330,8 @@ void WorkService::executeWork(const std::stop_token& token, LaneWake& wake) {
             // No work found - check for ready timers before sleeping
             checkTimedDeferrals();
 
-            // Use condition variable for efficient waiting (100us timeout as safety valve)
-            parkUntilWork(token, wake, wakeSnapshot, std::chrono::microseconds(100));
+            leftSharedDeadline = parkUntilWork(token, wake, wakeSnapshot, pinnedDue, sharedDue);
+            pinnedDue = sharedDue = NO_DEADLINE;
             continue;
         }
 
@@ -282,6 +341,12 @@ void WorkService::executeWork(const std::stop_token& token, LaneWake& wake) {
                 // Abort without executing: transition Executing -> Free safely during shutdown
                 selectedGroup->abortExecution(contract);
                 break;
+            }
+
+            // Busy now: the shared due time this worker left would go unwatched.
+            if (leftSharedDeadline) {
+                handOffSharedDeadline();
+                leftSharedDeadline = false;
             }
 
             // Execute the work (includes all cleanup)
@@ -299,8 +364,8 @@ void WorkService::executeWork(const std::stop_token& token, LaneWake& wake) {
                 // Check for ready timers before sleeping
                 checkTimedDeferrals();
 
-                // Use condition variable for efficient waiting (1ms timeout as safety valve)
-                parkUntilWork(token, wake, wakeSnapshot, std::chrono::milliseconds(1));
+                leftSharedDeadline = parkUntilWork(token, wake, wakeSnapshot, pinnedDue, sharedDue);
+                pinnedDue = sharedDue = NO_DEADLINE;
             } else {
                 std::this_thread::yield();
             }
@@ -308,24 +373,63 @@ void WorkService::executeWork(const std::stop_token& token, LaneWake& wake) {
     }
 }
 
-void WorkService::parkUntilWork(const std::stop_token& token, LaneWake& wake, uint64_t wakeSnapshot,
-                                std::chrono::nanoseconds timeout) {
+bool WorkService::parkUntilWork(const std::stop_token& token, LaneWake& wake, uint64_t wakeSnapshot,
+                                std::chrono::steady_clock::time_point pinnedDue,
+                                std::chrono::steady_clock::time_point sharedDue) {
+    // A timed contract pinned to this lane has no other drainer: always wake for it.
+    // A shared due time wakes one parked worker: this one only if it lowers the
+    // earliest shared due time any parked worker waits for.
+    auto deadline = pinnedDue;
+    int64_t sharedNs = NO_PARK_DEADLINE;
+    if (sharedDue < deadline) {
+        const int64_t dueNs = sharedDue.time_since_epoch().count();
+        int64_t current = _parkDeadlineNs.load(std::memory_order_seq_cst);
+        while (dueNs < current &&
+               !_parkDeadlineNs.compare_exchange_weak(current, dueNs, std::memory_order_seq_cst)) {
+        }
+        if (dueNs < current) {
+            sharedNs = dueNs;
+            deadline = sharedDue;
+        }
+    }
+    const bool timed = deadline != NO_DEADLINE;
+
     const uint64_t laneBit = stThreadId < 64 ? (uint64_t(1) << stThreadId) : 0;
     wake.parked.store(1, std::memory_order_seq_cst);
     _parkedMask.fetch_or(laneBit, std::memory_order_seq_cst);
     {
         std::unique_lock<std::mutex> lock(_workAvailableMutex);
-        // Consumed, not cleared, so a notify since the failed poll survives the wait;
-        // matches the writer's seq_cst. H.1's mask skip and H.3's early-out depend on this.
-        _workAvailableCV.wait_for(lock, timeout, [this, &wake, wakeSnapshot, &token]() {
-            return (_workAvailable.load(std::memory_order_seq_cst) &&
-                    _workAvailable.exchange(false, std::memory_order_acq_rel)) ||
-                   wake.seq.load(std::memory_order_seq_cst) != wakeSnapshot || token.stop_requested();
-        });
+        // Tokens and wake.seq are read seq_cst after the mask bit is set: the Dekker pair
+        // with notifyWorkAvailable()'s mask read and notifyPinnedWorkAvailable()'s parked read.
+        auto woken = [this, &wake, wakeSnapshot, &token]() {
+            return tryConsumeWakeToken() || wake.seq.load(std::memory_order_seq_cst) != wakeSnapshot ||
+                   token.stop_requested();
+        };
+        if (timed) {
+            _workAvailableCV.wait_until(lock, deadline, woken);
+        } else {
+            _workAvailableCV.wait(lock, woken);
+        }
     }
     _parkedMask.fetch_and(~laneBit, std::memory_order_seq_cst);
     wake.parked.store(0, std::memory_order_release);
+    bool leftSharedDeadline = false;
+    if (sharedNs != NO_PARK_DEADLINE) {
+        // Unchanged since this worker set it: no parked worker now waits for a shared due time
+        // it knows of. A later parker sets its own.
+        const bool released =
+            _parkDeadlineNs.compare_exchange_strong(sharedNs, NO_PARK_DEADLINE, std::memory_order_seq_cst);
+        leftSharedDeadline = released && std::chrono::steady_clock::now() < deadline;
+    }
     stSoftFailureCount = 0;
+    return leftSharedDeadline;
+}
+
+void WorkService::handOffSharedDeadline() {
+    // Another parked worker pulls, finds the contract not due, and parks with its due time.
+    if (!_parkedMaskCoversPool || _parkedMask.load(std::memory_order_seq_cst) != 0) {
+        notifyWorkAvailable();
+    }
 }
 
 void WorkService::checkTimedDeferrals() {
@@ -346,14 +450,29 @@ void WorkService::checkTimedDeferrals() {
     }
 }
 
+bool WorkService::tryConsumeWakeToken() noexcept {
+    uint32_t tokens = _wakeTokens.load(std::memory_order_seq_cst);
+    while (tokens > 0) {
+        if (_wakeTokens.compare_exchange_weak(tokens, tokens - 1, std::memory_order_seq_cst)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void WorkService::notifyWorkAvailable([[maybe_unused]] WorkContractGroup* group) {
-    // We don't need to track which group has work, just that work is available
-    _workAvailable = true;
-    // Dekker pair with parkUntilWork, which sets its bit before reading the flag: an
-    // empty mask proves every worker still on its way into the wait sees the store above.
+    // One token per notify, so N schedules release N parked workers. At the cap every
+    // worker already has a token to consume, so none is added.
+    uint32_t tokens = _wakeTokens.load(std::memory_order_seq_cst);
+    while (tokens < _config.threadCount &&
+           !_wakeTokens.compare_exchange_weak(tokens, tokens + 1, std::memory_order_seq_cst)) {
+    }
+    // Dekker pair with parkUntilWork, which sets its bit before reading the tokens: an
+    // empty mask proves every worker still on its way into the wait sees the token.
     if (_parkedMaskCoversPool && _parkedMask.load(std::memory_order_seq_cst) == 0) {
         return;
     }
+    { std::lock_guard<std::mutex> handshake(_workAvailableMutex); }  // see requestStop()
     _workAvailableCV.notify_one();
 }
 
@@ -366,7 +485,7 @@ void WorkService::notifyWorkAvailableFor(WorkContractGroup* group, ExecutionType
 }
 
 // Out of line so the AnyThread path above never touches _laneWake, whose pointers
-// share a cache line with the notifier-written _workAvailable.
+// share a cache line with the notifier-written _wakeTokens.
 void WorkService::notifyPinnedWorkAvailable(WorkContractGroup* group, uint32_t lane) {
     // Lanes this service does not own are drained by whatever external thread pumps
     // them; fall back to the shared wake, which is what they see today.
@@ -381,7 +500,7 @@ void WorkService::notifyPinnedWorkAvailable(WorkContractGroup* group, uint32_t l
         return;
     }
 
-    // Bump after the ready bit is published. _workAvailable is deliberately left alone:
+    // Bump after the ready bit is published. _wakeTokens is deliberately left alone:
     // only lane L can claim this, so any other woken worker would just re-park.
     LaneWake& wake = _laneWake[lane];
     wake.seq.fetch_add(1, std::memory_order_acq_rel);
@@ -389,6 +508,30 @@ void WorkService::notifyPinnedWorkAvailable(WorkContractGroup* group, uint32_t l
         { std::lock_guard<std::mutex> handshake(_workAvailableMutex); }  // see requestStop()
         _workAvailableCV.notify_all();
     }
+}
+
+void WorkService::notifyMainThreadWorkAvailable([[maybe_unused]] WorkContractGroup* group) {
+    // Dekker pair with waitForMainThreadWork(): bump, then read parked; the waiter
+    // raises parked, then reads seq.
+    _mainThreadWake.seq.fetch_add(1, std::memory_order_seq_cst);
+    if (_mainThreadWake.parked.load(std::memory_order_seq_cst) != 0) {
+        { std::lock_guard<std::mutex> handshake(_workAvailableMutex); }  // see requestStop()
+        _mainThreadWorkCV.notify_all();
+    }
+}
+
+void WorkService::waitForMainThreadWork(uint64_t snapshot, std::optional<std::chrono::steady_clock::time_point> deadline) {
+    _mainThreadWake.parked.fetch_add(1, std::memory_order_seq_cst);
+    {
+        std::unique_lock<std::mutex> lock(_workAvailableMutex);
+        auto woken = [this, snapshot]() { return _mainThreadWake.seq.load(std::memory_order_seq_cst) != snapshot; };
+        if (deadline) {
+            _mainThreadWorkCV.wait_until(lock, *deadline, woken);
+        } else {
+            _mainThreadWorkCV.wait(lock, woken);
+        }
+    }
+    _mainThreadWake.parked.fetch_sub(1, std::memory_order_release);
 }
 
 void WorkService::notifyGroupDestroyed(WorkContractGroup* group) {
@@ -425,7 +568,7 @@ WorkService::MainThreadWorkResult WorkService::executeMainThreadWork(size_t maxC
     // Tracy zone attributes it in the GUI timeline.
     ZoneScopedN("WorkService::executeMainThreadWork");
     ::EntropyEngine::Core::Debug::CpuZoneScope _cpuz("WorkService::executeMainThreadWork");
-    MainThreadWorkResult result{0, 0, false};
+    MainThreadWorkResult result{0, 0, false, std::nullopt};
 
     // Claim under the registry shared_lock, execute outside it. An unlocked
     // snapshot of raw group pointers would dangle if a group is removed and
@@ -434,6 +577,7 @@ WorkService::MainThreadWorkResult WorkService::executeMainThreadWork(size_t maxC
     // (same protocol as executeWork()).
     size_t remaining = maxContracts;
     std::vector<WorkContractGroup*> countedGroups;  // distinct groups drained (registry is small)
+    auto nextDue = NO_DEADLINE;
 
     while (remaining > 0) {
         WorkContractGroup* group = nullptr;
@@ -441,8 +585,9 @@ WorkService::MainThreadWorkResult WorkService::executeMainThreadWork(size_t maxC
         {
             std::shared_lock<std::shared_mutex> lock(_workContractGroupsMutex);
             for (auto* candidate : _workContractGroups) {
-                if (candidate && candidate->hasMainThreadWork()) {
-                    handle = candidate->selectForMainThreadExecution();
+                // Any scheduled contract, due or not: a pull reports the due time of those that are not.
+                if (candidate && candidate->mainThreadScheduledCount() > 0) {
+                    handle = candidate->selectForMainThreadExecution(std::nullopt, &nextDue);
                     if (handle.valid()) {
                         group = candidate;
                         break;
@@ -475,6 +620,9 @@ WorkService::MainThreadWorkResult WorkService::executeMainThreadWork(size_t maxC
                 break;
             }
         }
+    }
+    if (nextDue != NO_DEADLINE) {
+        result.nextDue = nextDue;
     }
 
     return result;

@@ -19,7 +19,9 @@
 
 #pragma once
 
+#include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <functional>
 #include <limits>
 #include <list>
@@ -136,17 +138,19 @@ private:
      * @brief Internal storage for a single work contract
      *
      * Each slot represents one work contract and tracks its lifecycle through
-     * atomic state transitions. The generation counter prevents use-after-free
-     * by invalidating old handles when slots are reused.
+     * atomic state transitions. Generation and state share one atomic word, so
+     * every transition is a single CAS on both: a handle whose generation is
+     * stale can never move a slot that now holds another contract. Freeing a
+     * slot bumps the generation in the same CAS.
      */
     struct ContractSlot
     {
-        std::atomic<uint32_t> generation{1};                    ///< Handle validation counter
-        std::atomic<ContractState> state{ContractState::Free};  ///< Current lifecycle state
+        std::atomic<uint64_t> word{0};  ///< Generation (high 32 bits) and state (low 32 bits); set by the constructor
         std::function<void()> work;                             ///< Work function
         std::atomic<uint32_t> nextFree{INVALID_INDEX};          ///< Next free slot
         ExecutionType executionType{ExecutionType::AnyThread};  ///< Execution context (main/any/pinned)
         uint32_t pinnedLane{INVALID_INDEX};  ///< Lane index when executionType == PinnedThread
+        std::atomic<int64_t> dueNs{0};       ///< Earliest run time (steady_clock ticks); 0 when not timed
     };
 
     std::vector<ContractSlot> _contracts;                  ///< Contract storage
@@ -159,6 +163,7 @@ private:
     /// The WorkService maps its worker ids onto lanes; external threads pump a
     /// lane by convention via executePinnedWork().
     std::vector<std::unique_ptr<SignalTreeBase>> _pinnedLanes;
+    std::atomic<size_t> _timedCount{0};      ///< Scheduled contracts with a due time, not yet claimed
     std::atomic<uint64_t> _freeListHead{0};  ///< Free list head (packed: [tag:32(upper) | index:32(lower)])
 
     std::atomic<size_t> _activeCount{0};               ///< Active contract count
@@ -314,10 +319,12 @@ public:
      *
      * @param lane The lane to select from
      * @param bias Optional selection bias for fair work distribution
+     * @param nextDue When non-null, lowered to the earliest due time among skipped contracts
      * @return Handle to an executing contract, or invalid handle if none available
      */
     WorkContractHandle selectForPinnedExecution(size_t lane,
-                                                std::optional<std::reference_wrapper<uint64_t>> bias = std::nullopt);
+                                                std::optional<std::reference_wrapper<uint64_t>> bias = std::nullopt,
+                                                std::chrono::steady_clock::time_point* nextDue = nullptr);
 
     /**
      * @brief Executes contracts scheduled on the given pinned lane
@@ -342,7 +349,14 @@ public:
     /**
      * @brief Waits for all scheduled and executing contracts to complete
      *
-     * Blocks until all work finishes. Includes scheduled and executing contracts.
+     * Blocks until all work finishes. Includes scheduled and executing contracts;
+     * a contract scheduled with scheduleAt() completes no earlier than its due time.
+     * While stop() is in effect, waits only for executing and selecting threads.
+     *
+     * Never returns while work keeps rescheduling itself: a repeating timer, a
+     * repeating yield-until node, or a contract scheduled at time_point::max().
+     * Unschedule or stop() such work first. Deadlocks if called from a contract
+     * running on this group, since that contract counts as executing.
      *
      * @code
      * // Submit a batch of work
@@ -470,11 +484,11 @@ public:
     /**
      * @brief Checks if there are any main thread contracts ready to execute
      *
-     * @return true if main thread work is available
+     * Contracts scheduled with scheduleAt() count once their due time has passed.
+     *
+     * @return true if a main thread contract is scheduled and due
      */
-    bool hasMainThreadWork() const noexcept {
-        return mainThreadScheduledCount() > 0;
-    }
+    bool hasMainThreadWork() const noexcept;
 
     /**
      * @brief Schedules a contract for execution (called by handle.schedule())
@@ -486,6 +500,26 @@ public:
      * @return Result indicating success or failure reason
      */
     ScheduleResult scheduleContract(const WorkContractHandle& handle);
+
+    /**
+     * @brief Schedules a contract to run no earlier than @p due (called by handle.scheduleAt())
+     *
+     * Stores the due time on the slot, then schedules like scheduleContract(): the
+     * contract is Scheduled, in its ready queue, and counted by wait() and
+     * scheduledCount(). Selection skips it until @p due. A @p due at or before now
+     * is scheduleContract().
+     *
+     * @param handle Handle to the contract to schedule
+     * @param due Earliest time the contract may run; time_point::max() never runs
+     * @return Scheduled, AlreadyScheduled, Executing, or Invalid
+     */
+    ScheduleResult scheduleContractAt(const WorkContractHandle& handle, std::chrono::steady_clock::time_point due);
+
+    /**
+     * @brief Gets the count of scheduled contracts with a due time
+     * @return Number of contracts scheduled with scheduleAt() and not yet claimed, unscheduled or released
+     */
+    size_t timedCount() const noexcept { return _timedCount.load(std::memory_order_acquire); }
 
     /**
      * @brief Removes a contract from scheduling (called by handle.unschedule())
@@ -520,11 +554,14 @@ public:
      * @brief Selects a scheduled contract for execution
      *
      * Atomically transitions a contract from Scheduled to Executing state.
+     * Contracts whose due time has not arrived stay Scheduled and are skipped.
      *
      * @param bias Optional selection bias for fair work distribution
+     * @param nextDue When non-null, lowered to the earliest due time among skipped contracts
      * @return Handle to an executing contract, or invalid handle if none available
      */
-    WorkContractHandle selectForExecution(std::optional<std::reference_wrapper<uint64_t>> bias = std::nullopt);
+    WorkContractHandle selectForExecution(std::optional<std::reference_wrapper<uint64_t>> bias = std::nullopt,
+                                          std::chrono::steady_clock::time_point* nextDue = nullptr);
 
     /**
      * @brief Selects a main thread scheduled contract for execution
@@ -534,6 +571,7 @@ public:
      * with other selections.
      *
      * @param bias Optional selection bias for fair work distribution
+     * @param nextDue When non-null, lowered to the earliest due time among skipped contracts
      * @return Handle to an executing contract, or invalid handle if none available
      *
      * @code
@@ -546,7 +584,8 @@ public:
      * @endcode
      */
     WorkContractHandle selectForMainThreadExecution(
-        std::optional<std::reference_wrapper<uint64_t>> bias = std::nullopt);
+        std::optional<std::reference_wrapper<uint64_t>> bias = std::nullopt,
+        std::chrono::steady_clock::time_point* nextDue = nullptr);
 
     /**
      * @brief Executes all main thread targeted work contracts
@@ -733,6 +772,55 @@ private:
     static std::unique_ptr<SignalTreeBase> createSignalTree(size_t capacity);
 
     /**
+     * @brief Publishes a slot just moved to Scheduled
+     *
+     * Counts before the bit, sets the ready-queue bit, then notifies the provider
+     * by execution type.
+     *
+     * @param index Slot index
+     * @param slot The slot, already in Scheduled state
+     */
+    void publishScheduled(uint32_t index, ContractSlot& slot);
+
+    /**
+     * @brief Clears a slot's due time, counting it out of timedCount() if it had one
+     *
+     * Called by the thread that just moved the slot out of Scheduled.
+     *
+     * @param slot Slot leaving Scheduled
+     * @return true if the slot had a due time
+     */
+    bool clearDue(ContractSlot& slot) noexcept;
+
+    /**
+     * @brief Ends a peek by moving the slot out of Peeking to @p target
+     *
+     * If the owner released or unscheduled the contract during the peek, the CAS
+     * fails and this completes that operation instead: frees the slot for
+     * PeekReleased, returns it to Allocated for PeekUnscheduled.
+     *
+     * @param index Slot index
+     * @param slot The slot, in Peeking (or a peek handoff state) and held by the caller
+     * @param generation The slot's generation when the caller moved it to Peeking
+     * @param target Scheduled or Executing
+     * @return true if the slot moved to @p target; false if a handoff was completed
+     */
+    bool resolvePeek(uint32_t index, ContractSlot& slot, uint32_t generation, ContractState target);
+
+    /**
+     * @brief Clears a stale ready bit from a queue, keeping it if the slot is scheduled there
+     *
+     * The slot may be scheduled into that queue between the caller's state read and
+     * the clear; the bit is set again in that case.
+     *
+     * @param type Execution type of the queue holding the bit
+     * @param lane Pinned lane of the queue for PinnedThread; ignored otherwise
+     * @param index Slot index
+     * @param slot The slot the bit names
+     */
+    void clearStaleBit(ExecutionType type, uint32_t lane, uint32_t index, const ContractSlot& slot);
+
+    /**
      * @brief Validates that a handle belongs to this group with correct generation
      *
      * Internal validation checking owner, bounds, and generation.
@@ -745,8 +833,9 @@ private:
     /**
      * @brief Returns a contract slot to the free list after cleanup
      *
-     * Increments generation, clears work function, updates counters,
-     * and notifies waiters.
+     * The caller has already moved the slot to Free with a new generation, which
+     * invalidates its handles. Clears the work function, updates counters, and
+     * notifies waiters.
      *
      * @param index The slot index to return to the free list
      * @param previousState The state the slot was in before being freed
@@ -754,22 +843,39 @@ private:
      */
     void returnSlotToFreeList(uint32_t index, ContractState previousState, bool isMainThread = false);
 
-    /// The queue a slot's ready bit lives in (main, pinned lane, or shared ready).
-    SignalTreeBase& readyTreeFor(const ContractSlot& slot) {
-        if (slot.executionType == ExecutionType::MainThread) return *_mainThreadContracts;
-        if (slot.executionType == ExecutionType::PinnedThread && slot.pinnedLane < _pinnedLanes.size())
-            return *_pinnedLanes[slot.pinnedLane];
-        return *_readyContracts;
-    }
+    /**
+     * @brief The queue for an execution type
+     * @param type Execution type
+     * @param lane Pinned lane for PinnedThread; ignored otherwise
+     * @return The main-thread queue, the lane's queue, or the shared ready queue
+     */
+    SignalTreeBase& treeFor(ExecutionType type, uint32_t lane);
 
-    /// Claims one background-class contract (AnyThread or PinnedThread) from `tree`,
-    /// verifying post-claim that the slot really belongs to that queue
-    /// (expectedType/expectedLane); reverts and re-asserts the slot's own queue
-    /// bit on a stale-bit mismatch. Updates the background counters (pinned work
-    /// is counted with background work; the trees themselves answer per-lane
-    /// questions).
-    WorkContractHandle claimBackgroundContract(SignalTreeBase& tree, ExecutionType expectedType, uint32_t expectedLane,
-                                               uint64_t& bias);
+    /**
+     * @brief The queue a slot's ready bit lives in
+     * @param slot The slot
+     * @return treeFor() of the slot's execution type and lane
+     */
+    SignalTreeBase& readyTreeFor(const ContractSlot& slot);
+
+    /**
+     * @brief Claims one due contract from the queue for @p type
+     *
+     * Peeks candidates without taking their bits, starting at the position @p bias
+     * picks and wrapping once. Each candidate is moved to Peeking, checked for queue
+     * membership and due time, then claimed or put back. Contracts that are not due
+     * stay Scheduled with their bits set. Updates the main-thread counters for
+     * MainThread, the background counters otherwise (pinned work is counted with
+     * background work).
+     *
+     * @param type Execution type of the queue to claim from
+     * @param lane Pinned lane for PinnedThread; ignored otherwise
+     * @param bias Start position; advanced past a claimed contract
+     * @param nextDue When non-null, lowered to the earliest due time among contracts that are not due
+     * @return Handle to an executing contract, or invalid handle if none is due
+     */
+    WorkContractHandle claimFrom(ExecutionType type, uint32_t lane, uint64_t& bias,
+                                 std::chrono::steady_clock::time_point* nextDue);
 
     /**
      * @brief Releases all remaining contracts in the group

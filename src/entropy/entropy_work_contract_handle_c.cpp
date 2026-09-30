@@ -55,6 +55,8 @@ EntropyScheduleResult toCScheduleResult(ScheduleResult result) {
             return ENTROPY_SCHEDULE_NOT_SCHEDULED;
         case ScheduleResult::Executing:
             return ENTROPY_SCHEDULE_EXECUTING;
+        case ScheduleResult::TryAgainLater:
+            return ENTROPY_SCHEDULE_TRY_AGAIN_LATER;
         case ScheduleResult::Invalid:
         default:
             return ENTROPY_SCHEDULE_INVALID;

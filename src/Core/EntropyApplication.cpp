@@ -9,7 +9,10 @@
 
 #include "Core/EntropyApplication.h"
 
+#include <chrono>
 #include <cstdlib>
+#include <format>
+#include <optional>
 #include <thread>
 #include <utility>
 
@@ -18,6 +21,7 @@
 #include "Concurrency/WorkService.h"
 #include "Core/RefObject.h"
 #include "Core/TimerService.h"
+#include "Logging/Logger.h"
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -152,11 +156,32 @@ int EntropyApplication::run() {
 #endif
     });
 
-    // Main application loop - runs at full speed with no blocking waits
-    while (!_terminateRequested.load(std::memory_order_acquire)) {
+    // terminate() reads the service under _loopMutex; the registry is not synchronized.
+    auto workService = _services.get<Concurrency::WorkService>();
+    {
+        std::lock_guard<std::mutex> lock(_loopMutex);
+        _mainLoopWorkService = workService;
+    }
+    const bool waitsForWork = _cfg.mainLoopWaitsForWork && static_cast<bool>(workService);
+    ENTROPY_LOG_INFO(std::format("EntropyApplication: main loop starting ({})",
+                                 waitsForWork ? "waits for main-thread work" : "free-running"));
+
+    // Main application loop. Blocks only when mainLoopWaitsForWork is set.
+    for (;;) {
+        // Before the terminate check and the poll: a notify or terminate() after this
+        // point releases the wait below.
+        const uint64_t wakeSnapshot = workService ? workService->mainThreadWorkSnapshot() : 0;
+        if (_terminateRequested.load(std::memory_order_acquire)) {
+            break;
+        }
+
         // Execute all pending main thread work from the work service
-        if (auto workService = _services.get<Concurrency::WorkService>()) {
-            workService->executeMainThreadWork();
+        bool moreWorkAvailable = false;
+        std::optional<std::chrono::steady_clock::time_point> nextDue;
+        if (workService) {
+            const auto result = workService->executeMainThreadWork();
+            moreWorkAvailable = result.moreWorkAvailable;
+            nextDue = result.nextDue;
         }
 
         // Let the application delegate run its per-frame logic
@@ -168,7 +193,17 @@ int EntropyApplication::run() {
         // (executeMainThreadWork + delegate render). Lets Tracy slice the
         // timeline per frame so the per-frame "gap" and spikes are readable.
         FrameMark;
+
+        if (waitsForWork && !moreWorkAvailable) {
+            workService->waitForMainThreadWork(wakeSnapshot, nextDue);
+        }
     }
+
+    {
+        std::lock_guard<std::mutex> lock(_loopMutex);
+        _mainLoopWorkService = {};
+    }
+    ENTROPY_LOG_INFO("EntropyApplication: main loop exited");
 
     // Signal handler thread will stop automatically via stop_token when signalThread goes out of scope
 
@@ -203,6 +238,16 @@ int EntropyApplication::run() {
 void EntropyApplication::terminate(int code) {
     _exitCode.store(code);
     _terminateRequested.store(true, std::memory_order_release);
+    // After the flag store: run() reads the wake sequence before the flag, so it either
+    // sees the flag or its wait sees this bump.
+    RefObject<Concurrency::WorkService> workService;
+    {
+        std::lock_guard<std::mutex> lock(_loopMutex);
+        workService = _mainLoopWorkService;
+    }
+    if (workService) {
+        workService->notifyMainThreadWorkAvailable();
+    }
 #if defined(_WIN32)
     // Signal terminate event so Windows wait loop wakes
     HANDLE th = static_cast<HANDLE>(_terminateEvent);

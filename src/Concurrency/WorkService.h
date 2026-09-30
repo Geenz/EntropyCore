@@ -24,6 +24,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <shared_mutex>
 #include <thread>
 #include <vector>
@@ -100,10 +101,11 @@ class WorkService : public IConcurrencyProvider, public ::EntropyEngine::Core::E
 
     std::atomic<bool> _running = false;
 
-    // Condition variable for efficient waiting when no work is available
+    // Workers park on _workAvailableCV until a notify, or until a due time when timed work is armed.
     std::condition_variable _workAvailableCV;
     std::mutex _workAvailableMutex;
-    std::atomic<bool> _workAvailable{false};
+    /// Shared-work wake tokens, capped at the pool size: one notify releases one parked worker.
+    std::atomic<uint32_t> _wakeTokens{0};
 
     /// Per-lane wake channel: seq must be bumped after the ready bit (park predicate order);
     /// parked lets a notifier skip lanes that are not sleeping.
@@ -119,6 +121,12 @@ class WorkService : public IConcurrencyProvider, public ::EntropyEngine::Core::E
     std::atomic<uint64_t> _parkedMask{0};
     bool _parkedMaskCoversPool = false;  ///< False past 64 lanes; the mask is then unused
 
+    /// Main-thread wake channel; parked counts waiters in waitForMainThreadWork().
+    LaneWake _mainThreadWake;
+    std::condition_variable _mainThreadWorkCV;  ///< Waits on _workAvailableMutex
+
+    std::atomic<int64_t> _parkDeadlineNs{std::numeric_limits<int64_t>::max()};  ///< Earliest shared due time a parked worker waits for (steady_clock ticks)
+
 public:
     /**
      * @brief Result structure for main thread work execution
@@ -131,6 +139,7 @@ public:
         size_t contractsExecuted;  ///< Number of contracts actually executed
         size_t groupsWithWork;     ///< Number of groups that had work available
         bool moreWorkAvailable;    ///< Whether there's more work that could be executed
+        std::optional<std::chrono::steady_clock::time_point> nextDue;  ///< Earliest due time among main-thread contracts not yet due
     };
 
     /**
@@ -376,11 +385,51 @@ public:
     void notifyWorkAvailableFor(WorkContractGroup* group, ExecutionType type, uint32_t lane) override;
     void notifyGroupDestroyed(WorkContractGroup* group) override;
 
-    /// No-op: worker threads can never claim main-thread contracts, so waking one
-    /// to discover that is pure loss. The caller pumps via executeMainThreadWork().
-    void notifyMainThreadWorkAvailable(WorkContractGroup* group = nullptr) override {
-        (void)group;
+    /**
+     * @brief Wakes threads blocked in waitForMainThreadWork()
+     *
+     * Called by WorkContractGroup when a MainThread contract is scheduled. Producers of
+     * other main-loop input call it directly. Worker threads are never woken: they cannot
+     * claim main-thread contracts. Can be called from any thread.
+     *
+     * @param group The group with new main-thread work (unused, may be null)
+     */
+    void notifyMainThreadWorkAvailable(WorkContractGroup* group = nullptr) override;
+
+    /**
+     * @brief Main-thread wake sequence for a later waitForMainThreadWork()
+     *
+     * Take the snapshot before polling main-thread work; any notify after it releases the wait.
+     *
+     * @return Current wake sequence
+     */
+    [[nodiscard]] uint64_t mainThreadWorkSnapshot() const noexcept {
+        return _mainThreadWake.seq.load(std::memory_order_acquire);
     }
+
+    /**
+     * @brief Blocks until main-thread work is signalled after @p snapshot, or until @p deadline
+     *
+     * Returns at once if notifyMainThreadWorkAvailable() or requestStop() ran since the
+     * snapshot was taken. Pass the nextDue of the last executeMainThreadWork() as
+     * @p deadline so a main-thread contract scheduled with scheduleAt() runs when due.
+     * Can be called from any thread.
+     *
+     * @param snapshot Value from mainThreadWorkSnapshot(), taken before the last poll
+     * @param deadline Latest wake time; nullopt waits for a notify only
+     *
+     * @code
+     * for (;;) {
+     *     const uint64_t snap = service.mainThreadWorkSnapshot();
+     *     auto result = service.executeMainThreadWork();
+     *     if (!result.moreWorkAvailable) {
+     *         service.waitForMainThreadWork(snap, result.nextDue);
+     *     }
+     * }
+     * @endcode
+     */
+    void waitForMainThreadWork(uint64_t snapshot,
+                               std::optional<std::chrono::steady_clock::time_point> deadline = std::nullopt);
 
     /**
      * @brief Execute main thread targeted work from all registered groups
@@ -494,10 +543,36 @@ private:
      */
     void executeWork(const std::stop_token& token, LaneWake& wake);
 
-    /// wakeSnapshot must be read before the poll that just failed; the predicate consumes
-    /// wake.seq (never clears it) so a notify between poll and wait is not lost.
-    void parkUntilWork(const std::stop_token& token, LaneWake& wake, uint64_t wakeSnapshot,
-                       std::chrono::nanoseconds timeout);
+    /**
+     * @brief Parks the calling worker until work may be available
+     *
+     * Returns on a wake token, a bump of wake.seq past @p wakeSnapshot, or stop. Also
+     * returns at @p pinnedDue, and at @p sharedDue unless another parked worker already
+     * waits for a shared due time at or before it. A claimed timed contract wakes the next
+     * worker while others remain (see WorkContractGroup::claimFrom()).
+     *
+     * @param token Stop token for cooperative thread cancellation
+     * @param wake This worker's wake channel
+     * @param wakeSnapshot wake.seq read before the poll that just failed, so a notify between poll and wait is not lost
+     * @param pinnedDue Earliest due time this worker skipped on its pinned lane; time_point::max() when none
+     * @param sharedDue Earliest due time this worker skipped on shared queues; time_point::max() when none
+     * @return true if this worker was the one watching a shared due time and was woken before it;
+     *         the caller hands it off with handOffSharedDeadline() once it claims work
+     */
+    bool parkUntilWork(const std::stop_token& token, LaneWake& wake, uint64_t wakeSnapshot,
+                       std::chrono::steady_clock::time_point pinnedDue,
+                       std::chrono::steady_clock::time_point sharedDue);
+
+    /**
+     * @brief Wakes a parked worker to take over a shared due time this worker left
+     *
+     * Called by a worker that left a shared due time early and then claimed work, so the due
+     * time would otherwise go unwatched while it is busy.
+     */
+    void handOffSharedDeadline();
+
+    /// Consumes one shared-work wake token; false when none is left.
+    bool tryConsumeWakeToken() noexcept;
 
     /// Lane-targeted half of notifyWorkAvailableFor(); see its definition.
     void notifyPinnedWorkAvailable(WorkContractGroup* group, uint32_t lane);

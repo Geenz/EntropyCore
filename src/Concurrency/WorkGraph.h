@@ -19,6 +19,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <functional>
 #include <memory>
@@ -120,6 +121,10 @@ struct WorkGraphNode
     /// Optional maximum reschedule limit
     std::optional<uint32_t> maxReschedules;
 
+    /// Wake time of a yield-until node between its yield and the arming of its timed contract;
+    /// set before the node becomes Ready, taken by whoever moves it to Scheduled.
+    std::optional<std::chrono::steady_clock::time_point> wakeTime;
+
     /// Is this a yieldable node?
     bool isYieldable = false;
 
@@ -147,6 +152,7 @@ struct WorkGraphNode
           pinnedLane(other.pinnedLane),
           rescheduleCount(other.rescheduleCount.load()),
           maxReschedules(other.maxReschedules),
+          wakeTime(other.wakeTime),
           isYieldable(other.isYieldable) {
         other.userData = nullptr;
     }
@@ -166,6 +172,7 @@ struct WorkGraphNode
             pinnedLane = other.pinnedLane;
             rescheduleCount.store(other.rescheduleCount.load());
             maxReschedules = other.maxReschedules;
+            wakeTime = other.wakeTime;
             isYieldable = other.isYieldable;
             other.userData = nullptr;
         }
@@ -403,7 +410,8 @@ public:
      *
      * Creates a node that can yield control back to the scheduler and be
      * rescheduled later. Perfect for polling operations, staged processing,
-     * or any task that needs to wait without blocking a thread.
+     * or any task that needs to wait without blocking a thread. A node that
+     * returns WorkResultContext::yieldUntil() holds one contract slot while it waits.
      *
      * @param work Yieldable function returning WorkResult
      * @param name Human-readable name for debugging
@@ -725,20 +733,18 @@ public:
     size_t processDeferredNodes();
 
     /**
-     * @brief Checks timed deferrals and schedules nodes whose wake time has arrived
+     * @brief Re-arms yield-until nodes that waited for contract capacity
      *
-     * Examines nodes that yielded with a specific wake time (e.g., timers) and
-     * schedules any whose scheduled time has passed. Call this periodically from
-     * your main loop or worker threads to ensure timers fire promptly.
+     * Yield-until nodes wait as timed work contracts, which run once due on whatever
+     * pulls them. This re-arms nodes that found no contract slot when they yielded.
      *
-     * @return Number of timed nodes successfully scheduled
+     * @return Number of nodes re-armed
      *
      * @code
-     * // In main loop
+     * // Manual pump without a WorkService
      * while (running) {
-     *     graph.checkTimedDeferrals();  // Wake up any ready timers
-     *     workService->executeMainThreadWork(10);
-     *     std::this_thread::sleep_for(10ms);
+     *     graph.checkTimedDeferrals();
+     *     workGroup.executeAllBackgroundWork();
      * }
      * @endcode
      */
@@ -1032,14 +1038,25 @@ private:
     /**
      * @brief Handles timed node yield - node suspended until specific time
      *
-     * Transitions the node from Executing to Yielded state and defers it
-     * until the specified wake time. The node sleeps passively in a priority
-     * queue consuming no CPU until the wake time arrives.
+     * Takes the node Executing -> Yielded -> Ready -> Scheduled, as a plain yield
+     * does, and arms a timed work contract that becomes due at the wake time. The
+     * node holds one contract slot while it waits and runs on the WorkService once
+     * due. While the graph is suspended the node stays Ready with its wake time,
+     * and resume() arms it for that time.
      *
      * @param node The node that yielded
      * @param wakeTime When the node should be reconsidered for scheduling
      */
     void onNodeYieldedUntil(const NodeHandle& node, std::chrono::steady_clock::time_point wakeTime);
+
+    /**
+     * @brief Schedules a node the caller has just moved to Scheduled
+     *
+     * @param node The node
+     * @param wakeTime Its yield-until wake time, if it has one: armed as a timed contract for that
+     *        time (at once if already past); otherwise scheduled now
+     */
+    void armScheduledNode(const NodeHandle& node, std::optional<std::chrono::steady_clock::time_point> wakeTime);
 
     /**
      * @brief Reschedules a yielded node for execution

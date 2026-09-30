@@ -444,6 +444,7 @@ if(ENTROPY_BUILD_TESTS)
             Tests/Concurrency/ThreadPinningTests.cpp
             Tests/Concurrency/MainThreadWorkTests.cpp
             Tests/Concurrency/WorkServiceTests.cpp
+            Tests/Concurrency/WorkServiceBenchmarks.cpp
     )
 
     # WorkGraph tests

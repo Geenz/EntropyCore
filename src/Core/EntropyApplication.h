@@ -18,6 +18,7 @@
 #include <string>
 #include <thread>
 
+#include "Concurrency/WorkService.h"
 #include "Core/EntropyObject.h"
 #include "Core/EntropyServiceRegistry.h"
 #include "Core/RefObject.h"
@@ -48,6 +49,9 @@ struct EntropyApplicationConfig
 {
     size_t workerThreads = 0;  // 0 => auto
     std::chrono::milliseconds shutdownDeadline{3000};
+    /// When true, run() blocks after an iteration that left no main-thread work until
+    /// WorkService::notifyMainThreadWorkAvailable() or terminate(). Off: the loop never blocks.
+    bool mainLoopWaitsForWork = false;
 };
 
 class EntropyApplication : public EntropyObject
@@ -135,6 +139,8 @@ private:
     // Inline wait primitives (replacing EntropyRunLoop)
     std::mutex _loopMutex;
     std::condition_variable _loopCv;
+    /// WorkService the main loop waits on; set by run() for the loop's duration, guarded by _loopMutex.
+    RefObject<Concurrency::WorkService> _mainLoopWorkService;
 };
 
 }  // namespace Core

@@ -76,7 +76,8 @@ typedef enum EntropyScheduleResult
     ENTROPY_SCHEDULE_ALREADY_SCHEDULED = 1,  ///< Contract was already scheduled (schedule operation failed)
     ENTROPY_SCHEDULE_NOT_SCHEDULED = 2,      ///< Contract is not scheduled (successful unschedule operation)
     ENTROPY_SCHEDULE_EXECUTING = 3,          ///< Cannot modify - currently executing
-    ENTROPY_SCHEDULE_INVALID = 4             ///< Invalid handle provided
+    ENTROPY_SCHEDULE_INVALID = 4,            ///< Invalid handle provided
+    ENTROPY_SCHEDULE_TRY_AGAIN_LATER = 5     ///< An unschedule is still being completed; retry
 } EntropyScheduleResult;
 
 // ============================================================================

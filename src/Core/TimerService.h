@@ -12,19 +12,24 @@
  * @brief Service for scheduling delayed and repeating timers
  *
  * This file contains the TimerService class, which provides a centralized
- * timer management system integrated with EntropyApplication. Timers are
- * implemented using WorkGraph yieldable nodes for efficient scheduling.
+ * timer management system integrated with EntropyApplication. Each pending
+ * fire is a timed work contract on the service's WorkContractGroup; it becomes
+ * due at its fire time and runs on the WorkService.
  */
 
 #pragma once
 
+#include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
+#include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "../Concurrency/WorkContractGroup.h"
-#include "../Concurrency/WorkGraph.h"
 #include "../TypeSystem/TypeID.h"
 #include "EntropyService.h"
 #include "Timer.h"
@@ -41,17 +46,20 @@ class WorkService;
 }
 
 /**
- * @brief Service for managing timers with WorkGraph backing
+ * @brief Service for managing timers as timed work contracts
  *
  * TimerService provides NSTimer-style delayed execution integrated with the
- * EntropyEngine service architecture. All timers are backed by yieldable
- * WorkGraph nodes, allowing efficient scheduling without dedicated timer threads.
+ * EntropyEngine service architecture. Each pending fire is one timed work
+ * contract (WorkContractHandle::scheduleAt) on the service's WorkContractGroup.
+ * The contract becomes due at its fire time and runs on the WorkService. A
+ * repeating timer arms its next fire from the body of the previous one.
+ * TimerService owns no thread and no condition variable.
  *
  * Key features:
  * - One-shot and repeating timers
  * - Main thread or background execution
  * - Automatic integration with WorkService
- * - No polling overhead - uses yieldable nodes
+ * - No polling: an idle pool wakes only for due timed contracts
  * - RAII-safe timer management
  *
  * Integration:
@@ -59,6 +67,10 @@ class WorkService;
  * - Depends on WorkService for execution
  * - Main thread timers execute via WorkService::executeMainThreadWork()
  * - Background timers execute on worker threads
+ * - A timer holds one contract slot from arm to fire; when the group is
+ *   full, scheduleTimer() returns an invalid Timer
+ * - With every worker inside a long contract, a due timer waits for the
+ *   first worker to finish
  *
  * Perfect for:
  * - Delayed UI updates
@@ -166,11 +178,14 @@ public:
      * Thread-safe. Can be called from any thread. The work function will
      * execute on the specified execution context (main thread or worker threads).
      *
-     * @param interval Time to wait before first execution
+     * @param interval Time to wait before first execution; must be positive for a repeating timer
      * @param work Function to execute when timer fires
      * @param repeating If true, timer repeats; if false, fires once
      * @param executionType Where to execute: MainThread or AnyThread
-     * @return Timer handle for cancellation and status checking
+     * @return Timer handle for cancellation and status checking; an invalid Timer
+     *         when the contract group has no free slot or a repeating interval is not positive
+     * @throws std::runtime_error if the service is not loaded or has no WorkService
+     *         (before setWorkService(), or after stop())
      *
      * @code
      * // One-shot timeout
@@ -206,26 +221,6 @@ public:
      */
     size_t getActiveTimerCount() const;
 
-    /**
-     * @brief Checks for ready timers and schedules them for execution
-     *
-     * Examines timers that are waiting for their scheduled time and wakes up
-     * any whose time has arrived. Call this periodically from your main loop
-     * to ensure timers fire promptly, especially when the system is idle.
-     *
-     * @return Number of timers that were woken up and scheduled
-     *
-     * @code
-     * // In main loop
-     * while (running) {
-     *     timerService->processReadyTimers();
-     *     // ... other work ...
-     *     std::this_thread::sleep_for(10ms);
-     * }
-     * @endcode
-     */
-    size_t processReadyTimers();
-
 private:
     // Only Timer can call cancelTimer
     friend class Timer;
@@ -240,58 +235,54 @@ private:
     void cancelTimer(uint64_t timerId);
 
     /**
-     * @brief Restarts the pump contract if not already running
-     *
-     * Thread-safe. Can be called from multiple threads concurrently.
-     * Uses mutex protection to prevent race conditions.
-     */
-    void restartPumpContract();
-
-    /**
-     * @brief Internal timer data tracked per timer
+     * @brief Internal timer data tracked per timer; shared with the timer's contract body
      */
     struct TimerData
     {
-        Timer::TimePoint fireTime;           ///< When timer should fire
-        Timer::Duration interval;            ///< Interval for repeating timers
-        Timer::WorkFunction work;            ///< User's work function
-        bool repeating;                      ///< Whether timer repeats
-        std::atomic<bool> cancelled{false};  ///< Cancellation flag
+        uint64_t id = 0;                                   ///< TimerService-assigned id
+        Timer::Duration interval{};                        ///< Interval for repeating timers
+        Timer::WorkFunction work;                          ///< User's work function
+        bool repeating = false;                            ///< Whether timer repeats
+        Concurrency::ExecutionType executionType = Concurrency::ExecutionType::AnyThread;  ///< Where the work runs
+        std::atomic<bool> cancelled{false};                ///< Cancellation flag
+        std::atomic<bool> done{false};                     ///< One-shot work has run
+
+        std::mutex mutex;                                  ///< Guards the members below
+        Timer::TimePoint fireTime{};                       ///< Fire time of the pending contract
+        Concurrency::WorkContractHandle pending;           ///< The armed timed contract; invalid while none is armed
+        bool awaitingCapacity = false;                     ///< A re-arm found the group full
     };
 
-    /**
-     * @brief Per-timer state: one small WorkGraph per timer
-     *
-     * Each timer owns its own single-node graph, executed once at creation;
-     * the yieldable node does the waiting via yieldUntil. This keeps graphs
-     * strictly build-once-execute-many (no node addition to running graphs)
-     * instead of one perpetual shared graph mutated forever.
-     */
-    struct TimerEntry
-    {
-        std::unique_ptr<Concurrency::WorkGraph> graph;  ///< Single-node graph for this timer
-        std::shared_ptr<TimerData> data;                ///< Shared with the node's lambda
-    };
+    /// Arms one timed contract for @p entry at @p fireTime. The caller holds entry->mutex. On failure returns
+    /// false; a created but unschedulable contract is left in @p orphan for the caller to release with no lock held.
+    bool arm(const std::shared_ptr<TimerData>& entry, Timer::TimePoint fireTime,
+             Concurrency::WorkContractHandle& orphan);
+
+    /// Contract body: runs the work, then re-arms a repeating timer.
+    void fire(const std::shared_ptr<TimerData>& entry);
+
+    /// Capacity callback: re-arms entries whose re-arm found the group full.
+    void onCapacityAvailable();
+
+    /// Releases contracts left by failed arms made where release() cannot run.
+    void releaseOrphans();
 
     Config _config;
     Concurrency::WorkContractGroup* _workContractGroup = nullptr;
 
     // Timer storage - protected by mutex
     mutable std::mutex _timersMutex;
-    std::unordered_map<uint64_t, TimerEntry> _timers;  // timer id -> entry
-    uint64_t _nextTimerId = 1;                         // protected by _timersMutex
+    std::unordered_map<uint64_t, std::shared_ptr<TimerData>> _timers;  // timer id -> data
+    uint64_t _nextTimerId = 1;                                         // protected by _timersMutex
+    std::vector<Concurrency::WorkContractHandle> _orphans;             // protected by _timersMutex
+
+    // Entries with awaitingCapacity set
+    std::atomic<size_t> _awaitingCapacityCount{0};
 
     // WorkService reference (set during load)
     Concurrency::WorkService* _workService = nullptr;
 
-    // Smart pump contract - only reschedules when active timers exist
-    mutable std::mutex _pumpContractMutex;
-    Concurrency::WorkContractHandle _pumpContractHandle;
-    std::shared_ptr<std::function<void()>> _pumpFunction;  // Kept alive to break weak_ptr cycle
-
-    // Synchronous cleanup: pump holds execution mutex while running
-    std::mutex _pumpExecutionMutex;
-    std::atomic<bool> _pumpShouldStop{false};
+    std::optional<Concurrency::WorkContractGroup::CapacityCallback> _capacityCallback;
 };
 
 }  // namespace Core

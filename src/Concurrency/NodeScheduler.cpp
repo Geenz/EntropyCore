@@ -29,8 +29,13 @@ namespace Concurrency
 {
 
 bool NodeScheduler::scheduleNode(const NodeHandle& node) {
+    return scheduleNodeImpl(node, std::nullopt);
+}
+
+bool NodeScheduler::scheduleNodeImpl(const NodeHandle& node,
+                                     std::optional<std::chrono::steady_clock::time_point> due) {
     if (_config.enableDebugLogging) {
-        ENTROPY_LOG_DEBUG_CAT("NodeScheduler", "scheduleNode() called");
+        ENTROPY_LOG_DEBUG_CAT("NodeScheduler", due ? "deferNodeUntil() arming timed contract" : "scheduleNode() called");
     }
 
     // No lock: graph structure is frozen while a run is in flight (WorkGraph
@@ -47,6 +52,13 @@ bool NodeScheduler::scheduleNode(const NodeHandle& node) {
 
     // Check capacity
     if (!hasCapacity()) {
+        if (due) {
+            // Timed path: the caller parks the node on the timed capacity queue
+            if (_config.enableDebugLogging) {
+                ENTROPY_LOG_DEBUG_CAT("NodeScheduler", "No capacity for timed contract");
+            }
+            return false;
+        }
         // Try to defer instead
         if (_config.enableDebugLogging) {
             ENTROPY_LOG_DEBUG_CAT("NodeScheduler", "No capacity, deferring node");
@@ -64,6 +76,12 @@ bool NodeScheduler::scheduleNode(const NodeHandle& node) {
     // Create contract with the node's execution type and pinned lane
     auto handle = _contractGroup->createContract(std::move(work), nodeData->executionType, nodeData->pinnedLane);
     if (!handle.valid()) {
+        if (due) {
+            if (_config.enableDebugLogging) {
+                ENTROPY_LOG_DEBUG_CAT("NodeScheduler", "createContract failed for timed contract");
+            }
+            return false;
+        }
         // Contract group refused - try to defer
         return deferNode(node);
     }
@@ -71,11 +89,18 @@ bool NodeScheduler::scheduleNode(const NodeHandle& node) {
     // Store handle in node
     nodeData->handle = handle;
 
-    // Schedule the contract
-    auto result = handle.schedule();
+    // Schedule the contract; a timed contract becomes due at *due
+    auto result = due ? handle.scheduleAt(*due) : handle.schedule();
     if (result != ScheduleResult::Scheduled) {
         // Failed to schedule - defer it
         nodeData->handle = WorkContractHandle();  // Clear invalid handle
+        if (due) {
+            if (_config.enableDebugLogging) {
+                ENTROPY_LOG_DEBUG_CAT("NodeScheduler", "scheduleAt failed for timed contract");
+            }
+            handle.release();  // Return the fresh slot; the caller parks the node on the timed capacity queue
+            return false;
+        }
         return deferNode(node);
     }
 
@@ -374,8 +399,6 @@ void NodeScheduler::publishScheduledEvent(const NodeHandle& node) {
 }
 
 bool NodeScheduler::deferNodeUntil(const NodeHandle& node, std::chrono::steady_clock::time_point wakeTime) {
-    std::lock_guard<std::shared_mutex> lock(_timedDeferredMutex);
-
     if (_config.enableDebugLogging) {
         auto now = std::chrono::steady_clock::now();
         auto delay = std::chrono::duration_cast<std::chrono::milliseconds>(wakeTime - now);
@@ -383,49 +406,67 @@ bool NodeScheduler::deferNodeUntil(const NodeHandle& node, std::chrono::steady_c
                               "Deferring node until wake time (delay: " + std::to_string(delay.count()) + "ms)");
     }
 
-    // Add to timed deferred queue (priority queue sorted by wake time)
-    _timedDeferredQueue.push({node, wakeTime});
+    auto* dag = node.handleOwnerAs<Graph::DirectedAcyclicGraph<WorkGraphNode>>();
+    if (!dag || !dag->getNodeData(node)) {
+        if (_config.enableDebugLogging) {
+            ENTROPY_LOG_DEBUG_CAT("NodeScheduler", "deferNodeUntil() - no node data");
+        }
+        return false;
+    }
+
+    // The node waits as a timed work contract and runs on the WorkService once due
+    if (scheduleNodeImpl(node, wakeTime)) {
+        return true;
+    }
+
+    // No slot for a timed contract: wait for capacity on the timed queue
+    {
+        std::lock_guard<std::shared_mutex> lock(_timedDeferredMutex);
+        _timedDeferredQueue.push({node, wakeTime});
+    }
+    if (_config.enableDebugLogging) {
+        ENTROPY_LOG_DEBUG_CAT("NodeScheduler", "Timed contract not armed, node waits for capacity");
+    }
 
     return true;
 }
 
 size_t NodeScheduler::processTimedDeferredNodes(size_t maxToSchedule) {
-    auto now = std::chrono::steady_clock::now();
-
-    // Extract nodes whose wake time has passed (preserve full TimedNode for wake time tracking)
-    std::vector<TimedNode> readyNodes;
+    // Entries wait for capacity, not for time: pop them all and re-arm each
+    // through the timed path with its original wake time
+    std::vector<TimedNode> pending;
     {
         std::lock_guard<std::shared_mutex> lock(_timedDeferredMutex);
 
-        // Pop all nodes that are ready (wake time <= now)
-        while (!_timedDeferredQueue.empty() && _timedDeferredQueue.top().wakeTime <= now) {
-            readyNodes.push_back(_timedDeferredQueue.top());
+        while (!_timedDeferredQueue.empty()) {
+            pending.push_back(_timedDeferredQueue.top());
             _timedDeferredQueue.pop();
 
             // Check if we've hit the limit (0 means no limit)
-            if (maxToSchedule > 0 && readyNodes.size() >= maxToSchedule) {
+            if (maxToSchedule > 0 && pending.size() >= maxToSchedule) {
                 break;
             }
         }
     }
 
-    if (_config.enableDebugLogging && !readyNodes.empty()) {
-        ENTROPY_LOG_DEBUG_CAT("NodeScheduler",
-                              "Processing " + std::to_string(readyNodes.size()) + " timed deferred nodes");
+    if (pending.empty()) {
+        return 0;
     }
 
-    // Schedule the ready nodes
+    if (_config.enableDebugLogging) {
+        ENTROPY_LOG_DEBUG_CAT("NodeScheduler",
+                              "Re-arming " + std::to_string(pending.size()) + " capacity-deferred timed nodes");
+    }
+
     size_t scheduled = 0;
-    for (size_t i = 0; i < readyNodes.size(); ++i) {
-        if (scheduleNode(readyNodes[i].node)) {
+    for (size_t i = 0; i < pending.size(); ++i) {
+        if (scheduleNodeImpl(pending[i].node, pending[i].wakeTime)) {
             scheduled++;
         } else {
-            // Scheduling failed - hit capacity
-            // Re-defer remaining nodes back to timed queue with original wake times
+            // Still no capacity: re-enqueue the rest with their original wake times
             std::lock_guard<std::shared_mutex> lock(_timedDeferredMutex);
-            for (size_t j = i; j < readyNodes.size(); ++j) {
-                // Re-enqueue with preserved original wake time for scheduling precision
-                _timedDeferredQueue.push(readyNodes[j]);
+            for (size_t j = i; j < pending.size(); ++j) {
+                _timedDeferredQueue.push(pending[j]);
             }
             break;
         }

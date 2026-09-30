@@ -19,6 +19,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 
 #include "../Core/EntropyObject.h"
@@ -47,7 +48,10 @@ enum class ContractState : uint32_t
     Allocated = 1,  ///< Contract has been allocated but not scheduled
     Scheduled = 2,  ///< Contract is scheduled and ready for execution
     Executing = 3,  ///< Contract is currently being executed
-    Completed = 4   ///< Contract has completed execution
+    Completed = 4,       ///< Contract has completed execution
+    Peeking = 5,         ///< Scheduled; a worker is inspecting it to decide whether it may execute
+    PeekReleased = 6,    ///< Released while peeked; the peeking worker frees the slot
+    PeekUnscheduled = 7  ///< Unscheduled while peeked; the peeking worker returns it to Allocated
 };
 
 /**
@@ -59,7 +63,8 @@ enum class ScheduleResult
     AlreadyScheduled,  ///< Contract was already scheduled (schedule operation failed)
     NotScheduled,      ///< Contract is not scheduled (successful unschedule operation)
     Executing,         ///< Cannot modify - currently executing
-    Invalid            ///< Invalid handle provided
+    Invalid,           ///< Invalid handle provided
+    TryAgainLater      ///< An unschedule is still being completed by a peeking worker; retry
 };
 
 /**
@@ -145,7 +150,8 @@ public:
      * @brief Schedules this contract for execution
      *
      * Transitions Allocated -> Scheduled. No-op if already scheduled.
-     * @return Scheduled, AlreadyScheduled, Executing, or Invalid
+     * @return Scheduled, AlreadyScheduled, Executing, Invalid, or TryAgainLater right after an
+     *         unschedule() that raced a worker's peek
      *
      * @code
      * auto h = group.createContract([]{});
@@ -153,6 +159,33 @@ public:
      * @endcode
      */
     ScheduleResult schedule();
+
+    /**
+     * @brief Schedules this contract to run no earlier than a steady_clock time
+     *
+     * Transitions Allocated -> Scheduled like schedule(). A worker that pulls
+     * the contract before @p due leaves it scheduled and pulls another.
+     * WorkContractGroup::wait() waits for it like any scheduled contract.
+     *
+     * @param due Earliest time the contract may run; time_point::max() never becomes due
+     * @return As schedule()
+     *
+     * @code
+     * auto h = group.createContract([]{ heartbeat(); });
+     * h.scheduleAt(std::chrono::steady_clock::now() + std::chrono::seconds(1));
+     * @endcode
+     */
+    ScheduleResult scheduleAt(std::chrono::steady_clock::time_point due);
+
+    /**
+     * @brief Schedules this contract to become due after @p delay
+     *
+     * Same as scheduleAt(now + delay); saturates at time_point::max().
+     *
+     * @param delay Minimum time before the contract may run
+     * @return As schedule()
+     */
+    ScheduleResult scheduleAfter(std::chrono::steady_clock::duration delay);
 
     /**
      * @brief Attempts to remove this contract from the ready set
@@ -177,7 +210,7 @@ public:
 
     /**
      * @brief Reports whether the contract is currently Scheduled
-     * @return true if scheduled and waiting for execution
+     * @return true if scheduled and waiting for execution, including while a worker peeks it
      */
     bool isScheduled() const;
 

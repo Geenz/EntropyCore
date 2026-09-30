@@ -46,6 +46,8 @@ const char* entropy_schedule_result_to_string(EntropyScheduleResult result) {
             return "Executing";
         case ENTROPY_SCHEDULE_INVALID:
             return "Invalid";
+        case ENTROPY_SCHEDULE_TRY_AGAIN_LATER:
+            return "TryAgainLater";
         default:
             return "Unknown";
     }
