@@ -17,6 +17,7 @@ option(ENTROPY_BUILD_EXAMPLES "Build EntropyCore example executables" OFF)
 option(ENTROPY_REQUIRE_NO_RTTI "Disable C++ RTTI for Entropy targets" OFF)
 # Enable sanitizers for debugging and testing (OFF by default - enable explicitly in CI/testing)
 option(ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
+option(ENABLE_TSAN "Enable ThreadSanitizer (mutually exclusive with ASAN/UBSAN)" OFF)
 
 # Default behavior: on single-config generators, enable tests in Debug/RelWithDebInfo
 # No build-dir heuristics; on multi-config generators we do not auto-enable by default.
@@ -64,6 +65,8 @@ if(ENABLE_SANITIZERS OR (CMAKE_BUILD_TYPE MATCHES "Debug" AND CMAKE_CXX_COMPILER
     else()
         message(WARNING "Sanitizers requested but not supported by ${CMAKE_CXX_COMPILER_ID}")
     endif()
+elseif(ENABLE_SANITIZERS OR ENABLE_TSAN)
+    message(WARNING "Sanitizers requested but not supported by ${CMAKE_CXX_COMPILER_ID}")
 endif()
 
 #
